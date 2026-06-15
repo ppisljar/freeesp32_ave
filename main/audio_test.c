@@ -2,6 +2,9 @@
 #include "audio_manager.h"
 #include "audio_generator.h"
 #include "audio_config.h"
+#include "led_matrix_example.h"
+#include "audio_led_sync.h"
+#include "isr_profiling.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -202,5 +205,109 @@ esp_err_t audio_test_stop_output_task(void)
     }
 
     ESP_LOGI(TAG, "Audio output task stopped");
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// ISR Baseline Soak Test (Step 1.2)
+// ---------------------------------------------------------------------------
+// Total duration: 5 minutes.
+//   0:00 - 1:00  8 Hz LED flicker + 40 Hz binaural (theta)
+//   1:00 - 2:00  20 Hz LED flicker + 40 Hz binaural (beta)
+//   2:00 - 4:00  VU-meter sync mode active (audio amplitude drives LEDs)
+//   4:00 - 5:00  8 Hz flicker again + profiling report
+//
+// OPERATOR ACTION at ~2:30: upload a .led file via the web interface to
+// exercise the flash-write / rmt_transmit code path (exposes bug V5).
+//
+// ISR profiling stats are logged every 30 seconds via isr_profiling_report().
+// ---------------------------------------------------------------------------
+
+#define SOAK_PHASE_DURATION_MS  60000U   // 1 minute per phase
+#define SOAK_REPORT_INTERVAL_MS 30000U   // print ISR stats every 30 s
+#define SOAK_BINAURAL_BASE_HZ   200.0f
+#define SOAK_BINAURAL_BEAT_HZ   40.0f
+#define SOAK_BINAURAL_DUR_MS    (SOAK_PHASE_DURATION_MS * 4)
+
+esp_err_t audio_test_isr_baseline_soak(void)
+{
+    ESP_LOGI(TAG, "=== ISR BASELINE SOAK START (4 min, 4 × 1-min phases) ===");
+    ESP_LOGI(TAG, "OPERATOR: upload a .led file via the web interface at ~2:30 to exercise flash writes");
+
+    // Start sustained binaural audio for the full 5-minute run.
+    audio_gen_params_t audio_params = {
+        .frequency   = SOAK_BINAURAL_BASE_HZ,
+        .frequency_r = SOAK_BINAURAL_BASE_HZ + SOAK_BINAURAL_BEAT_HZ,
+        .amplitude   = 0.25f,
+        .pan         = 0.0f,
+        .mod_frequency = 0.0f,
+        .mod_depth   = 0.0f,
+        .sweep_type  = AUDIO_GEN_SWEEP_NONE,
+        .sweep_target = 0.0f,
+        .duration_ms = SOAK_BINAURAL_DUR_MS,
+    };
+    esp_err_t ret = audio_manager_start_generation(0, &audio_params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "soak: audio start failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    TickType_t phase_start;
+    TickType_t report_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SOAK_REPORT_INTERVAL_MS);
+
+    // Phase 1: 8 Hz flicker
+    ESP_LOGI(TAG, "SOAK phase 1/4: 8 Hz LED flicker @ 10%% brightness (1 min)");
+    led_matrix_start_flicker(8.0f, 50, 10);
+    phase_start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
+        if (xTaskGetTickCount() >= report_deadline) {
+            isr_profiling_report();
+            report_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SOAK_REPORT_INTERVAL_MS);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    // Phase 2: 20 Hz flicker
+    ESP_LOGI(TAG, "SOAK phase 2/4: 20 Hz LED flicker @ 10%% brightness (1 min)");
+    led_matrix_update_flicker_params(20.0f, 50, 10);
+    phase_start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
+        if (xTaskGetTickCount() >= report_deadline) {
+            isr_profiling_report();
+            report_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SOAK_REPORT_INTERVAL_MS);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    // Phase 3: VU-meter sync (1 min)
+    ESP_LOGI(TAG, "SOAK phase 3/4: VU-meter sync mode (1 min)");
+    led_matrix_stop_flicker();
+    audio_led_sync_start(SYNC_MODE_VU_METER);
+    phase_start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
+        if (xTaskGetTickCount() >= report_deadline) {
+            isr_profiling_report();
+            report_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SOAK_REPORT_INTERVAL_MS);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    audio_led_sync_stop();
+
+    // Phase 4: 8 Hz again + final stats
+    ESP_LOGI(TAG, "SOAK phase 4/4: 8 Hz LED flicker @ 10%% brightness (1 min) + final report");
+    led_matrix_start_flicker(8.0f, 50, 10);
+    phase_start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
+        if (xTaskGetTickCount() >= report_deadline) {
+            isr_profiling_report();
+            report_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SOAK_REPORT_INTERVAL_MS);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    led_matrix_stop_flicker();
+
+    ESP_LOGI(TAG, "=== ISR BASELINE SOAK COMPLETE ===");
+    isr_profiling_report();
+
     return ESP_OK;
 }

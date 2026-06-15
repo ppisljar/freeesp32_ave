@@ -1,5 +1,6 @@
 #include "audio_manager.h"
 #include "audio_config.h"
+#include "audio_led_sync.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "driver/i2s_std.h"
@@ -57,6 +58,23 @@ esp_err_t audio_manager_init(void)
         return ret;
     }
 
+    // Initialize audio-LED synchronization BEFORE enabling I2S channel
+    ret = audio_led_sync_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialize audio-LED sync: %s", esp_err_to_name(ret));
+        // Continue initialization - sync is optional
+    } else {
+        // Register I2S callback for sample-accurate synchronization
+        // MUST be done before i2s_channel_enable() in ESP-IDF v5.5.2
+        ret = audio_led_sync_register_i2s_callback(tx_handle);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to register I2S callback for LED sync: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "Audio-LED synchronization enabled with I2S DMA callbacks");
+        }
+    }
+
+    // Enable I2S channel AFTER callback registration
     ret = i2s_channel_enable(tx_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable I2S channel: %s", esp_err_to_name(ret));

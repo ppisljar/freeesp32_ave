@@ -1,0 +1,21 @@
+# ISR Baseline Soak — web-upload trigger file
+# Upload this file via the web interface at ~2:30 into the soak run to exercise
+# the flash-write / rmt_transmit code path (exposes ISR safety bug V5).
+# The timeline intentionally starts LEDs and audio simultaneously at t=0 to
+# stress the simultaneous-entry path (bug at t=0 listed in Phase 1 plan).
+
+# time(ms)  freq(Hz)  duty(%)  brightness(%)  channel
+0     8.0   50  80  0
+0     8.0   50  80  1
+5000  20.0  50  80  0
+5000  20.0  50  80  1
+10000 8.0   50  60  0
+15000 20.0  50  60  1
+20000 8.0   50  80  0
+25000 20.0  50  80  1
+
+# Audio commands (A prefix)
+A0    binaural 200.0 8.0
+A5000 binaural 200.0 20.0
+A10000 sweep 200 400 5
+A15000 binaural 200.0 8.0

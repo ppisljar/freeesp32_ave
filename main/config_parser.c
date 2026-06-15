@@ -1,9 +1,11 @@
 #include "config_parser.h"
 #include "audio_manager.h"
+#include "audio_led_sync.h"
 #include "led_strip.h"
 #include "led_matrix_example.h"
 #include "audio_config.h"
 #include "timing_engine.h"
+#include "lock_free_comm.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -38,12 +40,15 @@ esp_err_t config_parser_init(void)
 {
     ESP_LOGI(TAG, "Initializing config parser");
 
-    // Create timeline mutex
+    // Create timeline mutex for thread-safe timeline operations
     timeline_mutex = xSemaphoreCreateMutex();
     if (!timeline_mutex) {
         ESP_LOGE(TAG, "Failed to create timeline mutex");
-        return ESP_FAIL;
+        return ESP_ERR_NO_MEM;
     }
+
+    // Timeline execution will use lock-free communication
+    ESP_LOGI(TAG, "Timeline execution configured for lock-free operation");
 
     // Create timeline execution task
     BaseType_t result = xTaskCreate(
@@ -57,7 +62,6 @@ esp_err_t config_parser_init(void)
 
     if (result != pdPASS) {
         ESP_LOGE(TAG, "Failed to create timeline execution task");
-        vSemaphoreDelete(timeline_mutex);
         return ESP_FAIL;
     }
 
@@ -221,7 +225,7 @@ esp_err_t config_parser_parse_file(const char *file_path, config_timeline_t *tim
 
 esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 {
-    if (!timeline || timeline->count == 0 || !timeline_mutex) {
+    if (!timeline || timeline->count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -232,10 +236,7 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 
     ESP_LOGI(TAG, "Executing timeline with %zu entries (loop=%s)", timeline->count, loop ? "yes" : "no");
 
-    if (xSemaphoreTake(timeline_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to acquire timeline mutex in execute_timeline");
-        return ESP_FAIL;
-    }
+    // Lock-free timeline execution
 
     // Make a deep copy of the timeline to avoid use-after-free when stack timeline goes out of scope
     config_parser_free_timeline(&persistent_timeline); // Free any previous timeline
@@ -246,7 +247,7 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 
     if (!persistent_timeline.entries) {
         ESP_LOGE(TAG, "Failed to allocate persistent timeline entries");
-        xSemaphoreGive(timeline_mutex);
+        // Lock-free operation - no mutex needed
         return ESP_ERR_NO_MEM;
     }
 
@@ -268,6 +269,20 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
     timeline_running = true;
     timeline_loop = loop;
 
+    // Send lock-free message for timeline start
+    lock_free_message_t start_msg = {
+        .type = MSG_TYPE_TIMELINE_EVENT,
+        .timestamp_us = esp_timer_get_time(),
+        .data_size = sizeof(uint32_t),
+    };
+    uint32_t timeline_count = timeline->count;
+    memcpy(start_msg.data, &timeline_count, sizeof(uint32_t));
+
+    lock_free_ring_buffer_t *timeline_queue = lock_free_get_timeline_queue();
+    if (timeline_queue) {
+        lock_free_send_message(timeline_queue, &start_msg);
+    }
+
     // Start with first entry
     if (timeline->count > 0) {
         esp_err_t ret = execute_timeline_entry(&timeline->entries[0]);
@@ -275,7 +290,7 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
             ESP_LOGE(TAG, "Failed to execute first timeline entry");
             timeline_running = false;
             current_timeline = NULL;
-            xSemaphoreGive(timeline_mutex);
+            // Lock-free operation - no mutex needed
             return ret;
         }
 
@@ -306,7 +321,7 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
                 ESP_LOGD(TAG, "Setting timer for %u ms (from %u to %u)", delay_ms, current_time, next_time);
 
                 // Release mutex before timing operations
-                xSemaphoreGive(timeline_mutex);
+                // Lock-free operation - no mutex needed
 
                 // Schedule event with microsecond precision using timing engine
                 uint64_t target_time = timing_engine_get_time_us() + (delay_ms * 1000); // Convert ms to μs
@@ -316,13 +331,13 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
                     ESP_LOGW(TAG, "Failed to schedule timeline event: %s", esp_err_to_name(ret));
                 }
             } else {
-                xSemaphoreGive(timeline_mutex);
+                // Lock-free operation - no mutex needed
             }
         } else {
-            xSemaphoreGive(timeline_mutex);
+            // Lock-free operation - no mutex needed
         }
     } else {
-        xSemaphoreGive(timeline_mutex);
+        // Lock-free operation - no mutex needed
     }
 
     return ESP_OK;
@@ -330,7 +345,8 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 
 esp_err_t config_parser_stop_timeline(void)
 {
-    if (!timeline_mutex) {
+    // Lock-free timeline operation
+    if (!timeline_task_handle) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -340,7 +356,7 @@ esp_err_t config_parser_stop_timeline(void)
     }
 
     if (!timeline_running) {
-        xSemaphoreGive(timeline_mutex);
+        // Lock-free operation - no mutex needed
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -584,7 +600,7 @@ static void timeline_execution_task(void *pvParameters)
 
         // Check if timeline is still running
         if (!timeline_running || !current_timeline) {
-            xSemaphoreGive(timeline_mutex);
+            // Lock-free operation - no mutex needed
             continue;
         }
 
@@ -600,7 +616,17 @@ static void timeline_execution_task(void *pvParameters)
                 // Timeline finished
                 timeline_running = false;
                 ESP_LOGI(TAG, "Timeline execution completed");
-                xSemaphoreGive(timeline_mutex);
+
+                // Send lock-free message for timeline completion
+                lock_free_message_t complete_msg = {
+                    .type = MSG_TYPE_TIMELINE_EVENT,
+                    .timestamp_us = esp_timer_get_time(),
+                    .data_size = 0,
+                };
+                lock_free_ring_buffer_t *timeline_queue = lock_free_get_timeline_queue();
+                if (timeline_queue) {
+                    lock_free_send_message(timeline_queue, &complete_msg);
+                }
                 continue;
             }
         }
@@ -612,7 +638,7 @@ static void timeline_execution_task(void *pvParameters)
             ESP_LOGE(TAG, "Timeline task: current_entry_index %zu >= count %zu",
                      current_entry_index, current_timeline->count);
             timeline_running = false;
-            xSemaphoreGive(timeline_mutex);
+            // Lock-free operation - no mutex needed
             continue;
         }
 
@@ -691,7 +717,7 @@ static void timeline_execution_task(void *pvParameters)
                          delay_ms, batch_timestamp, next_time);
 
                 // Release mutex before timing operations
-                xSemaphoreGive(timeline_mutex);
+                // Lock-free operation - no mutex needed
 
                 // Schedule next event with hardware precision timing engine
                 uint64_t target_time = timing_engine_get_time_us() + (delay_ms * 1000); // Convert ms to μs
@@ -702,12 +728,12 @@ static void timeline_execution_task(void *pvParameters)
                 }
             } else {
                 ESP_LOGI(TAG, "No more timeline entries to schedule");
-                xSemaphoreGive(timeline_mutex);
+                // Lock-free operation - no mutex needed
             }
         } else {
             ESP_LOGI(TAG, "Timeline execution completed (no more entries)");
             timeline_running = false;
-            xSemaphoreGive(timeline_mutex);
+            // Lock-free operation - no mutex needed
         }
     }
 }
@@ -777,6 +803,16 @@ static esp_err_t execute_timeline_entry(const config_entry_t *entry)
             ESP_LOGW(TAG, "Failed to stop existing LED flicker: %s", esp_err_to_name(ret));
         }
 
+        // Stop audio-LED synchronization when stopping flicker
+        if (audio_led_sync_is_active()) {
+            esp_err_t sync_ret = audio_led_sync_stop();
+            if (sync_ret == ESP_OK) {
+                ESP_LOGI(TAG, "Stopped audio-LED synchronization");
+            } else {
+                ESP_LOGW(TAG, "Failed to stop audio-LED sync: %s", esp_err_to_name(sync_ret));
+            }
+        }
+
         // Check if we should start LED flicker (frequency > 0)
         if (led->frequency > 0.0f) {
             // Set LED color to white for meditation applications
@@ -791,6 +827,22 @@ static esp_err_t execute_timeline_entry(const config_entry_t *entry)
 
             ESP_LOGI(TAG, "Started LED flicker: %.1f Hz, %d%% duty cycle, %d%% brightness",
                      led->frequency, led->duty_cycle, led->brightness);
+
+            // Enable audio-LED synchronization for dynamic effects
+            // Use VU meter mode for real-time audio amplitude visualization
+            if (audio_led_sync_is_active()) {
+                // Update sync mode if already active
+                audio_led_sync_set_mode(SYNC_MODE_VU_METER);
+                ESP_LOGI(TAG, "Enabled VU meter synchronization for LED flicker");
+            } else {
+                // Start synchronization in VU meter mode
+                esp_err_t sync_ret = audio_led_sync_start(SYNC_MODE_VU_METER);
+                if (sync_ret == ESP_OK) {
+                    ESP_LOGI(TAG, "Started audio-LED synchronization with VU meter mode");
+                } else {
+                    ESP_LOGW(TAG, "Failed to start audio-LED sync: %s", esp_err_to_name(sync_ret));
+                }
+            }
         } else {
             // Frequency is 0 - set static LED color with brightness
             uint8_t brightness_scaled = (255 * led->brightness) / 100;
@@ -805,6 +857,16 @@ static esp_err_t execute_timeline_entry(const config_entry_t *entry)
             led_matrix_refresh();
 
             ESP_LOGI(TAG, "Set static LED brightness to %d%%", led->brightness);
+
+            // Disable synchronization for static LED (no flicker)
+            if (audio_led_sync_is_active()) {
+                esp_err_t sync_ret = audio_led_sync_stop();
+                if (sync_ret == ESP_OK) {
+                    ESP_LOGI(TAG, "Disabled audio-LED synchronization for static LED");
+                } else {
+                    ESP_LOGW(TAG, "Failed to stop audio-LED sync: %s", esp_err_to_name(sync_ret));
+                }
+            }
         }
 
         return ESP_OK;

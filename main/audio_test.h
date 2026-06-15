@@ -63,4 +63,17 @@ esp_err_t audio_test_start_output_task(void);
  */
 esp_err_t audio_test_stop_output_task(void);
 
+/**
+ * @brief ISR baseline soak test (Step 1 instrumentation validation)
+ *
+ * Runs for ~5 minutes exercising LED flicker at 8 Hz and 20 Hz plus VU-meter
+ * sync mode while printing isr_profiling_report() every 30 seconds.
+ * The web-upload portion (flash write path) must be triggered manually by the
+ * operator via the web interface during the run — see the soak procedure in
+ * reports/non_planned_reports/isr_baseline_2026-06-15.md.
+ *
+ * @return esp_err_t ESP_OK on success
+ */
+esp_err_t audio_test_isr_baseline_soak(void);
+
 #endif // AUDIO_TEST_H

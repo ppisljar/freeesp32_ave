@@ -147,7 +147,7 @@ esp_err_t led_strip_set_pixel_rgb(led_strip_handle_t *handle, uint32_t pixel_num
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGD(TAG, "Setting pixel %lu to RGB(%d,%d,%d)", pixel_num, red, green, blue);
+    // Note: ESP_LOG removed from ISR execution path to prevent lock violations
 
     xSemaphoreTake(handle->access_mutex, portMAX_DELAY);
 
@@ -205,8 +205,7 @@ esp_err_t led_strip_refresh(led_strip_handle_t *handle) {
 
     if (!symbols || symbol_count > handle->symbol_buffer_size) {
         xSemaphoreGive(handle->access_mutex);
-        ESP_LOGE(TAG, "Symbol buffer error: ptr=%p, count=%zu, size=%zu",
-                 symbols, symbol_count, handle->symbol_buffer_size);
+        // Note: ESP_LOG removed from potential ISR execution path to prevent lock violations
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -218,7 +217,7 @@ esp_err_t led_strip_refresh(led_strip_handle_t *handle) {
     }
 
     // Transmit the encoded data using RMT TX
-    ESP_LOGI(TAG, "Transmitting LED data for %lu LEDs (%zu symbols)", handle->length, symbol_count);
+    // Note: ESP_LOG removed from ISR execution path to prevent lock violations
 
     rmt_transmit_config_t tx_config = {
         .loop_count = 0,  // No loop
@@ -226,7 +225,7 @@ esp_err_t led_strip_refresh(led_strip_handle_t *handle) {
 
     esp_err_t tx_ret = rmt_transmit(handle->rmt_tx_channel, handle->rmt_encoder, symbols, symbol_count * sizeof(rmt_symbol_word_t), &tx_config);
     if (tx_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to transmit LED data: %s", esp_err_to_name(tx_ret));
+        // Note: ESP_LOG removed from ISR execution path to prevent lock violations
         ret = tx_ret;
     }
 
@@ -449,12 +448,7 @@ static esp_err_t led_strip_encode_data(led_strip_handle_t *handle, rmt_symbol_wo
     const led_timing_t *timing = &led_timings[handle->type];
     size_t symbol_idx = 0;
 
-    // Log first few pixels for debugging
-    ESP_LOGI(TAG, "Encoding data for %lu LEDs", handle->length);
-    for (uint32_t i = 0; i < (handle->length < 3 ? handle->length : 3); i++) {
-        led_color_t *p = &handle->display_buffer[i];
-        ESP_LOGI(TAG, "LED[%lu]: R=%d G=%d B=%d", i, p->red, p->green, p->blue);
-    }
+    // Note: ESP_LOG removed from ISR execution path to prevent lock violations
 
     // Encode each LED
     for (uint32_t led = 0; led < handle->length; led++) {
@@ -463,9 +457,7 @@ static esp_err_t led_strip_encode_data(led_strip_handle_t *handle, rmt_symbol_wo
         // LEDs use GRB order (Green, Red, Blue) - WS2812 standard
         uint8_t color_data[3] = {pixel->green, pixel->red, pixel->blue};
 
-        if (led == 0) {
-            ESP_LOGI(TAG, "LED[0] encoding order GRB: %d,%d,%d", color_data[0], color_data[1], color_data[2]);
-        }
+        // Note: ESP_LOG removed from ISR execution path to prevent lock violations
 
         // Encode each color byte
         for (int byte_idx = 0; byte_idx < 3; byte_idx++) {

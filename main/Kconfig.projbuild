@@ -1,0 +1,12 @@
+menu "ESP32 Audio Player"
+
+config ISR_PROFILING
+    bool "Enable ISR cycle-count profiling"
+    default n
+    help
+        When enabled, each ISR records min/max/avg CPU cycle counts via
+        esp_cpu_get_cycle_count().  Call isr_profiling_report() from task
+        context to print the statistics over UART.  Adds ~10 cycles of
+        overhead per ISR invocation.  Disable for production builds.
+
+endmenu
