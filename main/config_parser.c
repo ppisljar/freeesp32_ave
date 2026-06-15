@@ -36,10 +36,12 @@ static float parse_value_with_interpolation(const char *str, config_interpolatio
 static void timeline_timing_callback(uint64_t timestamp_us, void *user_data);
 static void timeline_execution_task(void *pvParameters);
 // execute_timeline_entry_ctx has full timeline context for sweep wiring.
+// When lock_held=true the caller already holds audio_gen_mutex; the function
+// uses _locked audio_generator variants to avoid a recursive mutex take.
 // execute_timeline_entry is a compat wrapper for the startup-call site that
 // passes the persistent timeline and a sentinel index (SIZE_MAX means "unknown").
 static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
-                                            size_t entry_idx);
+                                            size_t entry_idx, bool lock_held);
 static esp_err_t execute_timeline_entry(const config_entry_t *entry);
 
 // Per-bit forward/backward lookup helpers (substep 3.6)
@@ -312,61 +314,70 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
         lock_free_send_message(timeline_queue, &start_msg);
     }
 
-    // Start with first entry — use ctx variant so sweep wiring works at t=0 too
+    // Dispatch ALL entries at t=0 as one batch — use ctx variant so sweep wiring works too
     if (timeline->count > 0) {
-        esp_err_t ret = execute_timeline_entry_ctx(&persistent_timeline, 0);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to execute first timeline entry");
-            timeline_running = false;
-            current_timeline = NULL;
-            // Lock-free operation - no mutex needed
-            return ret;
-        }
-
-        // Set timer for next entry if there is one
-        if (timeline->count > 1) {
-            // Find next entry with different timestamp
-            uint32_t current_time = timeline->entries[0].type == CONFIG_ENTRY_LED ?
+        uint32_t batch_timestamp = timeline->entries[0].type == CONFIG_ENTRY_LED ?
                                    timeline->entries[0].data.led.time_ms :
                                    timeline->entries[0].data.audio.time_ms;
-            uint32_t next_time = current_time;
-            size_t next_index = 1;
 
-            // Skip entries at same time
+        const size_t MAX_BATCH_SIZE = 50;
+        size_t entries_executed = 0;
+
+        // Hold audio_gen_mutex for the entire batch so fill_buffer sees all
+        // same-timestamp channels become active in the same DMA buffer.
+        audio_generator_lock();
+
+        for (size_t i = 0; i < timeline->count && entries_executed < MAX_BATCH_SIZE; i++) {
+            uint32_t entry_time = timeline->entries[i].type == CONFIG_ENTRY_LED ?
+                                  timeline->entries[i].data.led.time_ms :
+                                  timeline->entries[i].data.audio.time_ms;
+
+            if (entry_time != batch_timestamp) {
+                break;
+            }
+
+            esp_err_t ret = execute_timeline_entry_ctx(&persistent_timeline, i, true);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to execute timeline entry %zu at t=%u: %s",
+                         i, batch_timestamp, esp_err_to_name(ret));
+            }
+
+            entries_executed++;
+            current_entry_index = i;
+        }
+
+        audio_generator_unlock();
+
+        ESP_LOGI(TAG, "Dispatched batch of %zu entries at t=%u ms", entries_executed, batch_timestamp);
+
+        // Find the next entry with a strictly later timestamp
+        if (current_entry_index + 1 < timeline->count) {
+            uint32_t next_time = batch_timestamp;
+            size_t next_index = current_entry_index + 1;
+
             while (next_index < timeline->count) {
                 next_time = timeline->entries[next_index].type == CONFIG_ENTRY_LED ?
-                           timeline->entries[next_index].data.led.time_ms :
-                           timeline->entries[next_index].data.audio.time_ms;
+                            timeline->entries[next_index].data.led.time_ms :
+                            timeline->entries[next_index].data.audio.time_ms;
 
-                if (next_time > current_time) {
-                    break; // Found next different timestamp
+                if (next_time > batch_timestamp) {
+                    break;
                 }
                 next_index++;
             }
 
-            // Only set timer if we found a future entry
-            if (next_index < timeline->count && next_time > current_time) {
-                uint32_t delay_ms = next_time - current_time;
-                ESP_LOGD(TAG, "Setting timer for %u ms (from %u to %u)", delay_ms, current_time, next_time);
+            if (next_index < timeline->count && next_time > batch_timestamp) {
+                uint32_t delay_ms = next_time - batch_timestamp;
+                ESP_LOGD(TAG, "Setting timer for %u ms (from %u to %u)", delay_ms, batch_timestamp, next_time);
 
-                // Release mutex before timing operations
-                // Lock-free operation - no mutex needed
-
-                // Schedule event with microsecond precision using timing engine
-                uint64_t target_time = timing_engine_get_time_us() + (delay_ms * 1000); // Convert ms to μs
+                uint64_t target_time = timing_engine_get_time_us() + (delay_ms * 1000);
                 esp_err_t ret = timing_engine_schedule_event(target_time, TIMING_EVENT_TIMELINE,
-                                                           timeline_timing_callback, NULL);
+                                                             timeline_timing_callback, NULL);
                 if (ret != ESP_OK) {
                     ESP_LOGW(TAG, "Failed to schedule timeline event: %s", esp_err_to_name(ret));
                 }
-            } else {
-                // Lock-free operation - no mutex needed
             }
-        } else {
-            // Lock-free operation - no mutex needed
         }
-    } else {
-        // Lock-free operation - no mutex needed
     }
 
     return ESP_OK;
@@ -751,6 +762,10 @@ static void timeline_execution_task(void *pvParameters)
         // Add timing measurement for batch execution
         uint64_t batch_start_time = esp_timer_get_time();
 
+        // Hold audio_gen_mutex for the entire batch so fill_buffer sees all
+        // same-timestamp channels become active in the same DMA buffer.
+        audio_generator_lock();
+
         // Process all entries at the same timestamp (with safety limit)
         const size_t MAX_BATCH_SIZE = 50; // Safety limit to prevent infinite loops
         for (size_t i = batch_start_index; i < current_timeline->count && entries_executed < MAX_BATCH_SIZE; i++) {
@@ -770,7 +785,7 @@ static void timeline_execution_task(void *pvParameters)
                      entry_time);
 
             uint64_t entry_start_time = esp_timer_get_time();
-            esp_err_t ret = execute_timeline_entry_ctx(current_timeline, i);
+            esp_err_t ret = execute_timeline_entry_ctx(current_timeline, i, true);
             uint64_t entry_execution_time = esp_timer_get_time() - entry_start_time;
 
             if (ret != ESP_OK) {
@@ -783,6 +798,8 @@ static void timeline_execution_task(void *pvParameters)
             entries_executed++;
             current_entry_index = i; // Update to last processed entry
         }
+
+        audio_generator_unlock();
 
         uint64_t batch_total_time = esp_timer_get_time() - batch_start_time;
         ESP_LOGI(TAG, "Batch complete: executed %zu entries at timestamp %u ms in %llu μs",
@@ -958,9 +975,11 @@ static led_interp_t interp_to_led_curve(config_interpolation_t interp)
 // ---------------------------------------------------------------------------
 // Context-aware entry execution — has access to the full timeline so it can
 // look forward/backward for sweep wiring (substep 3.4 and 3.5).
+// lock_held: caller already holds audio_gen_mutex; use _locked audio_generator
+// variants to avoid a recursive mutex take.
 // ---------------------------------------------------------------------------
 static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
-                                            size_t entry_idx)
+                                            size_t entry_idx, bool lock_held)
 {
     if (!timeline || entry_idx >= timeline->count) {
         ESP_LOGE(TAG, "execute_timeline_entry_ctx: bad args");
@@ -981,8 +1000,11 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         const config_audio_entry_t *audio = &entry->data.audio;
 
         // Interp prefix glyph: NONE="", LINEAR=">", QUADRATIC="*"
+        // ESP_LOGD here — runs inside audio_gen_mutex held by batch loop.
+        // ESP_LOGI at 115200 baud blocks fill_buffer long enough to cause
+        // I2S underrun (audible click).  Raise log level via menuconfig to debug.
         #define INTERP_GLYPH(x) ((x) == CONFIG_INTERP_LINEAR ? ">" : (x) == CONFIG_INTERP_QUADRATIC ? "*" : "")
-        ESP_LOGI(TAG, "Executing audio entry: t=%u  freq=%s%.1f  freq_r=%.1f  pan=%s%.0f  vol=%s%.0f  mod=%s%.1f  ch=%u",
+        ESP_LOGD(TAG, "Executing audio entry: t=%u  freq=%s%.1f  freq_r=%.1f  pan=%s%.0f  vol=%s%.0f  mod=%s%.1f  ch=%u",
                  audio->time_ms,
                  INTERP_GLYPH(audio->freq_interp),    audio->frequency,
                  audio->frequency_r,
@@ -1012,15 +1034,36 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         // update its params without restarting so there is no audible click or
         // phase reset.  Only start from scratch when the channel is inactive.
         esp_err_t ret;
-        if (audio_manager_is_channel_active(audio->channel)) {
-            ret = audio_manager_update_generation(audio->channel, &gen_params);
+        bool ch_active;
+        if (lock_held) {
+            ch_active = audio_generator_is_active_locked(audio->channel);
         } else {
-            ret = audio_manager_start_generation(audio->channel, &gen_params);
+            ch_active = audio_manager_is_channel_active(audio->channel);
+        }
+
+        if (ch_active) {
+            if (lock_held) {
+                ret = audio_generator_update_params_locked(audio->channel, &gen_params);
+            } else {
+                ret = audio_manager_update_generation(audio->channel, &gen_params);
+            }
+        } else {
+            if (lock_held) {
+                ret = audio_generator_start_channel_locked(audio->channel, &gen_params);
+            } else {
+                ret = audio_manager_start_generation(audio->channel, &gen_params);
+            }
         }
 
         if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "Audio channel %d %s successfully", audio->channel,
-                     audio_manager_is_channel_active(audio->channel) ? "updated" : "started");
+            bool ch_active_after;
+            if (lock_held) {
+                ch_active_after = audio_generator_is_active_locked(audio->channel);
+            } else {
+                ch_active_after = audio_manager_is_channel_active(audio->channel);
+            }
+            ESP_LOGD(TAG, "Audio channel %d %s successfully", audio->channel,
+                     ch_active_after ? "updated" : "started");
 
             // ---- Sweep wiring (substep 3.4) ----
             // For each sweep-capable parameter, look ahead to the next entry
@@ -1038,10 +1081,18 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
 
                 // Frequency sweep
                 if (next->freq_interp != CONFIG_INTERP_NONE) {
-                    esp_err_t sw = audio_generator_start_sweep(
-                        audio->channel, AUDIO_PARAM_FREQUENCY,
-                        audio->frequency, next->frequency,
-                        dur_samples, interp_to_audio_curve(next->freq_interp));
+                    esp_err_t sw;
+                    if (lock_held) {
+                        sw = audio_generator_start_sweep_locked(
+                            audio->channel, AUDIO_PARAM_FREQUENCY,
+                            audio->frequency, next->frequency,
+                            dur_samples, interp_to_audio_curve(next->freq_interp));
+                    } else {
+                        sw = audio_generator_start_sweep(
+                            audio->channel, AUDIO_PARAM_FREQUENCY,
+                            audio->frequency, next->frequency,
+                            dur_samples, interp_to_audio_curve(next->freq_interp));
+                    }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=FREQ %.2f→%.2f over %ums curve=%d",
                              audio->channel, audio->frequency, next->frequency,
@@ -1055,10 +1106,18 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
 
                 // Amplitude sweep — volume 0-100 → amplitude 0.0-1.0
                 if (next->volume_interp != CONFIG_INTERP_NONE) {
-                    esp_err_t sw = audio_generator_start_sweep(
-                        audio->channel, AUDIO_PARAM_AMPLITUDE,
-                        audio->volume / 100.0f, next->volume / 100.0f,
-                        dur_samples, interp_to_audio_curve(next->volume_interp));
+                    esp_err_t sw;
+                    if (lock_held) {
+                        sw = audio_generator_start_sweep_locked(
+                            audio->channel, AUDIO_PARAM_AMPLITUDE,
+                            audio->volume / 100.0f, next->volume / 100.0f,
+                            dur_samples, interp_to_audio_curve(next->volume_interp));
+                    } else {
+                        sw = audio_generator_start_sweep(
+                            audio->channel, AUDIO_PARAM_AMPLITUDE,
+                            audio->volume / 100.0f, next->volume / 100.0f,
+                            dur_samples, interp_to_audio_curve(next->volume_interp));
+                    }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=AMP %.2f→%.2f over %ums curve=%d",
                              audio->channel,
@@ -1073,10 +1132,18 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
 
                 // Pan sweep — pan -100/+100 → -1.0/+1.0
                 if (next->pan_interp != CONFIG_INTERP_NONE) {
-                    esp_err_t sw = audio_generator_start_sweep(
-                        audio->channel, AUDIO_PARAM_PAN,
-                        audio->pan / 100.0f, next->pan / 100.0f,
-                        dur_samples, interp_to_audio_curve(next->pan_interp));
+                    esp_err_t sw;
+                    if (lock_held) {
+                        sw = audio_generator_start_sweep_locked(
+                            audio->channel, AUDIO_PARAM_PAN,
+                            audio->pan / 100.0f, next->pan / 100.0f,
+                            dur_samples, interp_to_audio_curve(next->pan_interp));
+                    } else {
+                        sw = audio_generator_start_sweep(
+                            audio->channel, AUDIO_PARAM_PAN,
+                            audio->pan / 100.0f, next->pan / 100.0f,
+                            dur_samples, interp_to_audio_curve(next->pan_interp));
+                    }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=PAN %.2f→%.2f over %ums curve=%d",
                              audio->channel,
@@ -1091,10 +1158,18 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
 
                 // Modulation frequency sweep
                 if (next->mod_interp != CONFIG_INTERP_NONE) {
-                    esp_err_t sw = audio_generator_start_sweep(
-                        audio->channel, AUDIO_PARAM_MOD_FREQ,
-                        audio->modulation, next->modulation,
-                        dur_samples, interp_to_audio_curve(next->mod_interp));
+                    esp_err_t sw;
+                    if (lock_held) {
+                        sw = audio_generator_start_sweep_locked(
+                            audio->channel, AUDIO_PARAM_MOD_FREQ,
+                            audio->modulation, next->modulation,
+                            dur_samples, interp_to_audio_curve(next->mod_interp));
+                    } else {
+                        sw = audio_generator_start_sweep(
+                            audio->channel, AUDIO_PARAM_MOD_FREQ,
+                            audio->modulation, next->modulation,
+                            dur_samples, interp_to_audio_curve(next->mod_interp));
+                    }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=MOD %.2f→%.2f over %ums curve=%d",
                              audio->channel,
@@ -1108,15 +1183,6 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 }
             }
 
-            // Validation: log all active channels
-            int active_count = 0;
-            for (int i = 0; i < 8; i++) {
-                if (audio_manager_is_channel_active(i)) {
-                    ESP_LOGI(TAG, "Channel %d is active", i);
-                    active_count++;
-                }
-            }
-            ESP_LOGI(TAG, "Total active audio channels: %d", active_count);
         }
 
         return ret;
@@ -1127,8 +1193,11 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     // ------------------------------------------------------------------
     const config_led_entry_t *led = &entry->data.led;
 
+    // ESP_LOGD — same audio_gen_mutex blocking concern as the audio entry log above.
+    // The lock is released a few lines below for the LED dispatch itself, but the
+    // log line currently fires while the lock is still held.
     #define INTERP_GLYPH(x) ((x) == CONFIG_INTERP_LINEAR ? ">" : (x) == CONFIG_INTERP_QUADRATIC ? "*" : "")
-    ESP_LOGI(TAG, "Executing LED entry: t=%u  freq=%s%.1f  duty=%s%d%%  bright=%s%d%%  RGB=(%s%d,%s%d,%s%d)  W=%s%d  mask=0x%02x",
+    ESP_LOGD(TAG, "Executing LED entry: t=%u  freq=%s%.1f  duty=%s%d%%  bright=%s%d%%  RGB=(%s%d,%s%d,%s%d)  W=%s%d  mask=0x%02x",
              led->time_ms,
              INTERP_GLYPH(led->freq_interp),       led->frequency,
              INTERP_GLYPH(led->duty_interp),       led->duty_cycle,
@@ -1139,6 +1208,15 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
              INTERP_GLYPH(led->w_interp), led->w,
              led->channel_mask);
     #undef INTERP_GLYPH
+
+    // Release audio lock around LED dispatch — LED path calls audio_led_sync_stop/start
+    // which contains vTaskDelays that would otherwise block fill_buffer (see
+    // reports/non_planned_reports/fix_clicks_boundary_2026-06-15.md).
+    if (lock_held) {
+        audio_generator_unlock();
+    }
+
+    esp_err_t led_ret = ESP_OK;
 
     // Stop audio-LED synchronization before reconfiguring LEDs
     if (audio_led_sync_is_active()) {
@@ -1155,8 +1233,9 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             ESP_LOGW(TAG, "Failed to stop LED flicker on mask 0x%02x: %s",
                      led->channel_mask, esp_err_to_name(ret));
         }
-        return ESP_OK;
-    }
+        /* led_ret stays ESP_OK — re-acquire lock and return via led_done below */
+    } else {
+    /* ---------- freq > 0: sweep wiring + LED matrix dispatch ---------- */
 
     // ---- Sweep wiring (substep 3.5) ----
     // For each bit in channel_mask, look forward independently to find the
@@ -1278,7 +1357,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to start LED sweep on mask 0x%02x: %s",
                      led->channel_mask, esp_err_to_name(ret));
-            return ret;
+            led_ret = ret;
         }
     } else {
         // No sweep — immediate flicker with current entry's color
@@ -1290,25 +1369,33 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to start LED flicker on mask 0x%02x: %s",
                      led->channel_mask, esp_err_to_name(ret));
-            return ret;
+            led_ret = ret;
         }
     }
 
-    ESP_LOGI(TAG, "LED mask 0x%02x started: %.1f Hz, %d%% duty, %d%% brightness %s",
-             led->channel_mask, led->frequency, led->duty_cycle, led->brightness,
-             any_sweep ? "(with sweep)" : "");
+    if (led_ret == ESP_OK) {
+        ESP_LOGI(TAG, "LED mask 0x%02x started: %.1f Hz, %d%% duty, %d%% brightness %s",
+                 led->channel_mask, led->frequency, led->duty_cycle, led->brightness,
+                 any_sweep ? "(with sweep)" : "");
 
-    // Re-enable audio-LED synchronization in VU-meter mode
-    if (!audio_led_sync_is_active()) {
-        esp_err_t sync_ret = audio_led_sync_start(SYNC_MODE_VU_METER);
-        if (sync_ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to start audio-LED sync: %s", esp_err_to_name(sync_ret));
+        // Re-enable audio-LED synchronization in VU-meter mode
+        if (!audio_led_sync_is_active()) {
+            esp_err_t sync_ret = audio_led_sync_start(SYNC_MODE_VU_METER);
+            if (sync_ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to start audio-LED sync: %s", esp_err_to_name(sync_ret));
+            }
+        } else {
+            audio_led_sync_set_mode(SYNC_MODE_VU_METER);
         }
-    } else {
-        audio_led_sync_set_mode(SYNC_MODE_VU_METER);
     }
 
-    return ESP_OK;
+    } /* end else (freq > 0) */
+
+    // Re-acquire audio lock now that LED dispatch (including any vTaskDelays) is complete.
+    if (lock_held) {
+        audio_generator_lock();
+    }
+    return led_ret;
 }
 
 // ---------------------------------------------------------------------------

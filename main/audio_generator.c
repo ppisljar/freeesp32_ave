@@ -136,6 +136,110 @@ esp_err_t audio_generator_init(void) {
     return ESP_OK;
 }
 
+void audio_generator_lock(void) {
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+}
+
+void audio_generator_unlock(void) {
+    xSemaphoreGive(audio_gen_mutex);
+}
+
+// ---------------------------------------------------------------------------
+// _locked variants — assume audio_gen_mutex is already held by the caller.
+// Must not be called from ISR. Declared in audio_generator.h so the timeline
+// batch executor can call them while holding the lock acquired via
+// audio_generator_lock(), committing a same-timestamp batch atomically.
+// ---------------------------------------------------------------------------
+
+esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_params_t* params) {
+    audio_gen_channel_t* ch = &audio_channels[channel];
+
+    memcpy(&ch->params, params, sizeof(audio_gen_params_t));
+
+    ch->current_freq     = params->frequency;
+    ch->current_freq_r   = params->frequency_r > 0 ? params->frequency_r : params->frequency;
+    ch->current_amp      = params->amplitude;
+    ch->current_pan      = params->pan;
+    ch->current_mod_freq = params->mod_frequency;
+    ch->phase_l_q32      = 0;
+    ch->phase_r_q32      = 0;
+    ch->mod_phase_q32    = 0;
+    ch->samples_generated = 0;
+
+    for (int p = 0; p < AUDIO_PARAM_COUNT; p++) {
+        ch->sweeps[p].duration_samples = 0;
+    }
+
+    memcpy(&ch->pending_params, params, sizeof(audio_gen_params_t));
+    atomic_store(&ch->pending_version, 0);
+    ch->applied_version = 0;
+
+    ch->total_samples = ((uint64_t)params->duration_ms * AUDIO_SAMPLE_RATE) / 1000ULL;
+
+    if (params->sweep_type != AUDIO_GEN_SWEEP_NONE && ch->total_samples > 0) {
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].start            = params->frequency;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].target           = params->sweep_target;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].start_sample     = 0;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples = ch->total_samples;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].curve            = params->sweep_type;
+    }
+    ch->active = true;
+
+    if (params->duration_ms > 0 && ch->total_samples == 0) {
+        ESP_LOGW(TAG, "Duration calculation resulted in zero samples - possible overflow");
+        ch->active = false;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // ESP_LOGD — runs inside audio_gen_mutex when called via *_locked path
+    // (timeline batch).  ESP_LOGI here would block fill_buffer on UART write.
+    ESP_LOGD(TAG, "Started audio channel %d: freq=%.1f Hz, freq_r=%.1f Hz, amp=%.2f, pan=%.2f, duration=%u ms = %llu samples (%.1f hours)",
+             channel, params->frequency, ch->current_freq_r, params->amplitude, params->pan, params->duration_ms,
+             ch->total_samples, (float)ch->total_samples / (AUDIO_SAMPLE_RATE * 3600.0f));
+
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_update_params_locked(int channel, const audio_gen_params_t *new_params) {
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    if (!ch->active) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memcpy(&ch->pending_params, new_params, sizeof(audio_gen_params_t));
+
+    // Bump version after releasing the mutex in the public wrapper, but here
+    // we are already inside the caller's lock scope — bump immediately so that
+    // fill_buffer (which also holds audio_gen_mutex) sees the new version on its
+    // next buffer boundary after the batch lock is released.
+    atomic_fetch_add_explicit(&ch->pending_version, 1u, memory_order_release);
+
+    ESP_LOGD(TAG, "update_params_locked: channel %d params queued (version %u)",
+             channel, atomic_load(&ch->pending_version));
+
+    return ESP_OK;
+}
+
+bool audio_generator_is_active_locked(int channel) {
+    if (channel < 0 || channel >= MAX_AUDIO_CHANNELS) {
+        return false;
+    }
+    return audio_channels[channel].active;
+}
+
+esp_err_t audio_generator_start_sweep_locked(int channel, audio_param_t param,
+                                                     float start, float target,
+                                                     uint64_t duration_samples,
+                                                     audio_gen_sweep_type_t curve) {
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    ch->sweeps[param].start            = start;
+    ch->sweeps[param].target           = target;
+    ch->sweeps[param].start_sample     = ch->samples_generated;
+    ch->sweeps[param].duration_samples = duration_samples;
+    ch->sweeps[param].curve            = curve;
+    return ESP_OK;
+}
+
 esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* params) {
     if (!generator_initialized) {
         return ESP_ERR_INVALID_STATE;
@@ -145,7 +249,6 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Validate parameters
     if (params->frequency <= 0 || params->frequency > AUDIO_SAMPLE_RATE/2) {
         ESP_LOGE(TAG, "Invalid frequency: %.1f Hz (must be 0-22050 Hz)", params->frequency);
         return ESP_ERR_INVALID_ARG;
@@ -162,61 +265,9 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
     }
 
     xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
-
-    audio_gen_channel_t* ch = &audio_channels[channel];
-
-    // Copy parameters
-    memcpy(&ch->params, params, sizeof(audio_gen_params_t));
-
-    // Initialize channel state
-    ch->current_freq     = params->frequency;
-    ch->current_freq_r   = params->frequency_r > 0 ? params->frequency_r : params->frequency;
-    ch->current_amp      = params->amplitude;
-    ch->current_pan      = params->pan;
-    ch->current_mod_freq = params->mod_frequency;
-    ch->phase_l_q32      = 0;
-    ch->phase_r_q32      = 0;
-    ch->mod_phase_q32    = 0;
-    ch->samples_generated = 0;
-
-    // Mark all per-param sweeps inactive; the explicit API sets them individually.
-    for (int p = 0; p < AUDIO_PARAM_COUNT; p++) {
-        ch->sweeps[p].duration_samples = 0;
-    }
-
-    // Reset lock-free pending-params slot so no stale update is applied on
-    // the first fill_buffer call after a channel restart.
-    memcpy(&ch->pending_params, params, sizeof(audio_gen_params_t));
-    atomic_store(&ch->pending_version, 0);
-    ch->applied_version = 0;
-
-    // Use 64-bit arithmetic to prevent overflow
-    ch->total_samples = ((uint64_t)params->duration_ms * AUDIO_SAMPLE_RATE) / 1000ULL;
-
-    // Translate legacy params.sweep_type/sweep_target into the unified sweeps[] state.
-    // This must come AFTER the zero-init loop above so the overwrite is not clobbered.
-    if (params->sweep_type != AUDIO_GEN_SWEEP_NONE && ch->total_samples > 0) {
-        ch->sweeps[AUDIO_PARAM_FREQUENCY].start            = params->frequency;
-        ch->sweeps[AUDIO_PARAM_FREQUENCY].target           = params->sweep_target;
-        ch->sweeps[AUDIO_PARAM_FREQUENCY].start_sample     = 0;
-        ch->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples = ch->total_samples;
-        ch->sweeps[AUDIO_PARAM_FREQUENCY].curve            = params->sweep_type;
-    }
-    ch->active = true;
-
-    // Add validation to catch potential issues
-    if (params->duration_ms > 0 && ch->total_samples == 0) {
-        ESP_LOGW(TAG, "Duration calculation resulted in zero samples - possible overflow");
-        xSemaphoreGive(audio_gen_mutex);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    ESP_LOGI(TAG, "Started audio channel %d: freq=%.1f Hz, freq_r=%.1f Hz, amp=%.2f, pan=%.2f, duration=%u ms = %llu samples (%.1f hours)",
-             channel, params->frequency, ch->current_freq_r, params->amplitude, params->pan, params->duration_ms,
-             ch->total_samples, (float)ch->total_samples / (AUDIO_SAMPLE_RATE * 3600.0f));
-
+    esp_err_t ret = audio_generator_start_channel_locked(channel, params);
     xSemaphoreGive(audio_gen_mutex);
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t audio_generator_stop_channel(int channel) {
@@ -246,6 +297,15 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
 
     // Clear output buffer
     memset(output_buffer, 0, samples * 2 * sizeof(float)); // Stereo
+
+    // Count active channels once so each channel's contribution is scaled by
+    // 1/N before mixing.  Without this, N same-panned channels at vol=100 sum
+    // to N×1.0 and saturate the ±1.0 output ceiling.
+    int n_active = 0;
+    for (int ch = 0; ch < MAX_AUDIO_CHANNELS; ch++) {
+        if (audio_channels[ch].active) n_active++;
+    }
+    float inv_n_active = (n_active > 0) ? (1.0f / (float)n_active) : 1.0f;
 
     // Mix all active channels
     for (int ch = 0; ch < MAX_AUDIO_CHANNELS; ch++) {
@@ -405,8 +465,8 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             }
 
             // Mix into output buffer (stereo interleaved).
-            output_buffer[i * 2]     += final_left;
-            output_buffer[i * 2 + 1] += final_right;
+            output_buffer[i * 2]     += final_left  * inv_n_active;
+            output_buffer[i * 2 + 1] += final_right * inv_n_active;
 
             // Update phase accumulators.  Modular uint32_t arithmetic wraps for
             // free at 2^32; no branch is needed to keep phase in range.
@@ -507,16 +567,10 @@ esp_err_t audio_generator_start_sweep(int channel, audio_param_t param,
     }
 
     xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
-
-    audio_gen_channel_t *ch = &audio_channels[channel];
-    ch->sweeps[param].start            = start;
-    ch->sweeps[param].target           = target;
-    ch->sweeps[param].start_sample     = ch->samples_generated;
-    ch->sweeps[param].duration_samples = duration_samples;
-    ch->sweeps[param].curve            = curve;
-
+    esp_err_t ret = audio_generator_start_sweep_locked(channel, param, start, target,
+                                                       duration_samples, curve);
     xSemaphoreGive(audio_gen_mutex);
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *new_params) {
@@ -526,31 +580,10 @@ esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *n
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Briefly take the mutex only to serialise concurrent writers.  Two timeline
-    // entries targeting the same channel in the same batch must not interleave
-    // their writes to pending_params.  The mutex is released BEFORE the atomic
-    // bump so fill_buffer never blocks waiting for a writer holding the mutex.
     xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
-
-    audio_gen_channel_t *ch = &audio_channels[channel];
-    if (!ch->active) {
-        xSemaphoreGive(audio_gen_mutex);
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    memcpy(&ch->pending_params, new_params, sizeof(audio_gen_params_t));
-
+    esp_err_t ret = audio_generator_update_params_locked(channel, new_params);
     xSemaphoreGive(audio_gen_mutex);
-
-    // Bump the version AFTER releasing the mutex.  The release fence implied by
-    // atomic_fetch_add ensures pending_params is fully written before fill_buffer
-    // sees the new version number (pairs with the acquire load in fill_buffer).
-    atomic_fetch_add_explicit(&ch->pending_version, 1u, memory_order_release);
-
-    ESP_LOGD(TAG, "update_params: channel %d params queued (version %u)",
-             channel, atomic_load(&ch->pending_version));
-
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t audio_generator_get_current_freq_r(int channel, float *out) {

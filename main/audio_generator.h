@@ -214,4 +214,24 @@ esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *n
  */
 esp_err_t audio_generator_get_current_freq_r(int channel, float *out);
 
+/** Task-context only — DO NOT call from ISR. Pair every lock() with unlock().
+ *  Used by the timeline executor to commit same-timestamp batches atomically:
+ *  hold the lock for the entire batch so fill_buffer sees all channels activate
+ *  in the same DMA buffer, preventing inter-ear onset delay. */
+void audio_generator_lock(void);
+void audio_generator_unlock(void);
+
+/**
+ * @brief _locked variants — caller MUST hold the lock acquired via
+ * audio_generator_lock() before calling any of these. Must not be called
+ * from ISR. Only the timeline batch executor should use these directly.
+ */
+esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_params_t *params);
+esp_err_t audio_generator_update_params_locked(int channel, const audio_gen_params_t *new_params);
+bool      audio_generator_is_active_locked(int channel);
+esp_err_t audio_generator_start_sweep_locked(int channel, audio_param_t param,
+                                             float start, float target,
+                                             uint64_t duration_samples,
+                                             audio_gen_sweep_type_t curve);
+
 #endif // AUDIO_GENERATOR_H
