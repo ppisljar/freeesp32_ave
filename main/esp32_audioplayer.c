@@ -13,6 +13,7 @@
 #include "timing_engine.h"
 #include "lock_free_comm.h"
 #include "isr_profiling.h"
+#include "memory_pool.h"
 
 static const char* TAG = "main";
 
@@ -87,6 +88,12 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "Master timing engine operational");
+
+    ret = memory_pool_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize memory pools: %s", esp_err_to_name(ret));
+        return;
+    }
 
     // WiFi / config_parser / web_server init MOVED to AFTER the soak (see below).
     // The WiFi stack's interrupt bursts were the dominant source of RMT FIFO

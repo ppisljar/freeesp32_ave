@@ -62,9 +62,12 @@ typedef struct {
     float current_amp;       // live interpolated amplitude
     float current_pan;       // live interpolated pan
     float current_mod_freq;  // live interpolated mod frequency
-    float phase_l;
-    float phase_r;
-    float mod_phase;
+    // Q32 phase accumulators: one full sine cycle = 2^32.  Phase increment per
+    // sample = (uint32_t)(freq * (2^32 / sample_rate)); modular uint32_t add
+    // gives free wrap-around — no branch.
+    uint32_t phase_l_q32;
+    uint32_t phase_r_q32;
+    uint32_t mod_phase_q32;
     uint64_t samples_generated;
     uint64_t total_samples;
     bool active;
@@ -186,7 +189,7 @@ esp_err_t audio_generator_start_sweep(int channel, audio_param_t param,
  * Performs a lock-free parameter update: copies new_params into the channel's
  * pending slot and bumps an atomic version counter.  fill_buffer picks up the
  * new params at the next buffer boundary without touching phase accumulators
- * (phase_l, phase_r, mod_phase) or sample counters, avoiding any audible
+ * (phase_l_q32, phase_r_q32, mod_phase_q32) or sample counters, avoiding any audible
  * discontinuity.
  *
  * Returns ESP_ERR_INVALID_STATE if the channel is not currently active — caller

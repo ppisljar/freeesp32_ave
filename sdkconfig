@@ -435,6 +435,7 @@ CONFIG_PARTITION_TABLE_MD5=y
 # ESP32 Audio Player
 #
 CONFIG_ISR_PROFILING=y
+# CONFIG_TIMELINE_DEBUG is not set
 # end of ESP32 Audio Player
 
 #

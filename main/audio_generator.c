@@ -46,6 +46,23 @@ static const char* TAG = "audio_generator";
 #define MAX_AUDIO_CHANNELS      8
 #define PI                      3.14159265359f
 
+// Sine lookup table.  4096 entries × 4 bytes = 16 KB DRAM.  With linear
+// interpolation between adjacent entries the harmonic distortion sits at
+// roughly -93 dB — well below the 16-bit DAC noise floor (~-96 dB).
+#define SINE_LUT_SIZE           4096u
+#define SINE_LUT_MASK           (SINE_LUT_SIZE - 1u)
+// Q32 phase: top 12 bits index the LUT (4096 = 2^12), low 20 bits are the
+// fractional part used as the linear-interpolation weight.
+#define SINE_LUT_INDEX_SHIFT    20
+#define SINE_LUT_FRAC_MASK      ((1u << SINE_LUT_INDEX_SHIFT) - 1u)
+#define SINE_LUT_FRAC_SCALE     (1.0f / (float)(1u << SINE_LUT_INDEX_SHIFT))
+// Quarter cycle = LUT_SIZE/4 entries → cos(x) = sin(x + π/2).
+#define SINE_LUT_QUARTER        (SINE_LUT_SIZE / 4u)
+// Phase-increment scale: cycles-per-second × this = Q32 increment per sample.
+#define Q32_PER_HZ              ((float)4294967296.0 / (float)AUDIO_SAMPLE_RATE)
+
+static float sine_lut[SINE_LUT_SIZE];
+
 // Global audio generator state
 static audio_gen_channel_t audio_channels[MAX_AUDIO_CHANNELS];
 static bool generator_initialized = false;
@@ -53,8 +70,32 @@ static SemaphoreHandle_t audio_gen_mutex = NULL;
 
 // Internal functions
 static float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type);
-static void apply_modulation(float* sample, float mod_phase, float mod_depth);
-static void apply_panning(float input, float pan, float* left, float* right);
+static inline void apply_modulation(float* sample, uint32_t mod_phase_q32, float mod_depth);
+static inline void apply_panning(float input, float pan, float* left, float* right);
+
+static inline float fast_sin_q32(uint32_t phase_q32) {
+    uint32_t idx  = (phase_q32 >> SINE_LUT_INDEX_SHIFT) & SINE_LUT_MASK;
+    uint32_t idx2 = (idx + 1u) & SINE_LUT_MASK;
+    float frac = (float)(phase_q32 & SINE_LUT_FRAC_MASK) * SINE_LUT_FRAC_SCALE;
+    float a = sine_lut[idx];
+    return a + frac * (sine_lut[idx2] - a);
+}
+
+// Cosine via the same LUT, offset by a quarter cycle.  Index is computed by
+// adding LUT_SIZE/4 to the integer index; the fractional weight is unchanged
+// because cos(x) = sin(x + π/2) shifts only the index domain.
+static inline float fast_cos_idx(uint32_t int_idx, float frac) {
+    uint32_t ci  = (int_idx + SINE_LUT_QUARTER) & SINE_LUT_MASK;
+    uint32_t ci2 = (ci + 1u) & SINE_LUT_MASK;
+    float a = sine_lut[ci];
+    return a + frac * (sine_lut[ci2] - a);
+}
+
+static inline float fast_sin_idx(uint32_t int_idx, float frac) {
+    uint32_t si2 = (int_idx + 1u) & SINE_LUT_MASK;
+    float a = sine_lut[int_idx];
+    return a + frac * (sine_lut[si2] - a);
+}
 
 esp_err_t audio_generator_init(void) {
     if (generator_initialized) {
@@ -70,14 +111,20 @@ esp_err_t audio_generator_init(void) {
         return ESP_FAIL;
     }
 
+    // Populate sine LUT once at init.  sinf() is called SINE_LUT_SIZE times
+    // here; this is the only sinf() call left in audio_generator.c.
+    for (uint32_t i = 0; i < SINE_LUT_SIZE; i++) {
+        sine_lut[i] = sinf((2.0f * PI * (float)i) / (float)SINE_LUT_SIZE);
+    }
+
     // Initialize all channels
     memset(audio_channels, 0, sizeof(audio_channels));
 
     for (int i = 0; i < MAX_AUDIO_CHANNELS; i++) {
         audio_channels[i].active = false;
-        audio_channels[i].phase_l = 0.0f;
-        audio_channels[i].phase_r = 0.0f;
-        audio_channels[i].mod_phase = 0.0f;
+        audio_channels[i].phase_l_q32 = 0;
+        audio_channels[i].phase_r_q32 = 0;
+        audio_channels[i].mod_phase_q32 = 0;
         audio_channels[i].samples_generated = 0;
         atomic_init(&audio_channels[i].pending_version, 0);
         audio_channels[i].applied_version = 0;
@@ -127,9 +174,9 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
     ch->current_amp      = params->amplitude;
     ch->current_pan      = params->pan;
     ch->current_mod_freq = params->mod_frequency;
-    ch->phase_l          = 0.0f;
-    ch->phase_r          = 0.0f;
-    ch->mod_phase        = 0.0f;
+    ch->phase_l_q32      = 0;
+    ch->phase_r_q32      = 0;
+    ch->mod_phase_q32    = 0;
     ch->samples_generated = 0;
 
     // Mark all per-param sweeps inactive; the explicit API sets them individually.
@@ -221,8 +268,8 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
         // posted by audio_generator_update_params().  The atomic load with
         // acquire ordering ensures that pending_params is fully visible before
         // we read it (pairs with the release-fence in update_params).
-        // We deliberately do NOT touch phase_l/phase_r/mod_phase or
-        // samples_generated/total_samples — preserving phase coherence.
+        // We deliberately do NOT touch phase_l_q32/phase_r_q32/mod_phase_q32
+        // or samples_generated/total_samples — preserving phase coherence.
         {
             uint32_t pv = atomic_load_explicit(&channel->pending_version, memory_order_acquire);
             if (pv != channel->applied_version) {
@@ -247,9 +294,13 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             }
         }
 
-        // Per-sample cost estimate: 4 params × ~10–20 cycles (branch + lerp) = ~40–80
-        // cycles/sample/channel.  8 channels at 44100 Hz on ESP32 @ 240 MHz:
-        //   8 × 44100 × 80 = ~28.2 MCycles/s  →  ~11.8% CPU worst-case full polyphony.
+        // Per-sample cost estimate (post Phase 4.2): 4 sweep-params × ~10 cy
+        // (branch + lerp) + carrier sin lookup × 2 + pan lookup × 2 ≈ 80 cy/sample
+        // /channel — down from ~280 cy when each sample paid two sinf() calls
+        // (50–80 cy each) plus a cosf() and an extra sinf() inside apply_panning.
+        // 8 channels at 44.1 kHz on ESP32 @ 240 MHz:
+        //   8 × 44100 × 80 = ~28.2 MCycles/s  →  ~11.8% CPU worst-case full polyphony,
+        // compared to ~41% on the pre-LUT path.
         for (size_t i = 0; i < samples; i++) {
             // --- Frequency ---
             if (channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples > 0) {
@@ -329,20 +380,17 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                 }
             }
 
-            // Generate stereo samples using live interpolated amplitude.
-            float sample_l = channel->current_amp * sinf(channel->phase_l);
-            float sample_r = channel->current_amp * sinf(channel->phase_r);
+            // Generate stereo samples using LUT lookup + linear interpolation.
+            float sample_l = channel->current_amp * fast_sin_q32(channel->phase_l_q32);
+            float sample_r = channel->current_amp * fast_sin_q32(channel->phase_r_q32);
 
             // Apply modulation if enabled; current_mod_freq drives the accumulator
             // so that mod-frequency sweeps take effect sample-accurately.
             if (channel->current_mod_freq > 0 && channel->params.mod_depth > 0) {
-                apply_modulation(&sample_l, channel->mod_phase, channel->params.mod_depth);
-                apply_modulation(&sample_r, channel->mod_phase, channel->params.mod_depth);
+                apply_modulation(&sample_l, channel->mod_phase_q32, channel->params.mod_depth);
+                apply_modulation(&sample_r, channel->mod_phase_q32, channel->params.mod_depth);
 
-                channel->mod_phase += 2.0f * PI * channel->current_mod_freq / AUDIO_SAMPLE_RATE;
-                if (channel->mod_phase > 2.0f * PI) {
-                    channel->mod_phase -= 2.0f * PI;
-                }
+                channel->mod_phase_q32 += (uint32_t)(channel->current_mod_freq * Q32_PER_HZ);
             }
 
             // Apply live pan.
@@ -360,16 +408,10 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             output_buffer[i * 2]     += final_left;
             output_buffer[i * 2 + 1] += final_right;
 
-            // Update phase accumulators.
-            channel->phase_l += 2.0f * PI * channel->current_freq / AUDIO_SAMPLE_RATE;
-            if (channel->phase_l > 2.0f * PI) {
-                channel->phase_l -= 2.0f * PI;
-            }
-
-            channel->phase_r += 2.0f * PI * channel->current_freq_r / AUDIO_SAMPLE_RATE;
-            if (channel->phase_r > 2.0f * PI) {
-                channel->phase_r -= 2.0f * PI;
-            }
+            // Update phase accumulators.  Modular uint32_t arithmetic wraps for
+            // free at 2^32; no branch is needed to keep phase in range.
+            channel->phase_l_q32 += (uint32_t)(channel->current_freq   * Q32_PER_HZ);
+            channel->phase_r_q32 += (uint32_t)(channel->current_freq_r * Q32_PER_HZ);
 
             channel->samples_generated++;
         }
@@ -571,21 +613,19 @@ static float interpolate_sweep(float start, float target, float progress, audio_
     }
 }
 
-static void apply_modulation(float* sample, float mod_phase, float mod_depth) {
-    float mod_factor = 1.0f + mod_depth * sinf(mod_phase);
-    *sample *= mod_factor;
+static inline void apply_modulation(float* sample, uint32_t mod_phase_q32, float mod_depth) {
+    *sample *= 1.0f + mod_depth * fast_sin_q32(mod_phase_q32);
 }
 
-static void apply_panning(float input, float pan, float* left, float* right) {
-    // Pan ranges from -1.0 (full left) to +1.0 (full right)
-    // Use equal-power panning law for smooth transitions
-    float pan_angle = (pan + 1.0f) * PI / 4.0f; // Convert to 0 to π/2 range
+static inline void apply_panning(float input, float pan, float* left, float* right) {
+    // Equal-power panning law: left = cos(angle), right = sin(angle), where
+    // angle = (pan + 1) · π/4 ∈ [0, π/2].  Mapping into LUT space:
+    //   angle / (2π) · LUT_SIZE  =  (pan + 1) · LUT_SIZE/8
+    // i.e. the LUT index spans [0, LUT_SIZE/4] as pan goes from -1 to +1.
+    float idxf = (pan + 1.0f) * (float)(SINE_LUT_SIZE / 8u);
+    uint32_t int_idx = (uint32_t)idxf;
+    float frac = idxf - (float)int_idx;
 
-    if (left) {
-        *left = input * cosf(pan_angle);
-    }
-
-    if (right) {
-        *right = input * sinf(pan_angle);
-    }
+    if (left)  *left  = input * fast_cos_idx(int_idx, frac);
+    if (right) *right = input * fast_sin_idx(int_idx, frac);
 }

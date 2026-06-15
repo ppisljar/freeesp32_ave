@@ -563,34 +563,25 @@ static esp_err_t upload_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Received %zu bytes of config data", received);
 
     // Parse and execute config
-    config_timeline_t *timeline = malloc(sizeof(config_timeline_t));
-    if (!timeline) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
-        return ESP_FAIL;
-    }
+    config_timeline_t timeline = {0};
 
-    esp_err_t ret = config_parser_parse_content(g_server_state.upload_buffer, received, timeline);
+    esp_err_t ret = config_parser_parse_content(g_server_state.upload_buffer, received, &timeline);
 
     if (ret != ESP_OK) {
-        free(timeline);
+        config_parser_free_timeline(&timeline);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid config file format");
         return ESP_FAIL;
     }
 
-    // Execute timeline
-    ret = config_parser_execute_timeline(timeline, false);
+    // Execute timeline (deep-copies entries into the pool-backed persistent slot)
+    ret = config_parser_execute_timeline(&timeline, false);
+    config_parser_free_timeline(&timeline);
     if (ret != ESP_OK) {
-        config_parser_free_timeline(timeline);
-        free(timeline);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to execute config");
         return ESP_FAIL;
     }
 
-    free(timeline);
-
     httpd_resp_send(req, "Config uploaded and executed successfully", HTTPD_RESP_USE_STRLEN);
-
-    // Note: timeline will be freed when execution completes
     return ESP_OK;
 }
 
@@ -840,30 +831,22 @@ static esp_err_t play_config_handler(httpd_req_t *req)
     config_parser_stop_timeline();
 
     // Parse and execute config
-    config_timeline_t *timeline = malloc(sizeof(config_timeline_t));
-    if (!timeline) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
-        return ESP_FAIL;
-    }
+    config_timeline_t timeline = {0};
 
-    esp_err_t parse_ret = config_parser_parse_content(g_server_state.upload_buffer, received, timeline);
+    esp_err_t parse_ret = config_parser_parse_content(g_server_state.upload_buffer, received, &timeline);
 
     if (parse_ret != ESP_OK) {
-        free(timeline);
+        config_parser_free_timeline(&timeline);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid config format");
         return ESP_FAIL;
     }
 
-    // Execute timeline
-    esp_err_t exec_ret = config_parser_execute_timeline(timeline, false);
+    esp_err_t exec_ret = config_parser_execute_timeline(&timeline, false);
+    config_parser_free_timeline(&timeline);
     if (exec_ret != ESP_OK) {
-        config_parser_free_timeline(timeline);
-        free(timeline);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to execute config");
         return ESP_FAIL;
     }
-
-    free(timeline);
 
     httpd_resp_send(req, "Config started successfully! ▶", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;

@@ -6,6 +6,7 @@
 #include "audio_config.h"
 #include "timing_engine.h"
 #include "lock_free_comm.h"
+#include "memory_pool.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -258,17 +259,26 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
     // Lock-free timeline execution
 
     // Make a deep copy of the timeline to avoid use-after-free when stack timeline goes out of scope
-    config_parser_free_timeline(&persistent_timeline); // Free any previous timeline
+    config_parser_free_timeline(&persistent_timeline); // Release any previous timeline back to the pool
 
-    persistent_timeline.capacity = timeline->count; // Only allocate what we need
-    persistent_timeline.count = timeline->count;
-    persistent_timeline.entries = malloc(persistent_timeline.capacity * sizeof(config_entry_t));
-
-    if (!persistent_timeline.entries) {
-        ESP_LOGE(TAG, "Failed to allocate persistent timeline entries");
-        // Lock-free operation - no mutex needed
-        return ESP_ERR_NO_MEM;
+    config_entry_t *pool_entries = NULL;
+    size_t pool_capacity = 0;
+    esp_err_t pool_ret = memory_pool_timeline_claim(&pool_entries, &pool_capacity);
+    if (pool_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to claim timeline pool: %s", esp_err_to_name(pool_ret));
+        return pool_ret;
     }
+
+    if (timeline->count > pool_capacity) {
+        ESP_LOGE(TAG, "Timeline count %zu exceeds pool capacity %zu",
+                 timeline->count, pool_capacity);
+        memory_pool_timeline_release(0);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    persistent_timeline.capacity = pool_capacity;
+    persistent_timeline.count    = timeline->count;
+    persistent_timeline.entries  = pool_entries;
 
     // Deep copy entries
     memcpy(persistent_timeline.entries, timeline->entries, timeline->count * sizeof(config_entry_t));
@@ -411,7 +421,11 @@ void config_parser_free_timeline(config_timeline_t *timeline)
 {
     if (timeline) {
         if (timeline->entries) {
-            free(timeline->entries);
+            if (timeline == &persistent_timeline) {
+                memory_pool_timeline_release(timeline->count);
+            } else {
+                free(timeline->entries);
+            }
             timeline->entries = NULL;
         }
         if (timeline->source_content) {
