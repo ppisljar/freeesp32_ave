@@ -1,0 +1,32 @@
+# Test Configuration for Simultaneous Timeline Execution
+# This tests the fix for simultaneous entries at the same timestamp
+#
+# Format: time frequency duty brightness channel (for LED)
+#         A time frequency pan volume modulation channel (for Audio)
+
+# Test 1: Simultaneous entries at t=0 (start of timeline)
+0 20 50 100 1                 # LED: Start 20Hz white flicker
+A 0 400 -100 70 0 0           # Audio Left: 400Hz tone
+A 0 420 100 70 0 1            # Audio Right: 420Hz tone (creates 20Hz binaural beat)
+
+# Test 2: Simultaneous entries at t=2000ms
+2000 8 50 75 1                # LED: Change to 8Hz flicker, lower brightness
+A 2000 440 -100 60 0 0        # Audio Left: 440Hz tone, lower volume
+A 2000 448 100 60 0 1         # Audio Right: 448Hz tone (creates 8Hz binaural beat)
+
+# Test 3: Three simultaneous entries at t=5000ms
+5000 12 30 50 1               # LED: 12Hz flicker, dimmer
+A 5000 300 -100 50 0 0        # Audio Left: 300Hz tone
+A 5000 312 100 50 0 1         # Audio Right: 312Hz tone (creates 12Hz binaural beat)
+
+# Test 4: Mixed entry types at t=8000ms (LED + multiple audio channels)
+8000 0 0 0 1                  # LED: Turn off
+A 8000 0 0 0 0 0              # Audio Left: Fade out
+A 8000 0 0 0 0 1              # Audio Right: Fade out
+
+# Test 5: Single entry at t=10000ms (should work as before)
+A 10000 500 0 30 0 0          # Single audio tone for comparison
+
+# End test at t=12000ms
+12000 0 0 0 1                 # LED off
+A 12000 0 0 0 0 0             # Audio off

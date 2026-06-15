@@ -1,0 +1,24 @@
+# Timing Engine Integration Test
+# Test file to verify hardware-precision timeline execution
+
+# Quick LED flicker test at 10Hz
+0000 led matrix brightness 0.5 flicker 10
+
+# Audio test with binaural beats
+0000 audio freq 440 beat_freq 10 volume 0.3
+
+# Timeline test - rapid changes to verify microsecond precision
+1000 led matrix brightness 1.0
+1100 led matrix brightness 0.0
+1200 led matrix brightness 1.0
+1300 led matrix brightness 0.0
+1400 led matrix brightness 1.0
+
+# Audio frequency changes
+2000 audio freq 220
+2500 audio freq 440
+3000 audio freq 880
+
+# Stop everything
+5000 audio volume 0
+5000 led matrix brightness 0
