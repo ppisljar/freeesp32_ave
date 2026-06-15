@@ -61,6 +61,12 @@ static const char* TAG = "audio_generator";
 // Phase-increment scale: cycles-per-second × this = Q32 increment per sample.
 #define Q32_PER_HZ              ((float)4294967296.0 / (float)AUDIO_SAMPLE_RATE)
 
+// Amplitude-ramp duration to eliminate clicks on hard volume changes.
+// 220 samples = 5 ms at 44.1 kHz — industry sweet spot (Web Audio, Max/MSP, SC).
+// Below ~2 ms the click reappears; above ~20 ms the fade becomes audible as
+// latency.  Cost: ~2 cy/sample average across all channels (negligible).
+#define AUDIO_AMP_RAMP_SAMPLES  220u
+
 static float sine_lut[SINE_LUT_SIZE];
 
 // Global audio generator state
@@ -158,7 +164,13 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
 
     ch->current_freq     = params->frequency;
     ch->current_freq_r   = params->frequency_r > 0 ? params->frequency_r : params->frequency;
-    ch->current_amp      = params->amplitude;
+    // On initial activation, fade in from 0 to the target amplitude over AUDIO_AMP_RAMP_SAMPLES.
+    // This eliminates the first-note click that would otherwise happen at the start
+    // of any audio session.  Cost: 5 ms of inaudible ramp at the very start.
+    ch->current_amp         = 0.0f;
+    ch->amp_target          = params->amplitude;
+    ch->amp_step            = params->amplitude / (float)AUDIO_AMP_RAMP_SAMPLES;
+    ch->amp_ramp_remaining  = AUDIO_AMP_RAMP_SAMPLES;
     ch->current_pan      = params->pan;
     ch->current_mod_freq = params->mod_frequency;
     ch->phase_l_q32      = 0;
@@ -336,13 +348,32 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                 // Latch new params.
                 memcpy(&channel->params, &channel->pending_params, sizeof(audio_gen_params_t));
 
-                // Re-derive live values from the new params.
-                channel->current_amp      = channel->params.amplitude;
-                channel->current_pan      = channel->params.pan;
-                channel->current_mod_freq = channel->params.mod_frequency;
-
-                // Only update frequency if no active sweep owns it — an active
-                // sweep's interpolated value takes precedence.
+                // Re-derive live values from the new params, but ONLY for
+                // parameters that don't have an active sweep — an active sweep's
+                // interpolated value takes precedence over the entry's start
+                // value (otherwise dispatching the entry mid-sweep would snap
+                // the live value back to params, producing an audible step).
+                if (channel->sweeps[AUDIO_PARAM_AMPLITUDE].duration_samples == 0) {
+                    // Arm a 5 ms linear ramp toward the new amplitude.  Skip arming if the
+                    // delta is effectively zero — saves the per-sample ramp work when params
+                    // are unchanged or differ only at noise level.
+                    float delta = channel->params.amplitude - channel->current_amp;
+                    if (delta > 1.0e-4f || delta < -1.0e-4f) {
+                        channel->amp_target         = channel->params.amplitude;
+                        channel->amp_step           = delta / (float)AUDIO_AMP_RAMP_SAMPLES;
+                        channel->amp_ramp_remaining = AUDIO_AMP_RAMP_SAMPLES;
+                    } else {
+                        // Identical (or noise-level) — snap directly, no ramp needed.
+                        channel->current_amp        = channel->params.amplitude;
+                        channel->amp_ramp_remaining = 0;
+                    }
+                }
+                if (channel->sweeps[AUDIO_PARAM_PAN].duration_samples == 0) {
+                    channel->current_pan = channel->params.pan;
+                }
+                if (channel->sweeps[AUDIO_PARAM_MOD_FREQ].duration_samples == 0) {
+                    channel->current_mod_freq = channel->params.mod_frequency;
+                }
                 if (channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples == 0) {
                     channel->current_freq   = channel->params.frequency;
                     channel->current_freq_r = channel->params.frequency_r > 0.0f
@@ -384,6 +415,18 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             if (channel->params.frequency_r > 0.0f) {
                 float freq_diff = channel->params.frequency_r - channel->params.frequency;
                 channel->current_freq_r = channel->current_freq + freq_diff;
+            }
+
+            // --- Implicit amplitude ramp (de-click) ---
+            // 5 ms linear ramp eliminates audible click on hard vol changes; snap at
+            // end of ramp absorbs float-accumulation drift over 220 additions.
+            // Fires only when amp_ramp_remaining > 0; branch-not-taken cost ~1 cy.
+            if (channel->amp_ramp_remaining > 0) {
+                channel->current_amp += channel->amp_step;
+                channel->amp_ramp_remaining--;
+                if (channel->amp_ramp_remaining == 0) {
+                    channel->current_amp = channel->amp_target;  // snap to exact target — eliminates float-accumulation drift
+                }
             }
 
             // --- Amplitude ---

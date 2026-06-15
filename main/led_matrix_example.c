@@ -42,6 +42,7 @@ typedef struct {
     volatile bool led_state;           // Target ON/OFF state; written by ISR, read by flicker task
     volatile bool led_dirty;           // ISR sets true when led_state changes; task clears it
     volatile uint64_t cycle_start_time_us; // Timestamp of current cycle start (ISR-owned)
+    volatile uint64_t latched_on_time_us;  // ON-time latched at cycle boundary; prevents mid-cycle duty glitch
 
     // Sweep state — written by led_matrix_start_sweep_masked() (task context),
     // read at cycle boundaries inside the ISR.  7 parameters × led_sweep_param_t.
@@ -70,6 +71,7 @@ static led_flicker_state_t flicker_state[4] = {
         .led_state            = false,
         .led_dirty            = false,
         .cycle_start_time_us  = 0,
+        .latched_on_time_us   = 0,
         .sw_freq        = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_duty        = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_brightness  = { .start_q = 0, .target_q = 0, .curve = 0 },
@@ -416,6 +418,9 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             // Interpolate duty (Q8.8 → truncate to uint8_t 0-100).
             uint32_t duty_q8 = led_interp_param(&s->sw_duty, progress_q16);
             s->duty_cycle = (uint8_t)(duty_q8 >> 8);
+            // Latch on_time_us at cycle boundary so mid-cycle duty writes from task
+            // context take effect only at the next cycle, never mid-cycle.
+            s->latched_on_time_us = (cycle_duration_us * s->duty_cycle) / 100;
 
             // Interpolate brightness (Q8.8 → truncate to uint8_t 0-100).
             uint32_t bri_q8 = led_interp_param(&s->sw_brightness, progress_q16);
@@ -433,8 +438,9 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
         }
         portEXIT_CRITICAL_ISR(&s_flicker_mux);
 
-        uint64_t on_time_us = (cycle_duration_us * s->duty_cycle) / 100;
-        bool should_be_on = (elapsed_us < on_time_us);
+        // Use the latch computed at the last cycle boundary — duty changes take
+        // effect at cycle boundaries, not mid-cycle.
+        bool should_be_on = (elapsed_us < s->latched_on_time_us);
 
         if (should_be_on != s->led_state) {
             s->led_state = should_be_on;
@@ -706,9 +712,16 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         s->frequency_milliHz   = freq_milliHz;
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
-        s->cycle_start_time_us = now_us;
-        s->led_state           = false;
-        s->led_dirty           = false;
+        // Only reset the cycle origin and force the LED off on FIRST activation.
+        // When the channel is already running, preserve cycle_start_time_us so the
+        // ISR continues the existing rhythm — resetting it here would produce a
+        // cycle of arbitrary length at the dispatch instant (the stutter the user sees).
+        if (!s->active) {
+            s->cycle_start_time_us = now_us;
+            s->latched_on_time_us  = 0;
+            s->led_state           = false;
+            s->led_dirty           = false;
+        }
         // Clear any pending sweep so the new params are held constant.
         // ALL seven swept params (freq/duty/bright/R/G/B/W) must be set so the
         // cycle-boundary recompute in the ISR doesn't overwrite the fields with 0.
@@ -774,7 +787,6 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
     }
 
     uint32_t new_freq_milliHz = (uint32_t)(frequency * 1000.0f);
-    uint64_t now_us = esp_timer_get_time();
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
@@ -785,7 +797,11 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
         s->frequency_milliHz   = new_freq_milliHz;
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
-        s->cycle_start_time_us = now_us;
+        // Do NOT reset cycle_start_time_us here — the channel is already running
+        // and its cycle origin must be preserved.  The new frequency takes effect at
+        // the next cycle boundary when the ISR recomputes cycle_duration_us from
+        // sw_freq.  Resetting the origin would insert a cycle of arbitrary length at
+        // the dispatch instant, which is the stutter this fix eliminates.
         // Sweep slots must mirror the new values so the next cycle-boundary
         // recompute in the ISR doesn't snap them back to a stale sweep target.
         s->sw_freq       = (led_sweep_param_t){ new_freq_milliHz, new_freq_milliHz, LED_INTERP_NONE };
@@ -868,8 +884,16 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
         s->green               = (spec->g_curve      != LED_INTERP_NONE) ? spec->g_start      : spec->g_target;
         s->blue                = (spec->b_curve      != LED_INTERP_NONE) ? spec->b_start      : spec->b_target;
         s->_w_value            = (spec->w_curve      != LED_INTERP_NONE) ? spec->w_start      : spec->w_target;
-        s->cycle_start_time_us = sweep_start_us;
-        s->led_state           = false;
+        // Only reset the cycle origin on FIRST activation of this channel.
+        // When a sweep is dispatched on an already-running channel, preserve the
+        // existing cycle_start_time_us so the rhythm continues uninterrupted.
+        // The sweep interpolation uses sweep_start_us (below) as its own clock
+        // reference — it does not need cycle_start_time_us to be reset.
+        if (!s->active) {
+            s->cycle_start_time_us = sweep_start_us;
+            s->latched_on_time_us  = 0;
+            s->led_state           = false;
+        }
 
         // Populate per-param sweep state.
         s->sw_freq = (led_sweep_param_t){
@@ -967,6 +991,14 @@ bool led_matrix_is_flickering(void) {
         if (flicker_state[ch].active) return true;
     }
     return false;
+}
+
+bool led_matrix_is_flickering_masked(uint8_t channel_mask) {
+    // True if ALL channels set in the mask are currently active.
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        if ((channel_mask & (1u << ch)) && !flicker_state[ch].active) return false;
+    }
+    return (channel_mask != 0);
 }
 
 float led_matrix_get_current_frequency(void) {

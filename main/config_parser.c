@@ -779,7 +779,10 @@ static void timeline_execution_task(void *pvParameters)
             }
 
             // Execute this entry
-            ESP_LOGI(TAG, "Executing entry %zu: type=%s, time=%u ms",
+            // ESP_LOGD — runs inside audio_gen_mutex held by this batch loop.
+            // ESP_LOGI at 115200 baud blocks fill_buffer ~10 ms per line, causing
+            // audible click at DMA buffer boundary.  See fix_clicks_logging_2026-06-15.md.
+            ESP_LOGD(TAG, "Executing entry %zu: type=%s, time=%u ms",
                      i,
                      (current_timeline->entries[i].type == CONFIG_ENTRY_LED) ? "LED" : "AUDIO",
                      entry_time);
@@ -791,7 +794,7 @@ static void timeline_execution_task(void *pvParameters)
             if (ret != ESP_OK) {
                 ESP_LOGW(TAG, "Failed to execute timeline entry %zu: %s", i, esp_err_to_name(ret));
             } else {
-                ESP_LOGI(TAG, "Entry %zu executed in %llu μs (offset +%llu μs from batch start)",
+                ESP_LOGD(TAG, "Entry %zu executed in %llu μs (offset +%llu μs from batch start)",
                          i, entry_execution_time, entry_start_time - batch_start_time);
             }
 
@@ -1360,14 +1363,28 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             led_ret = ret;
         }
     } else {
-        // No sweep — immediate flicker with current entry's color
+        // No sweep — immediate flicker with current entry's color.
+        // Route based on whether the channel(s) are already active:
+        //   - Inactive: start_flicker_masked activates and initialises cycle state.
+        //   - Active:   update_flicker_params_masked updates timing without resetting
+        //               the cycle origin (rhythm-preserving), followed by
+        //               set_flicker_color_masked for the new color.
+        // This prevents the stutter caused by an unconditional start that resets
+        // cycle_start_time_us on an already-running channel.
         led_matrix_set_flicker_color_masked(led->channel_mask, led->r, led->g, led->b);
-        ret = led_matrix_start_flicker_masked(led->channel_mask,
-                                              led->frequency,
-                                              led->duty_cycle,
-                                              led->brightness);
+        if (led_matrix_is_flickering_masked(led->channel_mask)) {
+            ret = led_matrix_update_flicker_params_masked(led->channel_mask,
+                                                          led->frequency,
+                                                          led->duty_cycle,
+                                                          led->brightness);
+        } else {
+            ret = led_matrix_start_flicker_masked(led->channel_mask,
+                                                  led->frequency,
+                                                  led->duty_cycle,
+                                                  led->brightness);
+        }
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to start LED flicker on mask 0x%02x: %s",
+            ESP_LOGE(TAG, "Failed to start/update LED flicker on mask 0x%02x: %s",
                      led->channel_mask, esp_err_to_name(ret));
             led_ret = ret;
         }

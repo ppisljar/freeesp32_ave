@@ -59,7 +59,10 @@ typedef struct {
     audio_gen_params_t params;
     float current_freq;
     float current_freq_r;
-    float current_amp;       // live interpolated amplitude
+    float current_amp;       // live interpolated amplitude — driven by ramp or snap
+    float amp_target;        // destination amplitude the ramp is heading toward
+    float amp_step;          // signed per-sample delta = (target - current) / RAMP_SAMPLES
+    uint32_t amp_ramp_remaining; // countdown in samples; 0 = no ramp active
     float current_pan;       // live interpolated pan
     float current_mod_freq;  // live interpolated mod frequency
     // Q32 phase accumulators: one full sine cycle = 2^32.  Phase increment per

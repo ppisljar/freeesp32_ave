@@ -249,6 +249,18 @@ esp_err_t led_matrix_start_sweep(const led_sweep_spec_t *spec);
 bool led_matrix_is_flickering(void);
 
 /**
+ * @brief Check if LED flicker is active on ALL channels set in the mask.
+ *
+ * Returns true only when every bit set in channel_mask has an active channel.
+ * Used by config_parser to decide whether to call start_flicker_masked (first
+ * activation) or update_flicker_params_masked (rhythm-preserving update).
+ *
+ * @param channel_mask Bitmask 0x01-0x0F.
+ * @return bool true if all masked channels are flickering, false otherwise.
+ */
+bool led_matrix_is_flickering_masked(uint8_t channel_mask);
+
+/**
  * @brief Get current flicker frequency of the lowest-numbered active channel.
  *
  * @return float Current frequency in Hz (0.0 if no channel is flickering)
