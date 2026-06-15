@@ -569,7 +569,9 @@ static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz)
             "led_flicker",
             2048,
             NULL,
-            22,                // Priority 22 — above default tasks, below IDLE watchdog
+            23,                // Priority 23 — one ABOVE timing_dispatch_task (22) so
+                               // round-robin scheduling doesn't add 0–10 ms wake jitter
+                               // to LED transitions.  See bug_led_drift_driver_2026-06-15.md.
             &led_flicker_task_handle,
             1                  // Core 1 — symmetric with timing_dispatch_task
         );
