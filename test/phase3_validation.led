@@ -1,0 +1,92 @@
+# Phase 3 Validation Timeline (60 s)
+# Exercises every Phase 3 sweep dimension from plan 002:
+#   - LED freq sweep      (linear @ t=30s, quadratic via brightness)
+#   - LED duty sweep      (linear @ t=30s)
+#   - LED brightness sweep (quadratic @ t=30s)
+#   - LED RGBW color sweep (R linear + G quadratic @ t=15s)
+#   - Multi-LED-channel    (4 zones at distinct freqs from t=0)
+#   - Backwards-compat parsing (mix of 5-field and 9-field LED lines)
+#   - Audio frequency sweep (linear ch1 + quadratic ch2 @ t=30s)
+#   - Audio pan sweep       (linear ch1 @ t=15s)
+#   - Audio volume sweep    (linear fade-out @ t=45s)
+#   - 2 simultaneous audio channels (ch1 + ch2)
+#
+# Visual cues — the 4 LED regions per spec layout:
+#   r1 = inner-left  rectangle (cols 1-4, rows 1-2 + row 3 col 4 corner)
+#   r2 = outer-left  frame
+#   r3 = outer-right frame
+#   r4 = inner-right rectangle (cols 7-10, rows 1-2)
+#
+# Audible cues:
+#   Channel 1 starts at 200 Hz, sweeps to 220 Hz linearly, pans right, fades out.
+#   Channel 2 starts at 240 Hz, sweeps to 260 Hz with quadratic ease, fades out.
+#   A faint binaural-style beat between the two channels.
+#
+# To use: upload via the web UI. The timeline executor will run it once.
+
+# ============================================================================
+# t = 0 — 4 LED zones at distinct flicker frequencies, distinct brightnesses
+# 5-field format (backwards-compat path): time freq duty bright channel_mask
+# ============================================================================
+0   8  50 40 1
+0  12  50 40 2
+0  16  50 40 4
+0  20  50 40 8
+
+# ============================================================================
+# t = 0 — start 2 simultaneous audio channels
+# 7-token audio format: A time freq pan vol mod channel
+# ============================================================================
+A    0  200  0  25  0  1
+A    0  240  0  25  0  2
+
+# ============================================================================
+# t = 15 s — LED ch 1 RGBW color sweep (9-field format)
+# 9-field format: time freq duty bright R G B W channel_mask
+# Linear sweep red 255->0; quadratic sweep green 255->128;
+# blue and white snap (no interp prefix). Tests: 9-field parser, R/G interp,
+# default RGBW=(255,255,255,0) inherited from prior 5-field entry.
+# ============================================================================
+15000  8 50 40  >0 *128 0 0  1
+
+# ============================================================================
+# t = 15 s — Audio ch 1 pan linear sweep (center -> right) over 15 s
+# ============================================================================
+A 15000  200  >100  25  0  1
+
+# ============================================================================
+# t = 30 s — Audio frequency sweeps
+#   ch 1: linear 200 -> 220 Hz over 15 s
+#   ch 2: quadratic 240 -> 260 Hz over 15 s
+# ============================================================================
+A 30000  >220  100  25  0  1
+A 30000  *260    0  25  0  2
+
+# ============================================================================
+# t = 30 s — LED ch 1 simultaneous frequency + brightness sweep (9-field)
+# Tests the spec's example pattern: multiple params sweep on same entry
+# freq linear 8->4 Hz; brightness quadratic 40->80; color holds at swept value
+# ============================================================================
+30000  >4 50 *80  0 128 0 0  1
+
+# ============================================================================
+# t = 30 s — LED ch 4 (r4 inner-right rect) duty cycle linear sweep 50% -> 75%
+# Mixed with 5-field format (no RGBW); brightness held at 40
+# ============================================================================
+30000 20 >75 40 8
+
+# ============================================================================
+# t = 45 s — Audio volume linear fade-out (both channels), pan holds
+# ============================================================================
+A 45000  220  100  >0  0  1
+A 45000  260    0  >0  0  2
+
+# ============================================================================
+# t = 60 s — End: silence + all LEDs off (sentinel entries close all sweeps)
+# ============================================================================
+A 60000  220  100  0  0  1
+A 60000  260    0  0  0  2
+60000  0 0 0 1
+60000  0 0 0 2
+60000  0 0 0 4
+60000  0 0 0 8

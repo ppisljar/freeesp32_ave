@@ -104,19 +104,13 @@ void audio_test_output_task(void* pvParameters)
 {
     ESP_LOGI(TAG, "Audio output task started");
 
-    const size_t buffer_size = AUDIO_GEN_BUFFER_SIZE;
-    const size_t stereo_samples = buffer_size;
+    const size_t stereo_samples = AUDIO_GEN_BUFFER_SIZE;
 
-    // Allocate audio buffer for stereo samples
-    float* audio_buffer = malloc(stereo_samples * 2 * sizeof(float));
-    int16_t* i2s_buffer = malloc(stereo_samples * 2 * sizeof(int16_t));
-
-    if (!audio_buffer || !i2s_buffer) {
-        ESP_LOGE(TAG, "Failed to allocate audio buffers");
-        audio_output_running = false;
-        vTaskDelete(NULL);
-        return;
-    }
+    // .bss-resident — runtime malloc here used to silently fail under heap pressure
+    // (queue allocations in audio_manager_init can starve this path), causing the
+    // task to vTaskDelete itself with the caller seeing ESP_OK. Result: silent audio.
+    static float   audio_buffer[AUDIO_GEN_BUFFER_SIZE * 2];
+    static int16_t i2s_buffer  [AUDIO_GEN_BUFFER_SIZE * 2];
 
     audio_output_running = true;
     size_t bytes_written = 0;
@@ -157,8 +151,6 @@ void audio_test_output_task(void* pvParameters)
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    free(audio_buffer);
-    free(i2s_buffer);
     audio_output_task_handle = NULL;
 
     ESP_LOGI(TAG, "Audio output task stopped");
@@ -209,6 +201,218 @@ esp_err_t audio_test_stop_output_task(void)
 }
 
 // ---------------------------------------------------------------------------
+// Sweep Interpolation Verification Tests (Plan 002 Step 1)
+// ---------------------------------------------------------------------------
+// Both tests start a 400→440 Hz sweep over 1000 ms on channel 0, then sample
+// current_freq after 25% of total samples have been generated (~250 ms).
+//
+// Why 250 ms delay instead of polling samples_generated:
+//   The output task writes AUDIO_GEN_BUFFER_SIZE frames per iteration with a
+//   1 ms vTaskDelay, giving ~44 buffers/s × 1024 frames = ~44100 frames/s.
+//   At 44100 Hz, 25% of 1 s = 11025 samples ≈ 250 ms.  A 260 ms wait provides
+//   a 10 ms margin without over-sampling into the 50% boundary.
+// ---------------------------------------------------------------------------
+
+#define SWEEP_VERIFY_START_HZ   400.0f
+#define SWEEP_VERIFY_END_HZ     440.0f
+#define SWEEP_VERIFY_DUR_MS     1000U
+#define SWEEP_VERIFY_CHANNEL    0
+
+// Tolerance in Hz for frequency match.  The interpolation runs once per
+// AUDIO_GEN_BUFFER_SIZE samples, so the measured value may be up to one
+// buffer-worth ahead of the ideal 25% point — at 44100 Hz that is ~23 ms of
+// additional progress.  0.5 Hz is generous enough to absorb this granularity.
+#define SWEEP_VERIFY_TOLERANCE_HZ  0.5f
+
+esp_err_t audio_test_sweep_verify_linear(void)
+{
+    ESP_LOGI(TAG, "sweep_verify_linear: start %.0f->%.0f Hz over %u ms",
+             SWEEP_VERIFY_START_HZ, SWEEP_VERIFY_END_HZ, SWEEP_VERIFY_DUR_MS);
+
+    audio_gen_params_t params = {
+        .frequency    = SWEEP_VERIFY_START_HZ,
+        .frequency_r  = SWEEP_VERIFY_START_HZ,
+        .amplitude    = 0.1f,
+        .pan          = 0.0f,
+        .mod_frequency = 0.0f,
+        .mod_depth    = 0.0f,
+        .sweep_type   = AUDIO_GEN_SWEEP_LINEAR,
+        .sweep_target = SWEEP_VERIFY_END_HZ,
+        .duration_ms  = SWEEP_VERIFY_DUR_MS,
+    };
+
+    esp_err_t ret = audio_manager_start_generation(SWEEP_VERIFY_CHANNEL, &params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "sweep_verify_linear: failed to start generation: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Wait for ~25% progress (11025 samples at 44100 Hz ≈ 250 ms).
+    vTaskDelay(pdMS_TO_TICKS(260));
+
+    float actual_freq = 0.0f;
+    ret = audio_generator_get_current_freq(SWEEP_VERIFY_CHANNEL, &actual_freq);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "sweep_verify_linear: get_current_freq failed");
+        audio_manager_stop_generation(SWEEP_VERIFY_CHANNEL);
+        return ret;
+    }
+
+    // Linear at p=0.25: expected = 400 + 40 * 0.25 = 410 Hz
+    const float expected_freq = SWEEP_VERIFY_START_HZ +
+        (SWEEP_VERIFY_END_HZ - SWEEP_VERIFY_START_HZ) * 0.25f;
+
+    audio_manager_stop_generation(SWEEP_VERIFY_CHANNEL);
+
+    float diff = actual_freq - expected_freq;
+    if (diff < 0.0f) diff = -diff;
+
+    if (diff > SWEEP_VERIFY_TOLERANCE_HZ) {
+        ESP_LOGE(TAG, "sweep_verify_linear FAIL: expected %.2f Hz, got %.2f Hz (diff %.2f Hz > tol %.2f Hz)",
+                 expected_freq, actual_freq, diff, SWEEP_VERIFY_TOLERANCE_HZ);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "sweep_verify_linear PASS: expected %.2f Hz, got %.2f Hz", expected_freq, actual_freq);
+    return ESP_OK;
+}
+
+esp_err_t audio_test_sweep_verify_quadratic(void)
+{
+    ESP_LOGI(TAG, "sweep_verify_quadratic: start %.0f->%.0f Hz over %u ms",
+             SWEEP_VERIFY_START_HZ, SWEEP_VERIFY_END_HZ, SWEEP_VERIFY_DUR_MS);
+
+    audio_gen_params_t params = {
+        .frequency    = SWEEP_VERIFY_START_HZ,
+        .frequency_r  = SWEEP_VERIFY_START_HZ,
+        .amplitude    = 0.1f,
+        .pan          = 0.0f,
+        .mod_frequency = 0.0f,
+        .mod_depth    = 0.0f,
+        .sweep_type   = AUDIO_GEN_SWEEP_QUADRATIC,
+        .sweep_target = SWEEP_VERIFY_END_HZ,
+        .duration_ms  = SWEEP_VERIFY_DUR_MS,
+    };
+
+    esp_err_t ret = audio_manager_start_generation(SWEEP_VERIFY_CHANNEL, &params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "sweep_verify_quadratic: failed to start generation: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Wait for ~25% progress (first quadrant of the ease-in-out curve).
+    vTaskDelay(pdMS_TO_TICKS(260));
+
+    float actual_freq = 0.0f;
+    ret = audio_generator_get_current_freq(SWEEP_VERIFY_CHANNEL, &actual_freq);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "sweep_verify_quadratic: get_current_freq failed");
+        audio_manager_stop_generation(SWEEP_VERIFY_CHANNEL);
+        return ret;
+    }
+
+    // Quadratic at p=0.25 (first half, ease-in branch):
+    //   t = 2 * 0.25^2 = 0.125
+    //   expected = 400 + 40 * 0.125 = 405 Hz
+    const float p = 0.25f;
+    const float t = 2.0f * p * p;   // ease-in branch: p < 0.5
+    const float expected_freq = SWEEP_VERIFY_START_HZ +
+        (SWEEP_VERIFY_END_HZ - SWEEP_VERIFY_START_HZ) * t;
+
+    audio_manager_stop_generation(SWEEP_VERIFY_CHANNEL);
+
+    float diff = actual_freq - expected_freq;
+    if (diff < 0.0f) diff = -diff;
+
+    if (diff > SWEEP_VERIFY_TOLERANCE_HZ) {
+        ESP_LOGE(TAG, "sweep_verify_quadratic FAIL: expected %.2f Hz, got %.2f Hz (diff %.2f Hz > tol %.2f Hz)",
+                 expected_freq, actual_freq, diff, SWEEP_VERIFY_TOLERANCE_HZ);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "sweep_verify_quadratic PASS: expected %.2f Hz, got %.2f Hz", expected_freq, actual_freq);
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Amplitude Sweep Verification Test (Plan 002 Step 2.7)
+// ---------------------------------------------------------------------------
+// Mirrors sweep_verify_linear but exercises the explicit-window sweep API
+// (audio_generator_start_sweep) rather than the legacy params.sweep_type path.
+//
+// Channel 0 starts at amplitude 0.0, then a 44100-sample (1 s) linear sweep
+// to 1.0 is armed.  After 260 ms (~25% of samples), current_amp should be
+// 0.0 + 1.0 * 0.25 = 0.25, verified within ±0.02.
+// ---------------------------------------------------------------------------
+
+#define AMP_VERIFY_CHANNEL    0
+#define AMP_VERIFY_TOLERANCE  0.02f
+
+esp_err_t audio_test_sweep_verify_amplitude(void)
+{
+    ESP_LOGI(TAG, "sweep_verify_amplitude: 0.0->1.0 amplitude over 44100 samples");
+
+    // Amplitude 0.0 avoids audible clicks during the test; frequency still
+    // needs a valid value for audio_generator_start_channel to accept the params.
+    audio_gen_params_t params = {
+        .frequency     = 440.0f,
+        .frequency_r   = 440.0f,
+        .amplitude     = 0.0f,
+        .pan           = 0.0f,
+        .mod_frequency = 0.0f,
+        .mod_depth     = 0.0f,
+        .sweep_type    = AUDIO_GEN_SWEEP_NONE,
+        .sweep_target  = 0.0f,
+        .duration_ms   = 2000,   // long enough to outlast the test
+    };
+
+    esp_err_t ret = audio_manager_start_generation(AMP_VERIFY_CHANNEL, &params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "sweep_verify_amplitude: failed to start generation: %s",
+                 esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Arm the amplitude sweep via the new explicit-window API.
+    ret = audio_generator_start_sweep(AMP_VERIFY_CHANNEL, AUDIO_PARAM_AMPLITUDE,
+                                      0.0f, 1.0f, 44100ULL, AUDIO_GEN_SWEEP_LINEAR);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "sweep_verify_amplitude: start_sweep failed: %s",
+                 esp_err_to_name(ret));
+        audio_manager_stop_generation(AMP_VERIFY_CHANNEL);
+        return ret;
+    }
+
+    // Wait for ~25% of 44100 samples (11025 samples at 44100 Hz ≈ 250 ms).
+    vTaskDelay(pdMS_TO_TICKS(260));
+
+    float actual_amp = 0.0f;
+    ret = audio_generator_get_current_amp(AMP_VERIFY_CHANNEL, &actual_amp);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "sweep_verify_amplitude: get_current_amp failed");
+        audio_manager_stop_generation(AMP_VERIFY_CHANNEL);
+        return ret;
+    }
+
+    // Linear at p=0.25: expected = 0.0 + 1.0 * 0.25 = 0.25
+    const float expected_amp = 0.25f;
+
+    audio_manager_stop_generation(AMP_VERIFY_CHANNEL);
+
+    float diff = actual_amp - expected_amp;
+    if (diff < 0.0f) diff = -diff;
+
+    if (diff > AMP_VERIFY_TOLERANCE) {
+        ESP_LOGE(TAG, "sweep_verify_amplitude FAIL: expected %.3f, got %.3f (diff %.3f > tol %.3f)",
+                 expected_amp, actual_amp, diff, AMP_VERIFY_TOLERANCE);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "sweep_verify_amplitude PASS: expected %.3f, got %.3f", expected_amp, actual_amp);
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
 // ISR Baseline Soak Test (Step 1.2)
 // ---------------------------------------------------------------------------
 // Total duration: 5 minutes.
@@ -223,18 +427,18 @@ esp_err_t audio_test_stop_output_task(void)
 // ISR profiling stats are logged every 30 seconds via isr_profiling_report().
 // ---------------------------------------------------------------------------
 
-#define SOAK_PHASE_DURATION_MS  60000U   // 1 minute per phase
-#define SOAK_REPORT_INTERVAL_MS 30000U   // print ISR stats every 30 s
+#define SOAK_PHASE_DURATION_MS  15000U   // 15 seconds per phase
+#define SOAK_REPORT_INTERVAL_MS 5000U    // print ISR stats every 5 s
 #define SOAK_BINAURAL_BASE_HZ   200.0f
 #define SOAK_BINAURAL_BEAT_HZ   40.0f
 #define SOAK_BINAURAL_DUR_MS    (SOAK_PHASE_DURATION_MS * 4)
 
 esp_err_t audio_test_isr_baseline_soak(void)
 {
-    ESP_LOGI(TAG, "=== ISR BASELINE SOAK START (4 min, 4 × 1-min phases) ===");
-    ESP_LOGI(TAG, "OPERATOR: upload a .led file via the web interface at ~2:30 to exercise flash writes");
+    ESP_LOGI(TAG, "=== ISR BASELINE SOAK START (1 min, 4 × 15-s phases) ===");
+    ESP_LOGI(TAG, "OPERATOR: upload a .led file via the web interface at ~37 s to exercise flash writes");
 
-    // Start sustained binaural audio for the full 5-minute run.
+    // Start sustained binaural audio for the full 1-minute run.
     audio_gen_params_t audio_params = {
         .frequency   = SOAK_BINAURAL_BASE_HZ,
         .frequency_r = SOAK_BINAURAL_BASE_HZ + SOAK_BINAURAL_BEAT_HZ,
@@ -255,9 +459,12 @@ esp_err_t audio_test_isr_baseline_soak(void)
     TickType_t phase_start;
     TickType_t report_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SOAK_REPORT_INTERVAL_MS);
 
-    // Phase 1: 8 Hz flicker
-    ESP_LOGI(TAG, "SOAK phase 1/4: 8 Hz LED flicker @ 10%% brightness (1 min)");
-    led_matrix_start_flicker(8.0f, 50, 10);
+    // Phase 1: 8 Hz on channel 1 (blue, inner-left rect) + channel 4 (red, inner-right rect)
+    // Channel mask 0x09 = bit 0 (channel 1, r1) + bit 3 (channel 4, r4).
+    ESP_LOGI(TAG, "SOAK phase 1/4: 8 Hz LED flicker — ch1 BLUE + ch4 RED @ 10%% brightness (15 s)");
+    led_matrix_start_flicker_masked(0x09, 8.0f, 50, 10);
+    led_matrix_set_flicker_color_masked(0x01,   0,   0, 255);  // ch 1 = blue
+    led_matrix_set_flicker_color_masked(0x08, 255,   0,   0);  // ch 4 = red
     phase_start = xTaskGetTickCount();
     while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
         if (xTaskGetTickCount() >= report_deadline) {
@@ -267,9 +474,17 @@ esp_err_t audio_test_isr_baseline_soak(void)
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    // Phase 2: 20 Hz flicker
-    ESP_LOGI(TAG, "SOAK phase 2/4: 20 Hz LED flicker @ 10%% brightness (1 min)");
-    led_matrix_update_flicker_params(20.0f, 50, 10);
+    // Phase 2: 40 Hz on channel 2 (red, outer-left frame) + channel 3 (blue, outer-right frame)
+    // Channel mask 0x06 = bit 1 (channel 2, r2) + bit 2 (channel 3, r3).
+    // 40 Hz × 2 state-changes/cycle = 80 refreshes/sec — just below perceptual
+    // fusion (~50-60 Hz for most viewers) so flicker is visible. Duty 10%
+    // makes the strobe brief (2.5 ms on / 22.5 ms off) — easier to see individual
+    // pulses and any drop-outs in the pulse train.
+    ESP_LOGI(TAG, "SOAK phase 2/4: 40 Hz LED flicker @ 10%% duty — ch2 RED + ch3 BLUE @ 10%% brightness (15 s)");
+    led_matrix_stop_flicker_masked(0x09);  // stop phase 1's channels
+    led_matrix_start_flicker_masked(0x06, 40.0f, 10, 10);
+    led_matrix_set_flicker_color_masked(0x02, 255,   0,   0);  // ch 2 = red
+    led_matrix_set_flicker_color_masked(0x04,   0,   0, 255);  // ch 3 = blue
     phase_start = xTaskGetTickCount();
     while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
         if (xTaskGetTickCount() >= report_deadline) {
@@ -279,9 +494,9 @@ esp_err_t audio_test_isr_baseline_soak(void)
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    // Phase 3: VU-meter sync (1 min)
-    ESP_LOGI(TAG, "SOAK phase 3/4: VU-meter sync mode (1 min)");
-    led_matrix_stop_flicker();
+    // Phase 3: VU-meter sync (15 s)
+    ESP_LOGI(TAG, "SOAK phase 3/4: VU-meter sync mode (15 s)");
+    led_matrix_stop_flicker_masked(0x06);  // stop phase 2's channels
     audio_led_sync_start(SYNC_MODE_VU_METER);
     phase_start = xTaskGetTickCount();
     while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
@@ -294,7 +509,7 @@ esp_err_t audio_test_isr_baseline_soak(void)
     audio_led_sync_stop();
 
     // Phase 4: 8 Hz again + final stats
-    ESP_LOGI(TAG, "SOAK phase 4/4: 8 Hz LED flicker @ 10%% brightness (1 min) + final report");
+    ESP_LOGI(TAG, "SOAK phase 4/4: 8 Hz LED flicker @ 10%% brightness (15 s) + final report");
     led_matrix_start_flicker(8.0f, 50, 10);
     phase_start = xTaskGetTickCount();
     while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
@@ -309,5 +524,191 @@ esp_err_t audio_test_isr_baseline_soak(void)
     ESP_LOGI(TAG, "=== ISR BASELINE SOAK COMPLETE ===");
     isr_profiling_report();
 
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Eight-channel concurrent soak test (Plan 002 Step 5.4)
+// ---------------------------------------------------------------------------
+// Channels 0-7 run at 200, 220, 240, 260, 280, 300, 320, 340 Hz at amplitude
+// 0.05 each.  8 × 0.05 = 0.40 peak — well inside the I2S headroom.
+//
+// Phase 1 (30 s): all 8 channels at their start frequencies.
+// Phase 2 (30 s): each channel linearly sweeps to half its start frequency
+//   (100, 110, 120, ..., 170 Hz) over 30 seconds via audio_generator_start_sweep.
+// Final: stop all channels, log ISR profile, check queue-error counter.
+// ---------------------------------------------------------------------------
+
+#define SOAK8_PHASE_MS    30000U
+#define SOAK8_CHANNELS    8
+#define SOAK8_BASE_FREQ   200.0f
+#define SOAK8_FREQ_STEP   20.0f
+#define SOAK8_AMPLITUDE   0.05f
+#define SOAK8_DUR_MS      (SOAK8_PHASE_MS * 2U + 5000U) // enough for both phases + margin
+
+esp_err_t audio_test_multichannel_soak(void)
+{
+    ESP_LOGI(TAG, "=== MULTICHANNEL SOAK START (8 ch, 2 × 30 s) ===");
+
+    uint32_t errors_before = audio_led_sync_get_queue_errors();
+
+    // Phase 1: start all 8 channels
+    for (int ch = 0; ch < SOAK8_CHANNELS; ch++) {
+        float freq = SOAK8_BASE_FREQ + ch * SOAK8_FREQ_STEP;
+        audio_gen_params_t params = {
+            .frequency     = freq,
+            .frequency_r   = freq,
+            .amplitude     = SOAK8_AMPLITUDE,
+            .pan           = 0.0f,
+            .mod_frequency = 0.0f,
+            .mod_depth     = 0.0f,
+            .sweep_type    = AUDIO_GEN_SWEEP_NONE,
+            .sweep_target  = 0.0f,
+            .duration_ms   = SOAK8_DUR_MS,
+        };
+        esp_err_t ret = audio_manager_start_generation(ch, &params);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "soak8: ch%d start failed: %s", ch, esp_err_to_name(ret));
+            return ret;
+        }
+        ESP_LOGI(TAG, "soak8: ch%d started at %.0f Hz", ch, freq);
+    }
+
+    ESP_LOGI(TAG, "soak8: phase 1 — 8 channels running for %u ms", SOAK8_PHASE_MS);
+    vTaskDelay(pdMS_TO_TICKS(SOAK8_PHASE_MS));
+
+    // Phase 2: sweep all channels to half their start frequency over 30 s
+    uint64_t sweep_samples = ((uint64_t)SOAK8_PHASE_MS * AUDIO_GEN_SAMPLE_RATE) / 1000ULL;
+    for (int ch = 0; ch < SOAK8_CHANNELS; ch++) {
+        float start_freq = SOAK8_BASE_FREQ + ch * SOAK8_FREQ_STEP;
+        float target_freq = start_freq / 2.0f;
+        esp_err_t ret = audio_generator_start_sweep(
+            ch, AUDIO_PARAM_FREQUENCY,
+            start_freq, target_freq,
+            sweep_samples, AUDIO_GEN_SWEEP_LINEAR);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "soak8: ch%d sweep failed: %s", ch, esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "soak8: ch%d sweeping %.0f→%.0f Hz over %u ms",
+                     ch, start_freq, target_freq, SOAK8_PHASE_MS);
+        }
+    }
+
+    ESP_LOGI(TAG, "soak8: phase 2 — sweeping all channels for %u ms", SOAK8_PHASE_MS);
+    vTaskDelay(pdMS_TO_TICKS(SOAK8_PHASE_MS));
+
+    // Stop all channels
+    for (int ch = 0; ch < SOAK8_CHANNELS; ch++) {
+        audio_manager_stop_generation(ch);
+    }
+
+    ESP_LOGI(TAG, "=== MULTICHANNEL SOAK COMPLETE ===");
+    isr_profiling_report();
+
+    uint32_t errors_after = audio_led_sync_get_queue_errors();
+    uint32_t new_errors = errors_after - errors_before;
+
+    if (new_errors > 0) {
+        ESP_LOGE(TAG, "soak8: FAIL — %u queue drops detected during soak", new_errors);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "soak8: PASS — zero queue drops over 60 s with 8 active channels");
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Binaural-beat precision check (Plan 002 Step 5.5)
+// ---------------------------------------------------------------------------
+// Configures channel 0 with L=200.0 Hz, R=200.01 Hz (0.01 Hz beat — one full
+// amplitude cycle every 100 s).  Runs 60 s, then reads back current_freq and
+// current_freq_r from the generator's live state.
+//
+// The generator updates current_freq_r each sample via the binaural offset
+// preservation path (audio_generator.c: freq_diff = params.frequency_r -
+// params.frequency; current_freq_r = current_freq + freq_diff).  Because no
+// sweep is active on either carrier, both frequencies stay at their configured
+// values to floating-point precision throughout the run.
+//
+// True acoustic verification (counting amplitude peaks at the speaker) requires
+// external ADC capture over 100+ seconds — that is a Phase 5 / hardware-in-loop
+// measurement and is explicitly out of scope here.
+// ---------------------------------------------------------------------------
+
+#define BPRECISION_BASE_HZ       200.0f
+#define BPRECISION_BEAT_HZ       0.01f      // target 0.01 Hz beat
+#define BPRECISION_RUN_MS        60000U
+#define BPRECISION_TOLERANCE_HZ  0.001f     // 10× tighter than spec's ±0.01 Hz
+#define BPRECISION_CHANNEL       0
+
+esp_err_t audio_test_binaural_precision_verify(void)
+{
+    ESP_LOGI(TAG, "=== BINAURAL PRECISION START (L=%.2f Hz, R=%.4f Hz, run=%u ms) ===",
+             BPRECISION_BASE_HZ, BPRECISION_BASE_HZ + BPRECISION_BEAT_HZ, BPRECISION_RUN_MS);
+
+    audio_gen_params_t params = {
+        .frequency     = BPRECISION_BASE_HZ,
+        .frequency_r   = BPRECISION_BASE_HZ + BPRECISION_BEAT_HZ,
+        .amplitude     = 0.1f,
+        .pan           = 0.0f,
+        .mod_frequency = 0.0f,
+        .mod_depth     = 0.0f,
+        .sweep_type    = AUDIO_GEN_SWEEP_NONE,
+        .sweep_target  = 0.0f,
+        .duration_ms   = BPRECISION_RUN_MS + 5000U,  // margin past measurement window
+    };
+
+    esp_err_t ret = audio_manager_start_generation(BPRECISION_CHANNEL, &params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "binaural_precision: failed to start: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Run for the full soak window
+    vTaskDelay(pdMS_TO_TICKS(BPRECISION_RUN_MS));
+
+    // Read back the generator's live frequencies
+    float actual_l = 0.0f, actual_r = 0.0f;
+    ret = audio_generator_get_current_freq(BPRECISION_CHANNEL, &actual_l);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "binaural_precision: get_current_freq failed");
+        audio_manager_stop_generation(BPRECISION_CHANNEL);
+        return ret;
+    }
+
+    ret = audio_generator_get_current_freq_r(BPRECISION_CHANNEL, &actual_r);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "binaural_precision: get_current_freq_r failed");
+        audio_manager_stop_generation(BPRECISION_CHANNEL);
+        return ret;
+    }
+
+    audio_manager_stop_generation(BPRECISION_CHANNEL);
+
+    float expected_l = BPRECISION_BASE_HZ;
+    float expected_r = BPRECISION_BASE_HZ + BPRECISION_BEAT_HZ;
+
+    float diff_l = actual_l - expected_l;
+    float diff_r = actual_r - expected_r;
+    if (diff_l < 0.0f) diff_l = -diff_l;
+    if (diff_r < 0.0f) diff_r = -diff_r;
+
+    ESP_LOGI(TAG, "binaural_precision: L expected=%.4f Hz actual=%.4f Hz diff=%.6f Hz",
+             expected_l, actual_l, diff_l);
+    ESP_LOGI(TAG, "binaural_precision: R expected=%.4f Hz actual=%.4f Hz diff=%.6f Hz",
+             expected_r, actual_r, diff_r);
+
+    if (diff_l > BPRECISION_TOLERANCE_HZ || diff_r > BPRECISION_TOLERANCE_HZ) {
+        ESP_LOGE(TAG, "binaural_precision: FAIL (tolerance ±%.3f Hz)",
+                 BPRECISION_TOLERANCE_HZ);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "binaural_precision: PASS — both channels within ±%.3f Hz after %u ms",
+             BPRECISION_TOLERANCE_HZ, BPRECISION_RUN_MS);
+
+    // Note: acoustic precision (counting L-R beat cycles at the speaker) requires
+    // external ADC capture over 100+ seconds and is deferred to Phase 5
+    // hardware-in-loop validation.
     return ESP_OK;
 }

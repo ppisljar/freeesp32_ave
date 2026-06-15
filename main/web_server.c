@@ -89,6 +89,7 @@ static const char* index_html =
 "            <div class=\"controls\">\n"
 "                <button onclick=\"loadExample()\">Load Fresh Example</button>\n"
 "                <button onclick=\"playConfig()\" style=\"background: #28a745;\">▶ PLAY Config</button>\n"
+"                <button onclick=\"stopConfig()\" style=\"background: #dc3545;\">■ STOP</button>\n"
 "                <button onclick=\"clearConfig()\">Clear</button>\n"
 "            </div>\n"
 "            <textarea id=\"exampleConfig\" placeholder=\"Enter .led config here...\"></textarea>\n"
@@ -194,6 +195,13 @@ static const char* index_html =
 "                    document.getElementById('exampleConfig').value = data;\n"
 "                })\n"
 "                .catch(error => showMessage('Error loading example: ' + error, 'error'));\n"
+"        }\n"
+"\n"
+"        function stopConfig() {\n"
+"            fetch('/api/stop', { method: 'POST' })\n"
+"                .then(response => response.text())\n"
+"                .then(result => showMessage(result, 'success'))\n"
+"                .catch(error => showMessage('Error: ' + error, 'error'));\n"
 "        }\n"
 "\n"
 "        function playConfig() {\n"
@@ -496,7 +504,8 @@ static esp_err_t index_handler(httpd_req_t *req)
 
 static esp_err_t status_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "Serving status API");
+    // Status API is polled by the web UI every ~1 s — demoted from I to D to keep UART quiet.
+    ESP_LOGD(TAG, "Serving status API");
 
     audio_manager_state_t *state = audio_manager_get_state();
 
@@ -629,17 +638,20 @@ static esp_err_t test_sweep_handler(httpd_req_t *req)
 
 static esp_err_t stop_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "Stopping all audio");
+    ESP_LOGI(TAG, "Stopping all audio + LED flicker + timeline");
+
+    // Stop timeline execution first so it can't restart anything we're about to stop.
+    config_parser_stop_timeline();
 
     // Stop all audio generators
     for (int i = 0; i < 8; i++) {
         audio_manager_stop_generation(i);
     }
 
-    // Stop timeline execution
-    config_parser_stop_timeline();
+    // Stop LED flicker on all 4 channels (mask 0x0F).
+    led_matrix_stop_flicker_masked(0x0F);
 
-    httpd_resp_send(req, "All audio stopped", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, "All audio + LED stopped", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -821,6 +833,8 @@ static esp_err_t play_config_handler(httpd_req_t *req)
 
     g_server_state.upload_buffer[received] = '\0';
     ESP_LOGI(TAG, "Received %zu bytes of config data from textarea", received);
+    ESP_LOGI(TAG, "---- config content begin ----\n%s---- config content end ----",
+             g_server_state.upload_buffer);
 
     // Stop any currently running timeline
     config_parser_stop_timeline();

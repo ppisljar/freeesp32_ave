@@ -9,4 +9,13 @@ config ISR_PROFILING
         context to print the statistics over UART.  Adds ~10 cycles of
         overhead per ISR invocation.  Disable for production builds.
 
+config TIMELINE_DEBUG
+    bool "Enable timeline sweep debug logging"
+    default n
+    help
+        Emit ESP_LOGI lines when the timeline executor starts audio or LED
+        sweeps: "Timeline sweep: ch=N param=X start=Y target=Z over Wms
+        curve=C".  Off in production; enable during Phase 3 validation to
+        confirm sweep wiring without an oscilloscope.
+
 endmenu

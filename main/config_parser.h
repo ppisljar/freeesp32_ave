@@ -33,10 +33,17 @@ typedef struct {
     float frequency;
     uint8_t duty_cycle;
     uint8_t brightness;
+    // RGBW color fields — 8 bytes for color data + 4×4 bytes interp flags = 24 bytes/entry.
+    // At 1000 entries max (CONFIG_PARSER_MAX_ENTRIES) that is 24 KB worst case — acceptable.
+    uint8_t r, g, b, w;
     uint8_t channel_mask;
     config_interpolation_t freq_interp;
     config_interpolation_t duty_interp;
     config_interpolation_t brightness_interp;
+    config_interpolation_t r_interp;
+    config_interpolation_t g_interp;
+    config_interpolation_t b_interp;
+    config_interpolation_t w_interp;
 } config_led_entry_t;
 
 typedef struct {

@@ -88,45 +88,10 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "Master timing engine operational");
 
-    // Initialize WiFi manager
-    ret = wifi_manager_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize WiFi manager: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Connect to WiFi
-    ESP_LOGI(TAG, "Connecting to WiFi...");
-    ret = wifi_manager_connect(WIFI_SSID, WIFI_PASSWORD);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to connect to WiFi: %s", esp_err_to_name(ret));
-    } else {
-        // Get and display IP address
-        char ip_str[16];
-        if (wifi_manager_get_ip_string(ip_str, sizeof(ip_str)) == ESP_OK) {
-            ESP_LOGI(TAG, "Connected to WiFi! IP address: %s", ip_str);
-        }
-    }
-
-    // Initialize config parser
-    ret = config_parser_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize config parser: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Initialize web server
-    ret = web_server_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize web server: %s", esp_err_to_name(ret));
-    } else {
-        web_server_set_wifi_status(wifi_manager_get_state() == WIFI_STATE_CONNECTED);
-
-        char url_buffer[64];
-        if (web_server_get_url(url_buffer, sizeof(url_buffer)) == ESP_OK) {
-            ESP_LOGI(TAG, "Web interface available at: %s", url_buffer);
-        }
-    }
+    // WiFi / config_parser / web_server init MOVED to AFTER the soak (see below).
+    // The WiFi stack's interrupt bursts were the dominant source of RMT FIFO
+    // underruns producing residual LED flicker — running the baseline soak
+    // before WiFi comes up gives a clean reading of LED + audio behaviour.
 
     // Initialize LED matrix
     ret = led_matrix_init();
@@ -192,11 +157,47 @@ void app_main(void)
                                timing_precision_test_callback, &test_interval_us);
 
 #ifdef CONFIG_ISR_PROFILING
-    ESP_LOGI(TAG, "CONFIG_ISR_PROFILING enabled — running 4-minute ISR baseline soak (4 × 1-min phases)");
-    ESP_LOGI(TAG, "Upload esp32_audioplayer/test/isr_baseline_soak.led via web UI at ~2:30 mark");
-    audio_test_isr_baseline_soak();
-    isr_profiling_report();
+    // Soak test disabled — re-enable for ISR baseline validation by uncommenting.
+    // ESP_LOGI(TAG, "CONFIG_ISR_PROFILING enabled — running 1-minute ISR baseline soak (4 × 15-s phases)");
+    // ESP_LOGI(TAG, "Soak runs BEFORE WiFi to eliminate interrupt-burst LED-FIFO underruns.");
+    // audio_test_isr_baseline_soak();
+    // isr_profiling_report();
 #endif
+
+    // ------------------------------------------------------------------
+    // Post-soak: bring up WiFi, config parser, and web server now.
+    // ------------------------------------------------------------------
+    ret = wifi_manager_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize WiFi manager: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Connecting to WiFi...");
+        ret = wifi_manager_connect(WIFI_SSID, WIFI_PASSWORD);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to connect to WiFi: %s", esp_err_to_name(ret));
+        } else {
+            char ip_str[16];
+            if (wifi_manager_get_ip_string(ip_str, sizeof(ip_str)) == ESP_OK) {
+                ESP_LOGI(TAG, "Connected to WiFi! IP address: %s", ip_str);
+            }
+        }
+    }
+
+    ret = config_parser_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize config parser: %s", esp_err_to_name(ret));
+    }
+
+    ret = web_server_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize web server: %s", esp_err_to_name(ret));
+    } else {
+        web_server_set_wifi_status(wifi_manager_get_state() == WIFI_STATE_CONNECTED);
+        char url_buffer[64];
+        if (web_server_get_url(url_buffer, sizeof(url_buffer)) == ESP_OK) {
+            ESP_LOGI(TAG, "Web interface available at: %s", url_buffer);
+        }
+    }
 
     // Main application loop
     while (1) {

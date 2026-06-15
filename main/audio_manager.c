@@ -271,3 +271,22 @@ bool audio_manager_is_channel_active(int channel)
 {
     return audio_generator_is_active(channel);
 }
+
+esp_err_t audio_manager_update_generation(int channel, const audio_gen_params_t *params)
+{
+    if (!params) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = audio_generator_update_params(channel, params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to update audio generation on channel %d: %s",
+                 channel, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGD(TAG, "Audio generation updated: channel=%d freq=%.1f Hz amp=%.2f",
+             channel, params->frequency, params->amplitude);
+
+    return ESP_OK;
+}

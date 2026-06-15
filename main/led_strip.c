@@ -11,12 +11,18 @@
 
 static const char* TAG = "led_strip";
 
-// WS2812 timing configuration (in RMT ticks, assuming 1MHz RMT clock)
+// WS2812 timing configuration (all in nanoseconds; RMT clock is 10 MHz).
 #define WS2812_T0H_NS    350    // 0 bit high time (ns)
 #define WS2812_T0L_NS    900    // 0 bit low time (ns)
 #define WS2812_T1H_NS    900    // 1 bit high time (ns)
 #define WS2812_T1L_NS    350    // 1 bit low time (ns)
-#define WS2812_RESET_US  50     // Reset time (us)
+// Reset/latch low time in NANOSECONDS. WS2812B (V1-V3) requires ≥50 µs;
+// WS2812B-V4+ requires ≥280 µs. We use 280 µs to cover all silicon variants.
+// BUG HISTORY: previously defined as WS2812_RESET_US = 50 and used as a RAW
+// TICK count (i.e. 50 ticks × 100 ns/tick = 5 µs), 10× too short to latch.
+// That caused frames to merge in the cascade shift register and produce
+// random-color flicker across all LEDs.
+#define WS2812_RESET_NS  280000
 
 // Convert nanoseconds to RMT ticks (10MHz RMT clock: 1 tick = 100ns)
 #define NS_TO_RMT_TICKS(ns) ((ns) / 100)
@@ -40,7 +46,7 @@ static const led_timing_t led_timings[] = {
         .t0l_ticks = NS_TO_RMT_TICKS(WS2812_T0L_NS),
         .t1h_ticks = NS_TO_RMT_TICKS(WS2812_T1H_NS),
         .t1l_ticks = NS_TO_RMT_TICKS(WS2812_T1L_NS),
-        .reset_ticks = WS2812_RESET_US
+        .reset_ticks = NS_TO_RMT_TICKS(WS2812_RESET_NS)
     },
     // SK6812 and APA106 have similar timing to WS2812
     [LED_STRIP_SK6812] = {
@@ -48,14 +54,14 @@ static const led_timing_t led_timings[] = {
         .t0l_ticks = NS_TO_RMT_TICKS(WS2812_T0L_NS),
         .t1h_ticks = NS_TO_RMT_TICKS(WS2812_T1H_NS),
         .t1l_ticks = NS_TO_RMT_TICKS(WS2812_T1L_NS),
-        .reset_ticks = WS2812_RESET_US
+        .reset_ticks = NS_TO_RMT_TICKS(WS2812_RESET_NS)
     },
     [LED_STRIP_APA106] = {
         .t0h_ticks = NS_TO_RMT_TICKS(WS2812_T0H_NS),
         .t0l_ticks = NS_TO_RMT_TICKS(WS2812_T0L_NS),
         .t1h_ticks = NS_TO_RMT_TICKS(WS2812_T1H_NS),
         .t1l_ticks = NS_TO_RMT_TICKS(WS2812_T1L_NS),
-        .reset_ticks = WS2812_RESET_US
+        .reset_ticks = NS_TO_RMT_TICKS(WS2812_RESET_NS)
     }
 };
 
@@ -194,6 +200,12 @@ esp_err_t led_strip_refresh(led_strip_handle_t *handle) {
     }
 
     xSemaphoreTake(handle->access_mutex, portMAX_DELAY);
+
+    // Wait for the previous RMT TX to drain before we overwrite symbol_buffer.
+    // rmt_transmit() is asynchronous — without this barrier, the next encode
+    // would write fresh symbols on top of bytes the DMA is still reading,
+    // producing GRB-byte-axis splicing (visible as green-tinted random pixels).
+    rmt_tx_wait_all_done(handle->rmt_tx_channel, portMAX_DELAY);
 
     // Copy working buffer to display buffer
     memcpy(handle->display_buffer, handle->working_buffer,
@@ -413,7 +425,14 @@ static esp_err_t led_strip_setup_rmt(led_strip_handle_t *handle) {
     rmt_tx_channel_config_t tx_chan_config = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .gpio_num = handle->gpio_pin,
-        .mem_block_symbols = 64,
+        // Claim all 8 ESP32 RMT memory blocks for this channel (8 × 64 = 512).
+        // For a 48-LED strip we need 1152+1 symbols per frame; bigger FIFO drops
+        // the CPU-driven refill count from ~18 to ~2 per frame, with each refill
+        // window now ~320 µs (was ~40 µs) — comfortably above WiFi interrupt
+        // bursts. No other channel uses RMT in this project, so claiming the
+        // whole pool is free. ESP32 classic doesn't support `with_dma = true`
+        // (lacks GDMA hardware); this is the strongest software-only mitigation.
+        .mem_block_symbols = 512,
         .resolution_hz = 10000000, // 10MHz resolution (100ns per tick) - FIXED!
         .trans_queue_depth = 4,
         .flags.invert_out = false,

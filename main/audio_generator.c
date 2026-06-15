@@ -1,3 +1,35 @@
+/*
+ * Mutex usage classification (Step 5.1):
+ *
+ * (a) Channel-array STRUCTURAL changes — keep mutex:
+ *     - xSemaphoreCreateMutex() at init: creates the lock.
+ *     - start_channel (lines ~82–130): sets active=true, resets all state.
+ *     - stop_channel  (lines ~143–148): sets active=false.
+ *     - fill_buffer   (lines ~157–306): outer lock guards the active-flag check
+ *       and the per-channel state machine.  Held for the entire buffer fill so
+ *       that stop_channel cannot race with a mid-buffer active check.
+ *       NOTE: the new pending-params path (Step 5.2) adds an atomic read INSIDE
+ *       this lock; no additional mutex sites are added to fill_buffer.
+ *
+ * (b) Per-channel param UPDATE — new lock-free path (Step 5.2):
+ *     - update_params: briefly takes mutex only to serialise concurrent writers
+ *       (two timeline events targeting the same channel).  Writes pending_params,
+ *       then releases mutex, then atomically bumps pending_version.
+ *       fill_buffer reads pending_version atomically at each buffer boundary;
+ *       no extra mutex lock needed on the reader side.
+ *
+ * (c) Read-only state access — keep mutex (cheap, infrequent):
+ *     - is_active        (~353–355)
+ *     - get_current_freq (~365–367)
+ *     - get_current_amp  (~377–379)
+ *     - get_current_freq_r (new)
+ *     These are only called from test/diagnostic code, never from real-time paths.
+ *
+ * Net effect: xSemaphore call count is UNCHANGED — the update_params writer takes
+ * the same mutex briefly for write serialisation, but no new mutex site is added
+ * to the real-time fill_buffer hot path.
+ */
+
 #include "audio_generator.h"
 #include "audio_config.h"
 #include "esp_log.h"
@@ -7,6 +39,7 @@
 #include "freertos/semphr.h"
 #include <math.h>
 #include <string.h>
+#include <stdatomic.h>
 
 static const char* TAG = "audio_generator";
 
@@ -46,6 +79,8 @@ esp_err_t audio_generator_init(void) {
         audio_channels[i].phase_r = 0.0f;
         audio_channels[i].mod_phase = 0.0f;
         audio_channels[i].samples_generated = 0;
+        atomic_init(&audio_channels[i].pending_version, 0);
+        audio_channels[i].applied_version = 0;
     }
 
     generator_initialized = true;
@@ -87,15 +122,39 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
     memcpy(&ch->params, params, sizeof(audio_gen_params_t));
 
     // Initialize channel state
-    ch->current_freq = params->frequency;
-    ch->current_freq_r = params->frequency_r > 0 ? params->frequency_r : params->frequency;
-    ch->phase_l = 0.0f;
-    ch->phase_r = 0.0f;
-    ch->mod_phase = 0.0f;
+    ch->current_freq     = params->frequency;
+    ch->current_freq_r   = params->frequency_r > 0 ? params->frequency_r : params->frequency;
+    ch->current_amp      = params->amplitude;
+    ch->current_pan      = params->pan;
+    ch->current_mod_freq = params->mod_frequency;
+    ch->phase_l          = 0.0f;
+    ch->phase_r          = 0.0f;
+    ch->mod_phase        = 0.0f;
     ch->samples_generated = 0;
+
+    // Mark all per-param sweeps inactive; the explicit API sets them individually.
+    for (int p = 0; p < AUDIO_PARAM_COUNT; p++) {
+        ch->sweeps[p].duration_samples = 0;
+    }
+
+    // Reset lock-free pending-params slot so no stale update is applied on
+    // the first fill_buffer call after a channel restart.
+    memcpy(&ch->pending_params, params, sizeof(audio_gen_params_t));
+    atomic_store(&ch->pending_version, 0);
+    ch->applied_version = 0;
 
     // Use 64-bit arithmetic to prevent overflow
     ch->total_samples = ((uint64_t)params->duration_ms * AUDIO_SAMPLE_RATE) / 1000ULL;
+
+    // Translate legacy params.sweep_type/sweep_target into the unified sweeps[] state.
+    // This must come AFTER the zero-init loop above so the overwrite is not clobbered.
+    if (params->sweep_type != AUDIO_GEN_SWEEP_NONE && ch->total_samples > 0) {
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].start            = params->frequency;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].target           = params->sweep_target;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].start_sample     = 0;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples = ch->total_samples;
+        ch->sweeps[AUDIO_PARAM_FREQUENCY].curve            = params->sweep_type;
+    }
     ch->active = true;
 
     // Add validation to catch potential issues
@@ -157,54 +216,151 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             continue;
         }
 
-        for (size_t i = 0; i < samples; i++) {
-            // Update sweep frequency if needed
-            if (channel->params.sweep_type != AUDIO_GEN_SWEEP_NONE && channel->total_samples > 0) {
-                float progress = (float)channel->samples_generated / (float)channel->total_samples;
-                channel->current_freq = interpolate_sweep(channel->params.frequency,
-                                                        channel->params.sweep_target,
-                                                        progress,
-                                                        channel->params.sweep_type);
+        // --- Lock-free pending-params snapshot (Step 5.2) ---
+        // Check once per buffer (not per sample) for a pending parameter update
+        // posted by audio_generator_update_params().  The atomic load with
+        // acquire ordering ensures that pending_params is fully visible before
+        // we read it (pairs with the release-fence in update_params).
+        // We deliberately do NOT touch phase_l/phase_r/mod_phase or
+        // samples_generated/total_samples — preserving phase coherence.
+        {
+            uint32_t pv = atomic_load_explicit(&channel->pending_version, memory_order_acquire);
+            if (pv != channel->applied_version) {
+                // Latch new params.
+                memcpy(&channel->params, &channel->pending_params, sizeof(audio_gen_params_t));
 
-                // Update right channel frequency for binaural beats
-                if (channel->params.frequency_r > 0) {
-                    float freq_diff = channel->params.frequency_r - channel->params.frequency;
-                    channel->current_freq_r = channel->current_freq + freq_diff;
+                // Re-derive live values from the new params.
+                channel->current_amp      = channel->params.amplitude;
+                channel->current_pan      = channel->params.pan;
+                channel->current_mod_freq = channel->params.mod_frequency;
+
+                // Only update frequency if no active sweep owns it — an active
+                // sweep's interpolated value takes precedence.
+                if (channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples == 0) {
+                    channel->current_freq   = channel->params.frequency;
+                    channel->current_freq_r = channel->params.frequency_r > 0.0f
+                                             ? channel->params.frequency_r
+                                             : channel->params.frequency;
+                }
+
+                channel->applied_version = pv;
+            }
+        }
+
+        // Per-sample cost estimate: 4 params × ~10–20 cycles (branch + lerp) = ~40–80
+        // cycles/sample/channel.  8 channels at 44100 Hz on ESP32 @ 240 MHz:
+        //   8 × 44100 × 80 = ~28.2 MCycles/s  →  ~11.8% CPU worst-case full polyphony.
+        for (size_t i = 0; i < samples; i++) {
+            // --- Frequency ---
+            if (channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples > 0) {
+                // New explicit-window sweep takes precedence over legacy path.
+                uint64_t elapsed = channel->samples_generated
+                                   - channel->sweeps[AUDIO_PARAM_FREQUENCY].start_sample;
+                if (elapsed >= channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples) {
+                    channel->current_freq = channel->sweeps[AUDIO_PARAM_FREQUENCY].target;
+                    channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples = 0;
+                } else {
+                    float progress = (float)elapsed
+                                     / (float)channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples;
+                    channel->current_freq = interpolate_sweep(
+                        channel->sweeps[AUDIO_PARAM_FREQUENCY].start,
+                        channel->sweeps[AUDIO_PARAM_FREQUENCY].target,
+                        progress,
+                        channel->sweeps[AUDIO_PARAM_FREQUENCY].curve);
+                }
+            }
+            // Preserve binaural beat frequency offset after any carrier sweep update.
+            if (channel->params.frequency_r > 0.0f) {
+                float freq_diff = channel->params.frequency_r - channel->params.frequency;
+                channel->current_freq_r = channel->current_freq + freq_diff;
+            }
+
+            // --- Amplitude ---
+            if (channel->sweeps[AUDIO_PARAM_AMPLITUDE].duration_samples > 0) {
+                uint64_t elapsed = channel->samples_generated
+                                   - channel->sweeps[AUDIO_PARAM_AMPLITUDE].start_sample;
+                if (elapsed >= channel->sweeps[AUDIO_PARAM_AMPLITUDE].duration_samples) {
+                    channel->current_amp = channel->sweeps[AUDIO_PARAM_AMPLITUDE].target;
+                    channel->sweeps[AUDIO_PARAM_AMPLITUDE].duration_samples = 0;
+                } else {
+                    float progress = (float)elapsed
+                                     / (float)channel->sweeps[AUDIO_PARAM_AMPLITUDE].duration_samples;
+                    channel->current_amp = interpolate_sweep(
+                        channel->sweeps[AUDIO_PARAM_AMPLITUDE].start,
+                        channel->sweeps[AUDIO_PARAM_AMPLITUDE].target,
+                        progress,
+                        channel->sweeps[AUDIO_PARAM_AMPLITUDE].curve);
                 }
             }
 
-            // Generate stereo samples
-            float sample_l = channel->params.amplitude * sinf(channel->phase_l);
-            float sample_r = channel->params.amplitude * sinf(channel->phase_r);
+            // --- Pan ---
+            if (channel->sweeps[AUDIO_PARAM_PAN].duration_samples > 0) {
+                uint64_t elapsed = channel->samples_generated
+                                   - channel->sweeps[AUDIO_PARAM_PAN].start_sample;
+                if (elapsed >= channel->sweeps[AUDIO_PARAM_PAN].duration_samples) {
+                    channel->current_pan = channel->sweeps[AUDIO_PARAM_PAN].target;
+                    channel->sweeps[AUDIO_PARAM_PAN].duration_samples = 0;
+                } else {
+                    float progress = (float)elapsed
+                                     / (float)channel->sweeps[AUDIO_PARAM_PAN].duration_samples;
+                    channel->current_pan = interpolate_sweep(
+                        channel->sweeps[AUDIO_PARAM_PAN].start,
+                        channel->sweeps[AUDIO_PARAM_PAN].target,
+                        progress,
+                        channel->sweeps[AUDIO_PARAM_PAN].curve);
+                }
+            }
 
-            // Apply modulation if enabled
-            if (channel->params.mod_frequency > 0 && channel->params.mod_depth > 0) {
+            // --- Mod frequency ---
+            if (channel->sweeps[AUDIO_PARAM_MOD_FREQ].duration_samples > 0) {
+                uint64_t elapsed = channel->samples_generated
+                                   - channel->sweeps[AUDIO_PARAM_MOD_FREQ].start_sample;
+                if (elapsed >= channel->sweeps[AUDIO_PARAM_MOD_FREQ].duration_samples) {
+                    channel->current_mod_freq = channel->sweeps[AUDIO_PARAM_MOD_FREQ].target;
+                    channel->sweeps[AUDIO_PARAM_MOD_FREQ].duration_samples = 0;
+                } else {
+                    float progress = (float)elapsed
+                                     / (float)channel->sweeps[AUDIO_PARAM_MOD_FREQ].duration_samples;
+                    channel->current_mod_freq = interpolate_sweep(
+                        channel->sweeps[AUDIO_PARAM_MOD_FREQ].start,
+                        channel->sweeps[AUDIO_PARAM_MOD_FREQ].target,
+                        progress,
+                        channel->sweeps[AUDIO_PARAM_MOD_FREQ].curve);
+                }
+            }
+
+            // Generate stereo samples using live interpolated amplitude.
+            float sample_l = channel->current_amp * sinf(channel->phase_l);
+            float sample_r = channel->current_amp * sinf(channel->phase_r);
+
+            // Apply modulation if enabled; current_mod_freq drives the accumulator
+            // so that mod-frequency sweeps take effect sample-accurately.
+            if (channel->current_mod_freq > 0 && channel->params.mod_depth > 0) {
                 apply_modulation(&sample_l, channel->mod_phase, channel->params.mod_depth);
                 apply_modulation(&sample_r, channel->mod_phase, channel->params.mod_depth);
 
-                // Update modulation phase
-                channel->mod_phase += 2.0f * PI * channel->params.mod_frequency / AUDIO_SAMPLE_RATE;
+                channel->mod_phase += 2.0f * PI * channel->current_mod_freq / AUDIO_SAMPLE_RATE;
                 if (channel->mod_phase > 2.0f * PI) {
                     channel->mod_phase -= 2.0f * PI;
                 }
             }
 
-            // Apply panning
+            // Apply live pan.
             float final_left, final_right;
-            apply_panning(sample_l, channel->params.pan, &final_left, &final_right);
+            apply_panning(sample_l, channel->current_pan, &final_left, &final_right);
 
-            // For binaural beats, right channel uses its own frequency
+            // For binaural beats, right channel uses its own frequency.
             if (channel->current_freq_r != channel->current_freq) {
                 float binaural_right;
-                apply_panning(sample_r, channel->params.pan, NULL, &binaural_right);
+                apply_panning(sample_r, channel->current_pan, NULL, &binaural_right);
                 final_right = binaural_right;
             }
 
-            // Mix into output buffer (stereo interleaved)
-            output_buffer[i * 2] += final_left;       // Left channel
-            output_buffer[i * 2 + 1] += final_right;  // Right channel
+            // Mix into output buffer (stereo interleaved).
+            output_buffer[i * 2]     += final_left;
+            output_buffer[i * 2 + 1] += final_right;
 
-            // Update phases
+            // Update phase accumulators.
             channel->phase_l += 2.0f * PI * channel->current_freq / AUDIO_SAMPLE_RATE;
             if (channel->phase_l > 2.0f * PI) {
                 channel->phase_l -= 2.0f * PI;
@@ -224,6 +380,8 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
 }
 
 esp_err_t audio_generator_update_sweep(int channel, float new_target, audio_gen_sweep_type_t sweep_type) {
+    // DEPRECATED: prefer audio_generator_start_sweep with explicit duration.
+    // This wrapper translates legacy callers into the unified sweeps[] state.
     if (!generator_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -236,9 +394,21 @@ esp_err_t audio_generator_update_sweep(int channel, float new_target, audio_gen_
 
     audio_gen_channel_t* ch = &audio_channels[channel];
     if (ch->active) {
-        ch->params.sweep_target = new_target;
-        ch->params.sweep_type = sweep_type;
-        ESP_LOGD(TAG, "Updated sweep for channel %d: target=%.1f Hz, type=%d",
+        // Compute remaining samples from the current position to end of channel.
+        uint64_t remaining = (ch->total_samples > ch->samples_generated)
+                             ? (ch->total_samples - ch->samples_generated)
+                             : 0;
+        if (sweep_type != AUDIO_GEN_SWEEP_NONE && remaining > 0) {
+            ch->sweeps[AUDIO_PARAM_FREQUENCY].start            = ch->current_freq;
+            ch->sweeps[AUDIO_PARAM_FREQUENCY].target           = new_target;
+            ch->sweeps[AUDIO_PARAM_FREQUENCY].start_sample     = ch->samples_generated;
+            ch->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples = remaining;
+            ch->sweeps[AUDIO_PARAM_FREQUENCY].curve            = sweep_type;
+        } else {
+            // Disable any active frequency sweep.
+            ch->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples = 0;
+        }
+        ESP_LOGD(TAG, "Updated sweep for channel %d: target=%.1f Hz, type=%d (via deprecated wrapper)",
                  channel, new_target, sweep_type);
     }
 
@@ -259,8 +429,129 @@ bool audio_generator_is_active(int channel) {
     return active;
 }
 
+esp_err_t audio_generator_get_current_freq(int channel, float *out) {
+    if (!generator_initialized || channel < 0 || channel >= MAX_AUDIO_CHANNELS || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    *out = audio_channels[channel].current_freq;
+    xSemaphoreGive(audio_gen_mutex);
+
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_get_current_amp(int channel, float *out) {
+    if (!generator_initialized || channel < 0 || channel >= MAX_AUDIO_CHANNELS || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    *out = audio_channels[channel].current_amp;
+    xSemaphoreGive(audio_gen_mutex);
+
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_start_sweep(int channel, audio_param_t param,
+                                      float start, float target,
+                                      uint64_t duration_samples,
+                                      audio_gen_sweep_type_t curve) {
+    if (!generator_initialized
+        || channel < 0 || channel >= MAX_AUDIO_CHANNELS
+        || (unsigned)param >= AUDIO_PARAM_COUNT
+        || duration_samples == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    ch->sweeps[param].start            = start;
+    ch->sweeps[param].target           = target;
+    ch->sweeps[param].start_sample     = ch->samples_generated;
+    ch->sweeps[param].duration_samples = duration_samples;
+    ch->sweeps[param].curve            = curve;
+
+    xSemaphoreGive(audio_gen_mutex);
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *new_params) {
+    if (!generator_initialized
+        || channel < 0 || channel >= MAX_AUDIO_CHANNELS
+        || !new_params) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Briefly take the mutex only to serialise concurrent writers.  Two timeline
+    // entries targeting the same channel in the same batch must not interleave
+    // their writes to pending_params.  The mutex is released BEFORE the atomic
+    // bump so fill_buffer never blocks waiting for a writer holding the mutex.
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    if (!ch->active) {
+        xSemaphoreGive(audio_gen_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memcpy(&ch->pending_params, new_params, sizeof(audio_gen_params_t));
+
+    xSemaphoreGive(audio_gen_mutex);
+
+    // Bump the version AFTER releasing the mutex.  The release fence implied by
+    // atomic_fetch_add ensures pending_params is fully written before fill_buffer
+    // sees the new version number (pairs with the acquire load in fill_buffer).
+    atomic_fetch_add_explicit(&ch->pending_version, 1u, memory_order_release);
+
+    ESP_LOGD(TAG, "update_params: channel %d params queued (version %u)",
+             channel, atomic_load(&ch->pending_version));
+
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_get_current_freq_r(int channel, float *out) {
+    if (!generator_initialized || channel < 0 || channel >= MAX_AUDIO_CHANNELS || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    *out = audio_channels[channel].current_freq_r;
+    xSemaphoreGive(audio_gen_mutex);
+
+    return ESP_OK;
+}
+
 // Internal helper functions
 
+// Phase accumulation confirmation (Step 1.3):
+//   Each sample uses `channel->current_freq`, which is updated by interpolate_sweep()
+//   before the phase increment on lines 208 and 213.  Sweeping therefore changes
+//   the instantaneous frequency with no discontinuity because the phase accumulator
+//   is never reset — only its per-sample increment changes.  This is the correct
+//   approach for continuous-phase FM synthesis.
+
+/*
+ * interpolate_sweep — maps a normalised progress value [0,1] to a frequency.
+ *
+ * LINEAR:
+ *   freq = start + (target - start) * p
+ *   Uniform rate of change; 1 Hz per unit time throughout the sweep.
+ *
+ * QUADRATIC ease-in-out:
+ *   Two-piece polynomial so that d(freq)/dt is zero at both endpoints,
+ *   giving a perceptually smooth acceleration/deceleration:
+ *
+ *     t(p) = 2p²           for p < 0.5   (ease-in — slow start)
+ *     t(p) = 1 − 2(1−p)²  for p ≥ 0.5   (ease-out — slow finish)
+ *
+ *   freq = start + (target - start) * t(p)
+ *
+ *   Verification at p = 0.25 (first quadrant):
+ *     t = 2 × 0.25² = 0.125
+ *     For a 400→440 Hz sweep: freq = 400 + 40 × 0.125 = 405 Hz  ✓
+ */
 static float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type) {
     if (progress <= 0.0f) return start;
     if (progress >= 1.0f) return target;
@@ -270,7 +561,6 @@ static float interpolate_sweep(float start, float target, float progress, audio_
             return start + (target - start) * progress;
 
         case AUDIO_GEN_SWEEP_QUADRATIC: {
-            // Quadratic ease-in-out curve
             float t = progress < 0.5f ? 2.0f * progress * progress
                                       : 1.0f - 2.0f * (1.0f - progress) * (1.0f - progress);
             return start + (target - start) * t;

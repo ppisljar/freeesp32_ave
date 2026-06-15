@@ -76,4 +76,66 @@ esp_err_t audio_test_stop_output_task(void);
  */
 esp_err_t audio_test_isr_baseline_soak(void);
 
+/**
+ * @brief Verify linear sweep interpolation at p=0.25.
+ *
+ * Sweeps channel 0 from 400 Hz to 440 Hz over 1 second with AUDIO_GEN_SWEEP_LINEAR,
+ * samples current_freq after ~250 ms (25% progress), and checks that it matches
+ * 410 Hz within ±0.5 Hz.
+ *
+ * @return ESP_OK if frequency is within tolerance, ESP_FAIL otherwise.
+ */
+esp_err_t audio_test_sweep_verify_linear(void);
+
+/**
+ * @brief Verify quadratic sweep interpolation at p=0.25.
+ *
+ * Sweeps channel 0 from 400 Hz to 440 Hz over 1 second with AUDIO_GEN_SWEEP_QUADRATIC,
+ * samples current_freq after ~250 ms (25% progress, first ease-in branch), and checks
+ * that it matches 405 Hz within ±0.5 Hz.
+ *   t(0.25) = 2 * 0.25^2 = 0.125  →  freq = 400 + 40 * 0.125 = 405 Hz
+ *
+ * @return ESP_OK if frequency is within tolerance, ESP_FAIL otherwise.
+ */
+esp_err_t audio_test_sweep_verify_quadratic(void);
+
+/**
+ * @brief Verify amplitude fade-in via audio_generator_start_sweep at p=0.25.
+ *
+ * Starts channel 0 at 440 Hz with amplitude 0.0, then calls
+ * audio_generator_start_sweep(0, AUDIO_PARAM_AMPLITUDE, 0.0, 1.0, 44100, LINEAR).
+ * After ~260 ms (~25% of 44100 samples) checks current_amp ≈ 0.25 within ±0.02.
+ *
+ * @return ESP_OK if amplitude is within tolerance, ESP_FAIL otherwise.
+ */
+esp_err_t audio_test_sweep_verify_amplitude(void);
+
+/**
+ * @brief Eight-channel concurrent soak test (Step 5.4).
+ *
+ * Starts channels 0-7 at 200, 220, 240, 260, 280, 300, 320, 340 Hz
+ * (amplitude 0.05 each — 8-channel sum peaks at 0.40).  After 30 seconds,
+ * sweeps all 8 channels to half their start frequency over another 30 seconds.
+ * Stops all channels and logs ISR stats.  Returns ESP_OK if no queue drops
+ * were detected during the run.
+ *
+ * @return ESP_OK if soak completes without queue drops, ESP_FAIL otherwise.
+ */
+esp_err_t audio_test_multichannel_soak(void);
+
+/**
+ * @brief Binaural-beat right-channel frequency precision check (Step 5.5).
+ *
+ * Configures channel 0 with frequency=200.0 Hz, frequency_r=200.01 Hz
+ * (target 0.01 Hz beat difference).  Runs for 60 seconds, then reads back
+ * current_freq and current_freq_r.  Verifies both are within ±0.001 Hz of
+ * their configured values (10x tighter than the ±0.01 Hz spec requirement).
+ *
+ * Note: true acoustic precision requires hardware-in-loop ADC capture (out of
+ * scope for Phase 3).  This test verifies the generator's internal state only.
+ *
+ * @return ESP_OK if both frequencies are within ±0.001 Hz, ESP_FAIL otherwise.
+ */
+esp_err_t audio_test_binaural_precision_verify(void);
+
 #endif // AUDIO_TEST_H

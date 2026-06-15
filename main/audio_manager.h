@@ -120,4 +120,17 @@ bool audio_manager_is_generating(int channel);
  */
 bool audio_manager_is_channel_active(int channel);
 
+/**
+ * @brief Update parameters of an already-running channel without restarting it.
+ *
+ * Thin wrapper over audio_generator_update_params().  The timeline executor
+ * calls this when the target channel is already active so that no audible
+ * discontinuity (click or phase reset) occurs on parameter changes.
+ *
+ * @param channel    Channel number (0-based)
+ * @param params     New parameter values
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if channel inactive
+ */
+esp_err_t audio_manager_update_generation(int channel, const audio_gen_params_t *params);
+
 #endif // AUDIO_MANAGER_H

@@ -34,7 +34,26 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
 static float parse_value_with_interpolation(const char *str, config_interpolation_t *interp);
 static void timeline_timing_callback(uint64_t timestamp_us, void *user_data);
 static void timeline_execution_task(void *pvParameters);
+// execute_timeline_entry_ctx has full timeline context for sweep wiring.
+// execute_timeline_entry is a compat wrapper for the startup-call site that
+// passes the persistent timeline and a sentinel index (SIZE_MAX means "unknown").
+static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
+                                            size_t entry_idx);
 static esp_err_t execute_timeline_entry(const config_entry_t *entry);
+
+// Per-bit forward/backward lookup helpers (substep 3.6)
+static const config_audio_entry_t *find_prev_audio_for_bit(const config_timeline_t *timeline,
+                                                            size_t current_idx,
+                                                            uint8_t channel_bit);
+static const config_audio_entry_t *find_next_audio_for_bit(const config_timeline_t *timeline,
+                                                            size_t current_idx,
+                                                            uint8_t channel_bit);
+static const config_led_entry_t   *find_prev_led_for_bit(const config_timeline_t *timeline,
+                                                          size_t current_idx,
+                                                          uint8_t channel_bit);
+static const config_led_entry_t   *find_next_led_for_bit(const config_timeline_t *timeline,
+                                                          size_t current_idx,
+                                                          uint8_t channel_bit);
 
 esp_err_t config_parser_init(void)
 {
@@ -283,9 +302,9 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
         lock_free_send_message(timeline_queue, &start_msg);
     }
 
-    // Start with first entry
+    // Start with first entry — use ctx variant so sweep wiring works at t=0 too
     if (timeline->count > 0) {
-        esp_err_t ret = execute_timeline_entry(&timeline->entries[0]);
+        esp_err_t ret = execute_timeline_entry_ctx(&persistent_timeline, 0);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to execute first timeline entry");
             timeline_running = false;
@@ -356,7 +375,9 @@ esp_err_t config_parser_stop_timeline(void)
     }
 
     if (!timeline_running) {
-        // Lock-free operation - no mutex needed
+        // Must release the mutex before returning — bug: previously leaked it,
+        // permanently locking subsequent stop_timeline / timeline_task calls.
+        xSemaphoreGive(timeline_mutex);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -409,29 +430,42 @@ esp_err_t config_parser_create_example(char *buffer, size_t buffer_size)
     }
 
     const char *example_content =
-        "# 21-Minute Meditation Session with LED & Binaural Beats\n"
-        "# Format: time frequency duty brightness channel (for LED)\n"
-        "#         A time frequency pan volume modulation channel (for Audio)\n"
+        "# 30-second demo: LED zones + binaural beat sweep\n"
         "#\n"
-        "# Phase 1: 1 minute - White LED flicker 20Hz + Binaural 400/420Hz\n"
-        "0 20 50 100 1                 # Start white LED flicker at 20Hz\n"
-        "A 0 400 -100 70 0 0           # Left channel: 400Hz\n"
-        "A 0 420 100 70 0 1            # Right channel: 420Hz (20Hz binaural beat)\n"
+        "# LED line formats:\n"
+        "#   5-field (old):  time freq duty bright channel_mask\n"
+        "#   9-field (new):  time freq duty bright R G B W channel_mask\n"
+        "#\n"
+        "# Channel mask bits (LED): 1=r1 inner-left, 2=r2 outer-left frame,\n"
+        "#                          4=r3 outer-right frame, 8=r4 inner-right.\n"
+        "#                          Combine bits: 9 = r1+r4, 15 = all four zones.\n"
+        "#\n"
+        "# Audio line:  A time freq pan volume mod channel  (channel index 1-8; 0 is rejected)\n"
+        "#\n"
+        "# Interpolation prefixes:  >value linear sweep,  *value quadratic ease,\n"
+        "#                          (no prefix) immediate step\n"
         "\n"
-        "# Phase 2: 10 minutes - Transition to 8Hz flicker + 400/408Hz binaural\n"
-        "60000 >8 50 100 1             # Slow transition: LED 20Hz → 8Hz over 10 minutes\n"
-        "A 60000 400 -100 70 0 0       # Left channel stays at 400Hz\n"
-        "A 60000 >408 100 70 0 1       # Right channel: 420Hz → 408Hz (20Hz → 8Hz binaural)\n"
+        "# t = 0 — start binaural beat on ch1 (left pan) + ch2 (right pan),\n"
+        "# LED inner zones (r1+r4) BLUE at 8 Hz 30% brightness\n"
+        "0 8 50 30 0 0 255 0 9                # 9-field: channels 1+4, blue\n"
+        "A 0 200 -100 60 0 1                  # ch1 audio: 200 Hz, left\n"
+        "A 0 208 100 60 0 2                   # ch2 audio: 208 Hz, right (= 8 Hz binaural)\n"
         "\n"
-        "# Phase 3: 10 minutes - Hold steady at 8Hz flicker + 400/408Hz binaural\n"
-        "660000 8 50 100 1             # Hold LED at 8Hz\n"
-        "A 660000 400 -100 70 0 0      # Left channel: 400Hz steady\n"
-        "A 660000 408 100 70 0 1       # Right channel: 408Hz steady (8Hz binaural)\n"
+        "# t = 10 s — sweep LED color blue→green and frequency 8 Hz→12 Hz,\n"
+        "# binaural beat sweeps from 8 Hz to 12 Hz (carrier stays 200 Hz)\n"
+        "10000 >12 50 30 0 >255 >0 0 9        # linear: freq 8→12, color blue→green\n"
+        "A 10000 200 -100 60 0 1               # ch1 holds at 200 Hz\n"
+        "A 10000 >212 100 60 0 2              # ch2 sweeps 208→212 Hz\n"
         "\n"
-        "# End session\n"
-        "1260000 0 0 0 1               # Turn off LED after 21 minutes\n"
-        "A 1260000 0 0 >0 0 0          # Fade out left channel\n"
-        "A 1260000 0 0 >0 0 1          # Fade out right channel\n";
+        "# t = 20 s — quadratic ease back to slow alpha-band 8 Hz, color WHITE\n"
+        "20000 *8 50 30 *255 *255 *255 0 9    # quadratic ease freq + color to white\n"
+        "A 20000 200 -100 60 0 1\n"
+        "A 20000 *208 100 60 0 2\n"
+        "\n"
+        "# t = 30 s — end: LEDs off, audio fades out linearly\n"
+        "30000 0 0 0 0 0 0 0 15               # all 4 LED zones off (mask 15)\n"
+        "A 30000 200 -100 >0 0 1              # ch1 fade volume to 0\n"
+        "A 30000 208 100 >0 0 2               # ch2 fade volume to 0\n";
 
     size_t example_len = strlen(example_content);
     if (example_len >= buffer_size) {
@@ -465,6 +499,14 @@ static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t
     strncpy(line_copy, line, sizeof(line_copy) - 1);
     line_copy[sizeof(line_copy) - 1] = '\0';
 
+    // Strip inline comments — anything after `#` is a comment regardless of
+    // position. Must happen BEFORE tokenization, or the comment tokens get
+    // counted as fields and fail the 5/9-field length check.
+    char *comment = strchr(line_copy, '#');
+    if (comment) {
+        *comment = '\0';
+    }
+
     const char *tokens[16];
     size_t token_count = 0;
     char *token = strtok(line_copy, " \t");
@@ -488,33 +530,70 @@ static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t
     }
 }
 
+// Clamp a float to [0,255] and warn if it was out of range.
+static uint8_t clamp_u8_field(float v, const char *field_name)
+{
+    if (v < 0.0f) {
+        ESP_LOGW(TAG, "LED %s value %.1f clamped to 0", field_name, v);
+        return 0;
+    }
+    if (v > 255.0f) {
+        ESP_LOGW(TAG, "LED %s value %.1f clamped to 255", field_name, v);
+        return 255;
+    }
+    return (uint8_t)v;
+}
+
 static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config_led_entry_t *led_entry)
 {
-    if (token_count < 4) {
-        return ESP_ERR_INVALID_ARG; // Need at least time, freq, duty, brightness
+    // Old format: time freq duty bright mask           (5 tokens)
+    // New format: time freq duty bright R G B W mask  (9 tokens)
+    // Anything else is rejected.
+    if (token_count != 5 && token_count != 9) {
+        ESP_LOGW(TAG, "LED line has %zu tokens; expected 5 (old) or 9 (new) — skipping", token_count);
+        return ESP_ERR_INVALID_ARG;
     }
 
     memset(led_entry, 0, sizeof(config_led_entry_t));
 
-    // Parse time (always numeric)
-    led_entry->time_ms = atol(tokens[0]);
+    // time — always plain integer
+    led_entry->time_ms = (uint32_t)atol(tokens[0]);
 
-    // Parse frequency with interpolation support
-    led_entry->frequency = parse_value_with_interpolation(tokens[1], &led_entry->freq_interp);
+    // freq, duty, brightness — support interpolation prefixes on all three
+    led_entry->frequency  = parse_value_with_interpolation(tokens[1], &led_entry->freq_interp);
+    float duty_f          = parse_value_with_interpolation(tokens[2], &led_entry->duty_interp);
+    float bright_f        = parse_value_with_interpolation(tokens[3], &led_entry->brightness_interp);
+    led_entry->duty_cycle = (uint8_t)duty_f;
+    led_entry->brightness = (uint8_t)bright_f;
 
-    // Parse duty cycle with interpolation support
-    float duty = parse_value_with_interpolation(tokens[2], &led_entry->duty_interp);
-    led_entry->duty_cycle = (uint8_t)duty;
-
-    // Parse brightness with interpolation support
-    float brightness = parse_value_with_interpolation(tokens[3], &led_entry->brightness_interp);
-    led_entry->brightness = (uint8_t)brightness;
-
-    // Parse channel mask (optional, defaults to 1)
-    if (token_count >= 5) {
-        led_entry->channel_mask = atoi(tokens[4]);
+    if (token_count == 9) {
+        // New 9-token format: R G B W carry independent interp prefixes
+        float r_f = parse_value_with_interpolation(tokens[4], &led_entry->r_interp);
+        float g_f = parse_value_with_interpolation(tokens[5], &led_entry->g_interp);
+        float b_f = parse_value_with_interpolation(tokens[6], &led_entry->b_interp);
+        float w_f = parse_value_with_interpolation(tokens[7], &led_entry->w_interp);
+        led_entry->r = clamp_u8_field(r_f, "R");
+        led_entry->g = clamp_u8_field(g_f, "G");
+        led_entry->b = clamp_u8_field(b_f, "B");
+        led_entry->w = clamp_u8_field(w_f, "W");
+        led_entry->channel_mask = (uint8_t)atoi(tokens[8]);
     } else {
-        led_entry->channel_mask = 1;
+        // Old 5-token format: default RGBW = full white, W off; no interp on colors
+        led_entry->r = 255;
+        led_entry->g = 255;
+        led_entry->b = 255;
+        led_entry->w = 0;
+        led_entry->r_interp = CONFIG_INTERP_NONE;
+        led_entry->g_interp = CONFIG_INTERP_NONE;
+        led_entry->b_interp = CONFIG_INTERP_NONE;
+        led_entry->w_interp = CONFIG_INTERP_NONE;
+        led_entry->channel_mask = (uint8_t)atoi(tokens[4]);
+    }
+
+    // Reject channel_mask == 0 — no channel to drive
+    if (led_entry->channel_mask == 0) {
+        ESP_LOGW(TAG, "LED line at %u ms has channel_mask=0 — skipping", led_entry->time_ms);
+        return ESP_ERR_INVALID_ARG;
     }
 
     return ESP_OK;
@@ -598,9 +677,10 @@ static void timeline_execution_task(void *pvParameters)
             continue;
         }
 
-        // Check if timeline is still running
+        // Check if timeline is still running. Release the mutex before
+        // continuing — the previous code leaked it on the not-running path.
         if (!timeline_running || !current_timeline) {
-            // Lock-free operation - no mutex needed
+            xSemaphoreGive(timeline_mutex);
             continue;
         }
 
@@ -627,6 +707,7 @@ static void timeline_execution_task(void *pvParameters)
                 if (timeline_queue) {
                     lock_free_send_message(timeline_queue, &complete_msg);
                 }
+                xSemaphoreGive(timeline_mutex);
                 continue;
             }
         }
@@ -638,7 +719,7 @@ static void timeline_execution_task(void *pvParameters)
             ESP_LOGE(TAG, "Timeline task: current_entry_index %zu >= count %zu",
                      current_entry_index, current_timeline->count);
             timeline_running = false;
-            // Lock-free operation - no mutex needed
+            xSemaphoreGive(timeline_mutex);
             continue;
         }
 
@@ -675,7 +756,7 @@ static void timeline_execution_task(void *pvParameters)
                      entry_time);
 
             uint64_t entry_start_time = esp_timer_get_time();
-            esp_err_t ret = execute_timeline_entry(&current_timeline->entries[i]);
+            esp_err_t ret = execute_timeline_entry_ctx(current_timeline, i);
             uint64_t entry_execution_time = esp_timer_get_time() - entry_start_time;
 
             if (ret != ESP_OK) {
@@ -735,50 +816,285 @@ static void timeline_execution_task(void *pvParameters)
             timeline_running = false;
             // Lock-free operation - no mutex needed
         }
+
+        // Release the mutex at the end of every successful iteration. Earlier
+        // versions of this code left the mutex held until the next iteration,
+        // which deadlocked the task on its own second take attempt.
+        xSemaphoreGive(timeline_mutex);
     }
 }
 
-static esp_err_t execute_timeline_entry(const config_entry_t *entry)
+// ---------------------------------------------------------------------------
+// Per-bit lookup helpers (substep 3.6)
+// "channel_bit" is a single-bit mask (e.g. 0x01, 0x02, 0x04, 0x08).
+// For audio entries the concept of "channel_mask" doesn't exist — audio uses
+// a plain channel number (0-7).  We adapt by treating channel N as bit (1<<N)
+// for the purpose of these helpers so the same pattern works.
+//
+// find_prev_* are not called by the current forward-only sweep wiring but are
+// part of the Step 3.6 API surface; Step 5 will use them for update-vs-start
+// decisions.  The unused attribute prevents the compiler warning.
+// ---------------------------------------------------------------------------
+
+static __attribute__((unused))
+const config_audio_entry_t *find_prev_audio_for_bit(const config_timeline_t *timeline,
+                                                     size_t current_idx,
+                                                     uint8_t channel_bit)
 {
-    if (!entry) {
-        ESP_LOGE(TAG, "execute_timeline_entry: NULL entry pointer");
+    if (!timeline || current_idx == 0) {
+        return NULL;
+    }
+    for (size_t i = current_idx - 1; ; i--) {
+        const config_entry_t *e = &timeline->entries[i];
+        if (e->type == CONFIG_ENTRY_AUDIO) {
+            // channel_bit here is (1 << channel_number)
+            if ((uint8_t)(1u << e->data.audio.channel) & channel_bit) {
+                return &e->data.audio;
+            }
+        }
+        if (i == 0) {
+            break;
+        }
+    }
+    return NULL;
+}
+
+static const config_audio_entry_t *find_next_audio_for_bit(const config_timeline_t *timeline,
+                                                            size_t current_idx,
+                                                            uint8_t channel_bit)
+{
+    if (!timeline) {
+        return NULL;
+    }
+    for (size_t i = current_idx + 1; i < timeline->count; i++) {
+        const config_entry_t *e = &timeline->entries[i];
+        if (e->type == CONFIG_ENTRY_AUDIO) {
+            if ((uint8_t)(1u << e->data.audio.channel) & channel_bit) {
+                return &e->data.audio;
+            }
+        }
+    }
+    return NULL;
+}
+
+static __attribute__((unused))
+const config_led_entry_t *find_prev_led_for_bit(const config_timeline_t *timeline,
+                                                 size_t current_idx,
+                                                 uint8_t channel_bit)
+{
+    if (!timeline || current_idx == 0) {
+        return NULL;
+    }
+    for (size_t i = current_idx - 1; ; i--) {
+        const config_entry_t *e = &timeline->entries[i];
+        if (e->type == CONFIG_ENTRY_LED) {
+            if (e->data.led.channel_mask & channel_bit) {
+                return &e->data.led;
+            }
+        }
+        if (i == 0) {
+            break;
+        }
+    }
+    return NULL;
+}
+
+static const config_led_entry_t *find_next_led_for_bit(const config_timeline_t *timeline,
+                                                        size_t current_idx,
+                                                        uint8_t channel_bit)
+{
+    if (!timeline) {
+        return NULL;
+    }
+    for (size_t i = current_idx + 1; i < timeline->count; i++) {
+        const config_entry_t *e = &timeline->entries[i];
+        if (e->type == CONFIG_ENTRY_LED) {
+            if (e->data.led.channel_mask & channel_bit) {
+                return &e->data.led;
+            }
+        }
+    }
+    return NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Map config interpolation type to audio generator sweep type
+// ---------------------------------------------------------------------------
+static audio_gen_sweep_type_t interp_to_audio_curve(config_interpolation_t interp)
+{
+    switch (interp) {
+        case CONFIG_INTERP_LINEAR:    return AUDIO_GEN_SWEEP_LINEAR;
+        case CONFIG_INTERP_QUADRATIC: return AUDIO_GEN_SWEEP_QUADRATIC;
+        default:                      return AUDIO_GEN_SWEEP_NONE;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Map config interpolation type to LED interpolation type
+// ---------------------------------------------------------------------------
+static led_interp_t interp_to_led_curve(config_interpolation_t interp)
+{
+    switch (interp) {
+        case CONFIG_INTERP_LINEAR:    return LED_INTERP_LINEAR;
+        case CONFIG_INTERP_QUADRATIC: return LED_INTERP_QUADRATIC;
+        default:                      return LED_INTERP_NONE;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Context-aware entry execution — has access to the full timeline so it can
+// look forward/backward for sweep wiring (substep 3.4 and 3.5).
+// ---------------------------------------------------------------------------
+static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
+                                            size_t entry_idx)
+{
+    if (!timeline || entry_idx >= timeline->count) {
+        ESP_LOGE(TAG, "execute_timeline_entry_ctx: bad args");
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Validate entry type before accessing union data
+    const config_entry_t *entry = &timeline->entries[entry_idx];
+
     if (entry->type != CONFIG_ENTRY_AUDIO && entry->type != CONFIG_ENTRY_LED) {
-        ESP_LOGE(TAG, "execute_timeline_entry: Invalid entry type %d", entry->type);
+        ESP_LOGE(TAG, "execute_timeline_entry_ctx: invalid type %d", entry->type);
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGD(TAG, "execute_timeline_entry: entry=%p, type=%d", entry, entry->type);
-
+    // ------------------------------------------------------------------
+    // AUDIO entry
+    // ------------------------------------------------------------------
     if (entry->type == CONFIG_ENTRY_AUDIO) {
         const config_audio_entry_t *audio = &entry->data.audio;
 
-        ESP_LOGI(TAG, "Executing audio entry: t=%u, freq=%.1f, pan=%.1f, vol=%.1f",
-                 audio->time_ms, audio->frequency, audio->pan, audio->volume);
+        // Interp prefix glyph: NONE="", LINEAR=">", QUADRATIC="*"
+        #define INTERP_GLYPH(x) ((x) == CONFIG_INTERP_LINEAR ? ">" : (x) == CONFIG_INTERP_QUADRATIC ? "*" : "")
+        ESP_LOGI(TAG, "Executing audio entry: t=%u  freq=%s%.1f  freq_r=%.1f  pan=%s%.0f  vol=%s%.0f  mod=%s%.1f  ch=%u",
+                 audio->time_ms,
+                 INTERP_GLYPH(audio->freq_interp),    audio->frequency,
+                 audio->frequency_r,
+                 INTERP_GLYPH(audio->pan_interp),     audio->pan,
+                 INTERP_GLYPH(audio->volume_interp),  audio->volume,
+                 INTERP_GLYPH(audio->mod_interp),     audio->modulation,
+                 (unsigned)audio->channel);
+        #undef INTERP_GLYPH
 
-        // Convert to audio generator parameters
         audio_gen_params_t gen_params = {
-            .frequency = audio->frequency,
+            .frequency   = audio->frequency,
             .frequency_r = audio->frequency_r,
-            .amplitude = audio->volume / 100.0f,  // Convert percentage to 0-1
-            .pan = audio->pan / 100.0f,           // Convert -100/+100 to -1/+1
+            .amplitude   = audio->volume / 100.0f,   // 0-100 → 0.0-1.0
+            .pan         = audio->pan / 100.0f,      // -100/+100 → -1.0/+1.0
             .mod_frequency = audio->modulation,
-            .mod_depth = 0.1f,                    // Default modulation depth
-            .sweep_type = AUDIO_GEN_SWEEP_NONE,   // TODO: Handle interpolation
+            // mod_depth hardcoded per spec (no field defined); Phase 4 may
+            // expose a Kconfig override.
+            .mod_depth   = 0.1f,
+            // Legacy sweep fields unused — sweep is driven via
+            // audio_generator_start_sweep() after channel start.
+            .sweep_type  = AUDIO_GEN_SWEEP_NONE,
             .sweep_target = 0.0f,
-            .duration_ms = 86400000                // 24 hours - effectively continuous
+            .duration_ms = 86400000   // 24 h — effectively continuous
         };
 
-        esp_err_t ret = audio_manager_start_generation(audio->channel, &gen_params);
+        // Smart update-vs-start (Step 5.3): if the channel is already running,
+        // update its params without restarting so there is no audible click or
+        // phase reset.  Only start from scratch when the channel is inactive.
+        esp_err_t ret;
+        if (audio_manager_is_channel_active(audio->channel)) {
+            ret = audio_manager_update_generation(audio->channel, &gen_params);
+        } else {
+            ret = audio_manager_start_generation(audio->channel, &gen_params);
+        }
 
-        // Validation logging for simultaneous execution
         if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "Audio channel %d started successfully", audio->channel);
+            ESP_LOGI(TAG, "Audio channel %d %s successfully", audio->channel,
+                     audio_manager_is_channel_active(audio->channel) ? "updated" : "started");
 
-            // Log all currently active channels for validation
+            // ---- Sweep wiring (substep 3.4) ----
+            // For each sweep-capable parameter, look ahead to the next entry
+            // on the SAME channel to determine the window duration and target.
+            // Per-bit independent per the Q1 decision (multi-bit channel maps
+            // are not used for audio, but the helper is written generically).
+            uint8_t ch_bit = (uint8_t)(1u << audio->channel);
+            const config_audio_entry_t *next = find_next_audio_for_bit(timeline, entry_idx, ch_bit);
+
+            if (next != NULL) {
+                uint32_t window_ms = next->time_ms - audio->time_ms;
+                // 64-bit multiply guards against the integer overflow that
+                // caused the original 10-second bug.
+                uint64_t dur_samples = ((uint64_t)window_ms * AUDIO_GEN_SAMPLE_RATE) / 1000ULL;
+
+                // Frequency sweep
+                if (next->freq_interp != CONFIG_INTERP_NONE) {
+                    esp_err_t sw = audio_generator_start_sweep(
+                        audio->channel, AUDIO_PARAM_FREQUENCY,
+                        audio->frequency, next->frequency,
+                        dur_samples, interp_to_audio_curve(next->freq_interp));
+#ifdef CONFIG_TIMELINE_DEBUG
+                    ESP_LOGI(TAG, "Timeline sweep: ch=%d param=FREQ %.2f→%.2f over %ums curve=%d",
+                             audio->channel, audio->frequency, next->frequency,
+                             window_ms, (int)next->freq_interp);
+#endif
+                    if (sw != ESP_OK) {
+                        ESP_LOGW(TAG, "freq sweep start failed ch=%d: %s",
+                                 audio->channel, esp_err_to_name(sw));
+                    }
+                }
+
+                // Amplitude sweep — volume 0-100 → amplitude 0.0-1.0
+                if (next->volume_interp != CONFIG_INTERP_NONE) {
+                    esp_err_t sw = audio_generator_start_sweep(
+                        audio->channel, AUDIO_PARAM_AMPLITUDE,
+                        audio->volume / 100.0f, next->volume / 100.0f,
+                        dur_samples, interp_to_audio_curve(next->volume_interp));
+#ifdef CONFIG_TIMELINE_DEBUG
+                    ESP_LOGI(TAG, "Timeline sweep: ch=%d param=AMP %.2f→%.2f over %ums curve=%d",
+                             audio->channel,
+                             audio->volume / 100.0f, next->volume / 100.0f,
+                             window_ms, (int)next->volume_interp);
+#endif
+                    if (sw != ESP_OK) {
+                        ESP_LOGW(TAG, "amp sweep start failed ch=%d: %s",
+                                 audio->channel, esp_err_to_name(sw));
+                    }
+                }
+
+                // Pan sweep — pan -100/+100 → -1.0/+1.0
+                if (next->pan_interp != CONFIG_INTERP_NONE) {
+                    esp_err_t sw = audio_generator_start_sweep(
+                        audio->channel, AUDIO_PARAM_PAN,
+                        audio->pan / 100.0f, next->pan / 100.0f,
+                        dur_samples, interp_to_audio_curve(next->pan_interp));
+#ifdef CONFIG_TIMELINE_DEBUG
+                    ESP_LOGI(TAG, "Timeline sweep: ch=%d param=PAN %.2f→%.2f over %ums curve=%d",
+                             audio->channel,
+                             audio->pan / 100.0f, next->pan / 100.0f,
+                             window_ms, (int)next->pan_interp);
+#endif
+                    if (sw != ESP_OK) {
+                        ESP_LOGW(TAG, "pan sweep start failed ch=%d: %s",
+                                 audio->channel, esp_err_to_name(sw));
+                    }
+                }
+
+                // Modulation frequency sweep
+                if (next->mod_interp != CONFIG_INTERP_NONE) {
+                    esp_err_t sw = audio_generator_start_sweep(
+                        audio->channel, AUDIO_PARAM_MOD_FREQ,
+                        audio->modulation, next->modulation,
+                        dur_samples, interp_to_audio_curve(next->mod_interp));
+#ifdef CONFIG_TIMELINE_DEBUG
+                    ESP_LOGI(TAG, "Timeline sweep: ch=%d param=MOD %.2f→%.2f over %ums curve=%d",
+                             audio->channel,
+                             audio->modulation, next->modulation,
+                             window_ms, (int)next->mod_interp);
+#endif
+                    if (sw != ESP_OK) {
+                        ESP_LOGW(TAG, "mod sweep start failed ch=%d: %s",
+                                 audio->channel, esp_err_to_name(sw));
+                    }
+                }
+            }
+
+            // Validation: log all active channels
             int active_count = 0;
             for (int i = 0; i < 8; i++) {
                 if (audio_manager_is_channel_active(i)) {
@@ -790,87 +1106,205 @@ static esp_err_t execute_timeline_entry(const config_entry_t *entry)
         }
 
         return ret;
+    }
 
-    } else if (entry->type == CONFIG_ENTRY_LED) {
-        const config_led_entry_t *led = &entry->data.led;
+    // ------------------------------------------------------------------
+    // LED entry
+    // ------------------------------------------------------------------
+    const config_led_entry_t *led = &entry->data.led;
 
-        ESP_LOGI(TAG, "Executing LED entry: t=%u, freq=%.1f, duty=%d, bright=%d",
-                 led->time_ms, led->frequency, led->duty_cycle, led->brightness);
+    #define INTERP_GLYPH(x) ((x) == CONFIG_INTERP_LINEAR ? ">" : (x) == CONFIG_INTERP_QUADRATIC ? "*" : "")
+    ESP_LOGI(TAG, "Executing LED entry: t=%u  freq=%s%.1f  duty=%s%d%%  bright=%s%d%%  RGB=(%s%d,%s%d,%s%d)  W=%s%d  mask=0x%02x",
+             led->time_ms,
+             INTERP_GLYPH(led->freq_interp),       led->frequency,
+             INTERP_GLYPH(led->duty_interp),       led->duty_cycle,
+             INTERP_GLYPH(led->brightness_interp), led->brightness,
+             INTERP_GLYPH(led->r_interp), led->r,
+             INTERP_GLYPH(led->g_interp), led->g,
+             INTERP_GLYPH(led->b_interp), led->b,
+             INTERP_GLYPH(led->w_interp), led->w,
+             led->channel_mask);
+    #undef INTERP_GLYPH
 
-        // Stop any existing flicker first
-        esp_err_t ret = led_matrix_stop_flicker();
+    // Stop audio-LED synchronization before reconfiguring LEDs
+    if (audio_led_sync_is_active()) {
+        esp_err_t sync_ret = audio_led_sync_stop();
+        if (sync_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to stop audio-LED sync: %s", esp_err_to_name(sync_ret));
+        }
+    }
+
+    if (led->frequency <= 0.0f) {
+        // freq=0 means stop flicker on these channels
+        esp_err_t ret = led_matrix_stop_flicker_masked(led->channel_mask);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to stop existing LED flicker: %s", esp_err_to_name(ret));
+            ESP_LOGW(TAG, "Failed to stop LED flicker on mask 0x%02x: %s",
+                     led->channel_mask, esp_err_to_name(ret));
         }
-
-        // Stop audio-LED synchronization when stopping flicker
-        if (audio_led_sync_is_active()) {
-            esp_err_t sync_ret = audio_led_sync_stop();
-            if (sync_ret == ESP_OK) {
-                ESP_LOGI(TAG, "Stopped audio-LED synchronization");
-            } else {
-                ESP_LOGW(TAG, "Failed to stop audio-LED sync: %s", esp_err_to_name(sync_ret));
-            }
-        }
-
-        // Check if we should start LED flicker (frequency > 0)
-        if (led->frequency > 0.0f) {
-            // Set LED color to white for meditation applications
-            led_matrix_set_flicker_color(255, 255, 255);
-
-            // Start LED flicker with specified parameters
-            ret = led_matrix_start_flicker(led->frequency, led->duty_cycle, led->brightness);
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to start LED flicker: %s", esp_err_to_name(ret));
-                return ret;
-            }
-
-            ESP_LOGI(TAG, "Started LED flicker: %.1f Hz, %d%% duty cycle, %d%% brightness",
-                     led->frequency, led->duty_cycle, led->brightness);
-
-            // Enable audio-LED synchronization for dynamic effects
-            // Use VU meter mode for real-time audio amplitude visualization
-            if (audio_led_sync_is_active()) {
-                // Update sync mode if already active
-                audio_led_sync_set_mode(SYNC_MODE_VU_METER);
-                ESP_LOGI(TAG, "Enabled VU meter synchronization for LED flicker");
-            } else {
-                // Start synchronization in VU meter mode
-                esp_err_t sync_ret = audio_led_sync_start(SYNC_MODE_VU_METER);
-                if (sync_ret == ESP_OK) {
-                    ESP_LOGI(TAG, "Started audio-LED synchronization with VU meter mode");
-                } else {
-                    ESP_LOGW(TAG, "Failed to start audio-LED sync: %s", esp_err_to_name(sync_ret));
-                }
-            }
-        } else {
-            // Frequency is 0 - set static LED color with brightness
-            uint8_t brightness_scaled = (255 * led->brightness) / 100;
-            led_matrix_clear(); // Clear first
-
-            // Set all LEDs to white with specified brightness
-            for (uint8_t x = 0; x < LED_MATRIX_WIDTH; x++) {
-                for (uint8_t y = 0; y < LED_MATRIX_HEIGHT; y++) {
-                    led_matrix_set_pixel(x, y, brightness_scaled, brightness_scaled, brightness_scaled);
-                }
-            }
-            led_matrix_refresh();
-
-            ESP_LOGI(TAG, "Set static LED brightness to %d%%", led->brightness);
-
-            // Disable synchronization for static LED (no flicker)
-            if (audio_led_sync_is_active()) {
-                esp_err_t sync_ret = audio_led_sync_stop();
-                if (sync_ret == ESP_OK) {
-                    ESP_LOGI(TAG, "Disabled audio-LED synchronization for static LED");
-                } else {
-                    ESP_LOGW(TAG, "Failed to stop audio-LED sync: %s", esp_err_to_name(sync_ret));
-                }
-            }
-        }
-
         return ESP_OK;
     }
 
-    return ESP_ERR_INVALID_ARG;
+    // ---- Sweep wiring (substep 3.5) ----
+    // For each bit in channel_mask, look forward independently to find the
+    // next entry that covers that bit (Q1: per-bit independent lookback).
+    // Build a sweep spec that reflects the "union" of all bits needing sweep.
+    // In practice most entries cover a single bit or all bits with the same
+    // target, so we build one spec per mask and call start_sweep_masked once.
+    // If bits disagree on targets, the last bit's values win for the shared
+    // spec — multi-target-per-call is not part of the spec.
+    bool any_sweep = false;
+    led_sweep_spec_t sweep_spec = {0};
+
+    // Compute next entry for the lowest-set bit; use that for duration.
+    uint8_t first_bit = led->channel_mask & (uint8_t)(-(int8_t)led->channel_mask);
+    const config_led_entry_t *next_first = find_next_led_for_bit(timeline, entry_idx, first_bit);
+
+    if (next_first != NULL) {
+        uint32_t window_ms = next_first->time_ms - led->time_ms;
+        sweep_spec.duration_ms = window_ms;
+
+        // Walk each bit in channel_mask and merge sweep params
+        for (int bit = 0; bit < 4; bit++) {
+            uint8_t bitmask = (uint8_t)(1u << bit);
+            if (!(led->channel_mask & bitmask)) {
+                continue;
+            }
+
+            const config_led_entry_t *next_bit =
+                find_next_led_for_bit(timeline, entry_idx, bitmask);
+            if (next_bit == NULL) {
+                continue;
+            }
+
+            // Start values from current entry, targets from next entry
+            if (next_bit->freq_interp != CONFIG_INTERP_NONE) {
+                sweep_spec.freq_milliHz_start  = (uint32_t)(led->frequency  * 1000.0f);
+                sweep_spec.freq_milliHz_target = (uint32_t)(next_bit->frequency * 1000.0f);
+                sweep_spec.freq_curve          = interp_to_led_curve(next_bit->freq_interp);
+                any_sweep = true;
+            }
+            if (next_bit->duty_interp != CONFIG_INTERP_NONE) {
+                sweep_spec.duty_start   = led->duty_cycle;
+                sweep_spec.duty_target  = next_bit->duty_cycle;
+                sweep_spec.duty_curve   = interp_to_led_curve(next_bit->duty_interp);
+                any_sweep = true;
+            }
+            if (next_bit->brightness_interp != CONFIG_INTERP_NONE) {
+                sweep_spec.bright_start  = led->brightness;
+                sweep_spec.bright_target = next_bit->brightness;
+                sweep_spec.bright_curve  = interp_to_led_curve(next_bit->brightness_interp);
+                any_sweep = true;
+            }
+            if (next_bit->r_interp != CONFIG_INTERP_NONE) {
+                sweep_spec.r_start  = led->r;
+                sweep_spec.r_target = next_bit->r;
+                sweep_spec.r_curve  = interp_to_led_curve(next_bit->r_interp);
+                any_sweep = true;
+            }
+            if (next_bit->g_interp != CONFIG_INTERP_NONE) {
+                sweep_spec.g_start  = led->g;
+                sweep_spec.g_target = next_bit->g;
+                sweep_spec.g_curve  = interp_to_led_curve(next_bit->g_interp);
+                any_sweep = true;
+            }
+            if (next_bit->b_interp != CONFIG_INTERP_NONE) {
+                sweep_spec.b_start  = led->b;
+                sweep_spec.b_target = next_bit->b;
+                sweep_spec.b_curve  = interp_to_led_curve(next_bit->b_interp);
+                any_sweep = true;
+            }
+            if (next_bit->w_interp != CONFIG_INTERP_NONE) {
+                sweep_spec.w_start  = led->w;
+                sweep_spec.w_target = next_bit->w;
+                sweep_spec.w_curve  = interp_to_led_curve(next_bit->w_interp);
+                any_sweep = true;
+            }
+        }
+    }
+
+    esp_err_t ret;
+    if (any_sweep) {
+        // Fill non-swept fields so start_sweep has a complete snapshot
+        if (sweep_spec.freq_curve == LED_INTERP_NONE) {
+            sweep_spec.freq_milliHz_start  = (uint32_t)(led->frequency * 1000.0f);
+            sweep_spec.freq_milliHz_target = sweep_spec.freq_milliHz_start;
+        }
+        if (sweep_spec.duty_curve == LED_INTERP_NONE) {
+            sweep_spec.duty_start  = led->duty_cycle;
+            sweep_spec.duty_target = led->duty_cycle;
+        }
+        if (sweep_spec.bright_curve == LED_INTERP_NONE) {
+            sweep_spec.bright_start  = led->brightness;
+            sweep_spec.bright_target = led->brightness;
+        }
+        if (sweep_spec.r_curve == LED_INTERP_NONE) {
+            sweep_spec.r_start  = led->r;
+            sweep_spec.r_target = led->r;
+        }
+        if (sweep_spec.g_curve == LED_INTERP_NONE) {
+            sweep_spec.g_start  = led->g;
+            sweep_spec.g_target = led->g;
+        }
+        if (sweep_spec.b_curve == LED_INTERP_NONE) {
+            sweep_spec.b_start  = led->b;
+            sweep_spec.b_target = led->b;
+        }
+        if (sweep_spec.w_curve == LED_INTERP_NONE) {
+            sweep_spec.w_start  = led->w;
+            sweep_spec.w_target = led->w;
+        }
+
+#ifdef CONFIG_TIMELINE_DEBUG
+        ESP_LOGI(TAG, "Timeline LED sweep: mask=0x%02x freq %.2f→%.2f dur=%ums",
+                 led->channel_mask, led->frequency,
+                 (float)sweep_spec.freq_milliHz_target / 1000.0f,
+                 sweep_spec.duration_ms);
+#endif
+        ret = led_matrix_start_sweep_masked(led->channel_mask, &sweep_spec);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start LED sweep on mask 0x%02x: %s",
+                     led->channel_mask, esp_err_to_name(ret));
+            return ret;
+        }
+    } else {
+        // No sweep — immediate flicker with current entry's color
+        led_matrix_set_flicker_color_masked(led->channel_mask, led->r, led->g, led->b);
+        ret = led_matrix_start_flicker_masked(led->channel_mask,
+                                              led->frequency,
+                                              led->duty_cycle,
+                                              led->brightness);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start LED flicker on mask 0x%02x: %s",
+                     led->channel_mask, esp_err_to_name(ret));
+            return ret;
+        }
+    }
+
+    ESP_LOGI(TAG, "LED mask 0x%02x started: %.1f Hz, %d%% duty, %d%% brightness %s",
+             led->channel_mask, led->frequency, led->duty_cycle, led->brightness,
+             any_sweep ? "(with sweep)" : "");
+
+    // Re-enable audio-LED synchronization in VU-meter mode
+    if (!audio_led_sync_is_active()) {
+        esp_err_t sync_ret = audio_led_sync_start(SYNC_MODE_VU_METER);
+        if (sync_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to start audio-LED sync: %s", esp_err_to_name(sync_ret));
+        }
+    } else {
+        audio_led_sync_set_mode(SYNC_MODE_VU_METER);
+    }
+
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy compat wrapper — kept only so the forward declaration compiles.
+// All real call sites now use execute_timeline_entry_ctx().  If this is ever
+// reached at runtime, it indicates a missing conversion of a call site.
+// ---------------------------------------------------------------------------
+static __attribute__((unused)) esp_err_t execute_timeline_entry(const config_entry_t *entry)
+{
+    (void)entry;
+    ESP_LOGW(TAG, "execute_timeline_entry called without timeline context — BUG");
+    return ESP_ERR_NOT_SUPPORTED;
 }
