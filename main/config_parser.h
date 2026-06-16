@@ -52,6 +52,7 @@ typedef struct {
     float pan;               // Pan position (-100 to +100)
     float volume;            // Volume (0 to 100)
     float modulation;        // Modulation frequency
+    uint8_t wave_type;       // Waveform type (0=SINE default); see audio_wave_type_t
     uint8_t channel;
     config_interpolation_t freq_interp;
     config_interpolation_t pan_interp;

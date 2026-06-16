@@ -1,0 +1,88 @@
+# Plan 005 — Audio Synthesis Extensions Integration Test
+# Duration: 90 seconds
+# Purpose: Exercise all three features introduced in Plan 005:
+#   (A) Binaural beat freq_r 7th token — new parser path
+#   (B) Harmonic waveforms: square, triangle, sawtooth
+#   (C) Noise generators: white, pink, brown
+#
+# Channel assignments:
+#   ch0 = binaural left (200 Hz left, 210 Hz right)
+#   ch1 = binaural right workaround channel (210 Hz, silenced at t=10s)
+#   ch2 = square-wave isochronic 40 Hz (t=10-20s)
+#   ch3 = triangle 220 Hz (t=20-30s)
+#   ch4 = sawtooth 440 Hz (t=30-40s)
+#   ch5 = white noise continuous (t=40-50s)
+#   ch6 = pink noise continuous (t=50-70s)
+#   ch7 = brown noise continuous (t=70-90s)
+
+# =============================================================================
+# Section 1: Binaural beat (t=0 to t=30s)
+# =============================================================================
+# Workaround: two separate channels, each mono at their own frequency.
+# ch0 hears 200 Hz, ch1 hears 210 Hz. Combined = 10 Hz alpha binaural beat.
+# Both are 6-token lines (old format) — exercises backwards compatibility.
+A 0 200.0 0 60 0 0
+A 0 210.0 0 60 0 1
+
+# At t=5s: re-issue using the new 7th-token syntax (freq_r).
+# ch0 alone carries both L (200 Hz) and R (210 Hz) via token 6.
+# ch1 is updated to vol=0 so the workaround channel goes silent.
+# The listener should hear no glitch — pending-params path fires, no restart click.
+A 5000 200.0 0 60 0 0 210.0
+A 5000 210.0 0 0 0 1
+
+# Silence both channels at t=30s (end of binaural section)
+A 30000 200.0 0 0 0 0
+A 30000 210.0 0 0 0 1
+
+# =============================================================================
+# Section 2: Square-wave isochronic tone 40 Hz (t=10s to t=20s)
+# =============================================================================
+# wave_type=1 (AUDIO_WAVE_SQUARE). Hard threshold square at 40 Hz.
+# At therapeutic frequencies (<100 Hz) aliasing is inaudible.
+# Expected: distinctly harsh, buzzing quality compared to a sine at the same frequency.
+A 10000 40.0 0 50 0 2 0.0 1
+A 20000 40.0 0 0 0 2 0.0 1
+
+# =============================================================================
+# Section 3: Triangle waveform 220 Hz (t=20s to t=30s)
+# =============================================================================
+# wave_type=2 (AUDIO_WAVE_TRIANGLE). Linear-fold ramp from Q32 phase.
+# Expected: softer than square, slightly brighter than sine, gentle mellow tone.
+A 20000 220.0 0 50 0 3 0.0 2
+A 30000 220.0 0 0 0 3 0.0 2
+
+# =============================================================================
+# Section 4: Sawtooth waveform 440 Hz (t=30s to t=40s)
+# =============================================================================
+# wave_type=3 (AUDIO_WAVE_SAWTOOTH). Signed-cast linear ramp from Q32 phase.
+# Expected: rich harmonic content, distinctly buzzy/nasal character.
+A 30000 440.0 0 50 0 4 0.0 3
+A 40000 440.0 0 0 0 4 0.0 3
+
+# =============================================================================
+# Section 5: White noise underlay (t=40s to t=50s)
+# =============================================================================
+# wave_type=4 (AUDIO_WAVE_NOISE_WHITE). Galois LFSR, polynomial 0xB4BCD35C.
+# frequency=0.0: continuous noise, no pulsation/gating modulation.
+# Expected: broadband "sh" hiss, wide stereo field (L/R decorrelated seeds).
+A 40000 0.0 0 40 0 5 0.0 4
+A 50000 0.0 0 0 0 5 0.0 4
+
+# =============================================================================
+# Section 6: Pink noise underlay (t=50s to t=70s)
+# =============================================================================
+# wave_type=5 (AUDIO_WAVE_NOISE_PINK). Kellet 3-pole IIR approximation (-3 dB/oct).
+# frequency=0.0: continuous noise, no gating.
+# Expected: warmer than white, more bass energy, less high-frequency hiss.
+A 50000 0.0 0 40 0 6 0.0 5
+A 70000 0.0 0 0 0 6 0.0 5
+
+# =============================================================================
+# Section 7: Brown noise underlay (t=70s to t=90s)
+# =============================================================================
+# wave_type=6 (AUDIO_WAVE_NOISE_BROWN). Leaky integrator (0.998f coeff) of white noise.
+# frequency=0.0: continuous noise, no gating.
+# Expected: deep low-frequency rumble, dominated by bass, almost no high-frequency content.
+A 70000 0.0 0 40 0 7 0.0 6
+A 90000 0.0 0 0 0 7 0.0 6

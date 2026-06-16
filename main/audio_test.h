@@ -138,4 +138,88 @@ esp_err_t audio_test_multichannel_soak(void);
  */
 esp_err_t audio_test_binaural_precision_verify(void);
 
+/**
+ * @brief Waveform type demonstration — square, triangle, sawtooth, sine (Plan 005 Step 2).
+ *
+ * Cycles through SQUARE → TRIANGLE → SAWTOOTH → SINE on channel 0 at 40 Hz,
+ * 3 seconds each.  Operator should hear four distinctly different timbres:
+ *
+ *   SQUARE:   harsh/buzzy, only odd harmonics
+ *   TRIANGLE: softer than square but brighter than sine
+ *   SAWTOOTH: richest/harshest, odd and even harmonics
+ *   SINE:     pure tone, no harmonics (baseline reference)
+ *
+ * 40 Hz is within the therapeutic isochronic target range and is perceptible
+ * as a tone on standard speakers.  This test is intended for device-level
+ * verification by the orchestrator after flashing.
+ *
+ * @return ESP_OK when all four waveforms complete, ESP_FAIL if any fails to start.
+ */
+esp_err_t audio_test_waveform_types(void);
+
+/**
+ * @brief White noise generator demonstration (Plan 005 Step 3).
+ *
+ * Starts channel 1 with wave_type=AUDIO_WAVE_NOISE_WHITE, frequency=0 Hz
+ * (noise channels bypass the frequency guard), volume=50% (amplitude=0.5),
+ * for a 30 second duration.
+ *
+ * Device-level verification: operator should hear broadband "sh" hiss with
+ * wide stereo field (L/R streams are decorrelated via different LFSR seeds).
+ * No click on start — the 5 ms amplitude ramp fires as for all waveform types.
+ *
+ * @return ESP_OK when noise starts successfully, ESP_FAIL if channel start fails.
+ */
+esp_err_t audio_test_noise_white(void);
+
+/**
+ * @brief Pink noise generator demonstration (Plan 005 Step 4).
+ *
+ * Starts channel 2 with wave_type=AUDIO_WAVE_NOISE_PINK, frequency=0 Hz
+ * (noise channels bypass the frequency guard), volume=50% (amplitude=0.5),
+ * for a 30 second duration.
+ *
+ * Pink noise uses the Paul Kellet 3-pole IIR filter applied to white noise,
+ * producing a -3 dB/octave spectrum across the audible range.  The result
+ * sounds warmer than white noise (more bass energy, less high-frequency hiss).
+ *
+ * The IIR state is zeroed at channel start and stabilizes within ~100 samples
+ * — inaudible because the 220-sample amplitude ramp covers the same window.
+ * L and R channels use independent IIR state (pink_b0/b1/b2 vs pink_b0r/b1r/b2r)
+ * to produce decorrelated stereo pink noise.
+ *
+ * Device-level verification: operator should hear a "warmer" sound than white
+ * noise at the same volume setting.  Wide stereo field.  No onset click.
+ *
+ * @return ESP_OK when noise starts successfully, ESP_FAIL if channel start fails.
+ */
+esp_err_t audio_test_noise_pink(void);
+
+/**
+ * @brief Brown noise generator demonstration (Plan 005 Step 5).
+ *
+ * Starts channel 3 with wave_type=AUDIO_WAVE_NOISE_BROWN, frequency=0 Hz
+ * (noise channels bypass the frequency guard), volume=50% (amplitude=0.5),
+ * for a 30 second duration.
+ *
+ * Brown noise (Brownian / red noise) is produced by a leaky one-pole integrator
+ * of white noise (leak coefficient 0.998f, output gain 3.5f), producing a
+ * -6 dB/octave spectrum.  It should sound distinctly deeper and more bass-heavy
+ * than both white and pink noise — dominated by low-frequency rumble.
+ *
+ * Leak coefficient 0.998f: -3 dB point at ~0.03 Hz, preventing DC accumulation
+ * while maintaining the -6 dB/octave spectral slope across the audible range.
+ * Gain 3.5f: empirical normalization for approximately ±1.0 peak at 44.1 kHz.
+ *
+ * L and R channels use independent integrator state (brown_acc_l vs brown_acc_r)
+ * to produce decorrelated stereo brown noise.
+ *
+ * Device-level verification: operator should hear the deepest of the three noise
+ * types — dominated by low-frequency rumble, very little high-frequency content.
+ * Wide stereo field.  No onset click (5 ms amp ramp masks integrator transient).
+ *
+ * @return ESP_OK when noise starts successfully, ESP_FAIL if channel start fails.
+ */
+esp_err_t audio_test_noise_brown(void);
+
 #endif // AUDIO_TEST_H

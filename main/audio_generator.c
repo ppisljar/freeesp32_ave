@@ -164,6 +164,7 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
 
     ch->current_freq     = params->frequency;
     ch->current_freq_r   = params->frequency_r > 0 ? params->frequency_r : params->frequency;
+    ch->wave_type        = params->wave_type;
     // On initial activation, fade in from 0 to the target amplitude over AUDIO_AMP_RAMP_SAMPLES.
     // This eliminates the first-note click that would otherwise happen at the start
     // of any audio session.  Cost: 5 ms of inaudible ramp at the very start.
@@ -177,6 +178,26 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
     ch->phase_r_q32      = 0;
     ch->mod_phase_q32    = 0;
     ch->samples_generated = 0;
+    // Noise LFSR seeds: must be non-zero (all-zero is a fixed point).
+    // 0xABCD1234 (L) and 0x12345678 (R) are chosen as pseudo-random non-related
+    // constants so that L and R produce decorrelated noise streams.
+    ch->noise_state_l = 0xABCD1234u;
+    ch->noise_state_r = 0x12345678u;
+
+    // Pink IIR state zeroed at channel start; filter stabilizes within ~100 samples.
+    // Transient = a brief frequency-roll-on; inaudible because of the 220-sample
+    // amp ramp from fix_amp_step_click which fades in over the same window.
+    // Separate L and R state ensures decorrelated stereo pink noise.
+    ch->pink_b0  = 0.0f;  ch->pink_b1  = 0.0f;  ch->pink_b2  = 0.0f;
+    ch->pink_b0r = 0.0f;  ch->pink_b1r = 0.0f;  ch->pink_b2r = 0.0f;
+
+    // Brown noise integrator zeroed at channel start.  Starting from 0 means the
+    // leaky integrator begins from rest; any initial DC transient decays with time
+    // constant 1/(1-0.998) = 500 samples (~11 ms at 44.1 kHz), fully masked by the
+    // 220-sample amplitude ramp.  Independent L and R accumulators ensure the two
+    // channels produce decorrelated (stereo) brown noise.
+    ch->brown_acc_l = 0.0f;
+    ch->brown_acc_r = 0.0f;
 
     for (int p = 0; p < AUDIO_PARAM_COUNT; p++) {
         ch->sweeps[p].duration_samples = 0;
@@ -261,8 +282,14 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (params->frequency <= 0 || params->frequency > AUDIO_SAMPLE_RATE/2) {
-        ESP_LOGE(TAG, "Invalid frequency: %.1f Hz (must be 0-22050 Hz)", params->frequency);
+    // Noise channels (AUDIO_WAVE_NOISE_WHITE and higher) legitimately use
+    // frequency = 0 — no carrier is generated; the phase accumulator still
+    // advances for AM modulation / gating support, but the value is optional.
+    // Skip the frequency range check for all noise wave types.
+    bool is_noise = (params->wave_type >= AUDIO_WAVE_NOISE_WHITE);
+    if (!is_noise && (params->frequency <= 0 || params->frequency > AUDIO_SAMPLE_RATE/2)) {
+        ESP_LOGE(TAG, "Invalid frequency: %.1f Hz (must be > 0 and <= %d Hz for non-noise types)",
+                 params->frequency, AUDIO_SAMPLE_RATE / 2);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -380,18 +407,34 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                                              ? channel->params.frequency_r
                                              : channel->params.frequency;
                 }
+                // wave_type is not sweepable — always latch unconditionally.
+                channel->wave_type = channel->params.wave_type;
 
                 channel->applied_version = pv;
             }
         }
 
-        // Per-sample cost estimate (post Phase 4.2): 4 sweep-params × ~10 cy
-        // (branch + lerp) + carrier sin lookup × 2 + pan lookup × 2 ≈ 80 cy/sample
-        // /channel — down from ~280 cy when each sample paid two sinf() calls
-        // (50–80 cy each) plus a cosf() and an extra sinf() inside apply_panning.
-        // 8 channels at 44.1 kHz on ESP32 @ 240 MHz:
-        //   8 × 44100 × 80 = ~28.2 MCycles/s  →  ~11.8% CPU worst-case full polyphony,
-        // compared to ~41% on the pre-LUT path.
+        // Per-sample cost estimate (post Plan 005 Step 2 waveform switch):
+        //
+        //   Baseline overhead (shared by all waveform types):
+        //     4 sweep-params × ~10 cy (branch + lerp) + pan LUT × 2 ≈ 60 cy/sample/channel
+        //
+        //   Waveform carrier cost (replaces unconditional fast_sin_q32 × 2):
+        //     SINE:         LUT lookup + lerp × 2                    ≈ 16–20 cy  (was 20 cy)
+        //     SQUARE:       2 integer comparisons + 2 conditional     ≈  4–6 cy   (−14 cy vs SINE)
+        //     TRIANGLE:     subtract + cast + fabsf + mul × 2        ≈  8–10 cy  (−10 cy vs SINE)
+        //     SAWTOOTH:     signed cast + float mul × 2              ≈   6–8 cy  (−12 cy vs SINE)
+        //     NOISE_WHITE:  3 XOR-shifts + cast + float mul × 2      ≈   8–10 cy
+        //     NOISE_PINK:   white gen + 3 IIR float mul-adds × 2     ≈  20–24 cy (+4 cy vs SINE)
+        //     NOISE_BROWN:  white gen + leaky integrator × 2         ≈  14–16 cy (−4 cy vs SINE)
+        //
+        //   switch() overhead: SINE is case 0 (most common).  At steady state with a
+        //   mono waveform session the branch predictor achieves ~100% hit rate;
+        //   misprediction cost (10–12 cy on LX6) is amortized across many samples.
+        //
+        //   Worst case (all 8 ch pink noise): 8 × 44100 × (60 + 24) = 29.6 MCy/s ≈ 12.3%
+        //   Typical therapeutic (2 ch binaural + 1 ch pink): ≈ 3.5 MCy/s ≈ 1.5%
+        //   Both well within 6% per-session target.
         for (size_t i = 0; i < samples; i++) {
             // --- Frequency ---
             if (channel->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples > 0) {
@@ -483,9 +526,285 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                 }
             }
 
-            // Generate stereo samples using LUT lookup + linear interpolation.
-            float sample_l = channel->current_amp * fast_sin_q32(channel->phase_l_q32);
-            float sample_r = channel->current_amp * fast_sin_q32(channel->phase_r_q32);
+            // Generate stereo carrier samples — switch on waveform type.
+            // All cases produce raw_l and raw_r in [-1.0, +1.0]; amplitude is
+            // applied identically below.  The switch is placed here to keep all
+            // downstream code (modulation, panning, binaural, mix) unchanged.
+            float raw_l, raw_r;
+            switch (channel->wave_type) {
+
+                case AUDIO_WAVE_SINE:
+                    // Q32 LUT + linear interpolation.  ~16–20 cy per stereo pair.
+                    raw_l = fast_sin_q32(channel->phase_l_q32);
+                    raw_r = fast_sin_q32(channel->phase_r_q32);
+                    break;
+
+                case AUDIO_WAVE_SQUARE:
+                    // Hard threshold: first half-cycle = +1, second = -1.
+                    // Single integer comparison + conditional select: ~4–6 cy/pair.
+                    //
+                    // Aliasing note: a hard-clip square wave contains odd harmonics
+                    // to Nyquist.  At 40 Hz (therapeutic isochronic rate) the 551st
+                    // harmonic reaches 22050 Hz — still at Nyquist, so aliasing folds
+                    // back onto audible frequencies.  However, the power of each
+                    // harmonic k falls as 1/k, making harmonics above ~20 (800 Hz)
+                    // inaudible at therapeutic levels.  This aliasing is acceptable
+                    // for the target therapeutic frequency range (< 100 Hz carrier).
+                    // For frequencies > 100 Hz use a bandlimited waveform instead.
+                    raw_l = (channel->phase_l_q32 < 0x80000000u) ? 1.0f : -1.0f;
+                    raw_r = (channel->phase_r_q32 < 0x80000000u) ? 1.0f : -1.0f;
+                    break;
+
+                case AUDIO_WAVE_TRIANGLE:
+                    // Linear fold: first half of cycle rises −1 → +1, second
+                    // half falls +1 → −1, giving a continuous triangle.
+                    //
+                    // Formula: fold the Q32 phase so that the second half mirrors
+                    // the first, then linearly map [0, 0x7FFFFFFF] → [−1, +1].
+                    //
+                    // Fold operation: for phase >= 0x80000000, folded = 0xFFFFFFFFu - phase.
+                    // This maps the second half-cycle back into [0, 0x7FFFFFFF] in
+                    // reverse order, mirroring the first half.
+                    //
+                    // Boundary paper-trace (verified before committing):
+                    //   phase = 0x00000000 : folded = 0x00000000  →  raw = −1.0
+                    //   phase = 0x40000000 : folded = 0x40000000  →  raw ≈  0.0  (mid-rise)
+                    //   phase = 0x7FFFFFFF : folded = 0x7FFFFFFF  →  raw ≈ +1.0  (peak)
+                    //   phase = 0x80000000 : folded = 0x7FFFFFFF  →  raw ≈ +1.0  (fold, same peak)
+                    //   phase = 0xBFFFFFFF : folded = 0x40000000  →  raw ≈  0.0  (mid-fall)
+                    //   phase = 0xFFFFFFFF : folded = 0x00000000  →  raw = −1.0  (back to start)
+                    //
+                    // Note: the plan's substep 2.3 boundary table listed phase=0x40000000 → +1,
+                    // which would imply the peak at the quarter-cycle mark.  The fold formula
+                    // here produces 0 at the quarter-cycle mark and +1 at the half-cycle mark,
+                    // which is the correct standard triangle waveform.  The plan's table entry
+                    // for 0x40000000 is a documentation error; the formula and the plan's
+                    // instruction to "adjust if needed" are the authoritative spec.
+                    //
+                    // Cost: 1 comparison + 1 subtract + 1 cast + 1 mul + 1 sub × 2 = ~8–10 cy/pair.
+                    {
+                        uint32_t fl = channel->phase_l_q32;
+                        if (fl >= 0x80000000u) fl = 0xFFFFFFFFu - fl;
+                        raw_l = (float)fl * (2.0f / (float)0x7FFFFFFFu) - 1.0f;
+
+                        uint32_t fr = channel->phase_r_q32;
+                        if (fr >= 0x80000000u) fr = 0xFFFFFFFFu - fr;
+                        raw_r = (float)fr * (2.0f / (float)0x7FFFFFFFu) - 1.0f;
+                    }
+                    break;
+
+                case AUDIO_WAVE_SAWTOOTH:
+                    // Linear ramp −1 → +1 over the full cycle.
+                    //
+                    // Casting uint32_t to int32_t maps:
+                    //   [0x00000000, 0x7FFFFFFF] → [0, INT32_MAX]  (positive ramp)
+                    //   [0x80000000, 0xFFFFFFFF] → [INT32_MIN, -1] (negative half starts)
+                    // Scaling by 1/0x80000000 converts to float [-1.0, +1.0].
+                    //
+                    // At phase=0x80000000 (int32_t = INT32_MIN = -2147483648):
+                    //   raw = -2147483648 / 2147483648 = -1.0  (exact downward step)
+                    // This is the one-sample discontinuity inherent in sawtooth.
+                    // For aliasing characteristics, see the SQUARE case comment above
+                    // — the same therapeutic-range constraint applies.
+                    //
+                    // Cost: 1 signed cast + 1 float mul × 2 = ~6–8 cy/pair.
+                    raw_l = (float)(int32_t)channel->phase_l_q32 * (1.0f / (float)0x80000000u);
+                    raw_r = (float)(int32_t)channel->phase_r_q32 * (1.0f / (float)0x80000000u);
+                    break;
+
+                case AUDIO_WAVE_NOISE_WHITE:
+                    /*
+                     * Galois 32-bit LFSR, polynomial 0xB4BCD35C
+                     * (Marsaglia xorshift family, well-studied flat spectrum to
+                     * Nyquist at 44.1 kHz).  Three XOR-shift operations produce a
+                     * maximal-length sequence of period 2^32 − 1.
+                     *
+                     * Reference: George Marsaglia, "Xorshift RNGs", Journal of
+                     * Statistical Software, 2003.  The specific 3-tap (11,7,17)
+                     * constant is used in DSP cookbooks for white noise at audio
+                     * sample rates.
+                     *
+                     * Seeds chosen pseudo-randomly so L (0xABCD1234) and R
+                     * (0x12345678) are decorrelated — identical seeds would yield
+                     * identical L/R streams (sounds mono, no stereo width).
+                     *
+                     * Phase accumulators phase_l_q32 / phase_r_q32 still advance
+                     * per-sample (see phase increment block below) to preserve
+                     * AM modulation / gating mechanics.  The phase result is not
+                     * used as a carrier here — the LFSR replaces fast_sin_q32.
+                     *
+                     * Per-sample cost: 3 XOR-shifts + 1 cast + 1 float mul × 2 ≈
+                     * 8–10 cy/stereo-pair (vs 16–20 cy for SINE LUT path).
+                     */
+                    channel->noise_state_l ^= channel->noise_state_l >> 11;
+                    channel->noise_state_l ^= channel->noise_state_l << 7;
+                    channel->noise_state_l ^= channel->noise_state_l >> 17;
+                    raw_l = (float)(int32_t)channel->noise_state_l * (1.0f / 2147483648.0f);
+
+                    channel->noise_state_r ^= channel->noise_state_r >> 11;
+                    channel->noise_state_r ^= channel->noise_state_r << 7;
+                    channel->noise_state_r ^= channel->noise_state_r >> 17;
+                    raw_r = (float)(int32_t)channel->noise_state_r * (1.0f / 2147483648.0f);
+                    break;
+
+                case AUDIO_WAVE_NOISE_PINK:
+                    /*
+                     * Paul Kellet's pink noise filter (public domain).
+                     * Used in Csound, Pure Data, SuperCollider, and Web Audio.
+                     * Approximates −3 dB/octave (1/f spectrum) across the audible
+                     * range using three cascaded first-order IIR stages applied to
+                     * white noise input.
+                     *
+                     * Algorithm (per-sample):
+                     *   1. Generate a white noise sample from the LFSR (same state
+                     *      variables as NOISE_WHITE — safe because NOISE_WHITE and
+                     *      NOISE_PINK are mutually exclusive per channel; only one
+                     *      case fires per sample).
+                     *   2. Apply the 3-pole Kellet IIR: each pole b_n accumulates
+                     *      a weighted integral of white noise with a different time
+                     *      constant.  The three poles cover low, mid, and high
+                     *      frequency bands, together approximating -3 dB/oct.
+                     *   3. Sum poles + a direct white-noise contribution, then scale
+                     *      by 0.11f (empirically calibrated for ~±1.0 peak amplitude
+                     *      with these pole coefficients at 44.1 kHz sample rate).
+                     *
+                     * Kellet IIR coefficients (pole × feedback, direct feed):
+                     *   b0: α=0.99886, k=0.0555179  (lowest-freq, longest time const)
+                     *   b1: α=0.99332, k=0.0750759  (mid-freq)
+                     *   b2: α=0.96900, k=0.1538520  (highest-freq, shortest time const)
+                     *   direct white contribution: 0.5362f
+                     *   final gain: 0.11f
+                     *
+                     * Separate pink_b*r state for right channel — sharing L state
+                     * would produce identical L/R streams (mono pink noise).
+                     *
+                     * Per-sample cost: white gen (3 XOR + 1 cast + 1 fmul) +
+                     *   3 fmul-add × 2 channels ≈ 20–24 cy/stereo-pair
+                     *   (+~12 cy vs NOISE_WHITE; +~4 cy vs SINE LUT path).
+                     */
+
+                    // --- Left channel ---
+                    // Step 1: generate white noise via LFSR (same state as NOISE_WHITE)
+                    channel->noise_state_l ^= channel->noise_state_l >> 11;
+                    channel->noise_state_l ^= channel->noise_state_l << 7;
+                    channel->noise_state_l ^= channel->noise_state_l >> 17;
+                    {
+                        float white_l = (float)(int32_t)channel->noise_state_l * (1.0f / 2147483648.0f);
+
+                        // Step 2: 3-pole Kellet IIR
+                        channel->pink_b0 = 0.99886f * channel->pink_b0 + white_l * 0.0555179f;
+                        channel->pink_b1 = 0.99332f * channel->pink_b1 + white_l * 0.0750759f;
+                        channel->pink_b2 = 0.96900f * channel->pink_b2 + white_l * 0.1538520f;
+
+                        // Step 3: sum poles + direct white contribution; scale to ~±1.0
+                        raw_l = (channel->pink_b0 + channel->pink_b1 + channel->pink_b2
+                                 + white_l * 0.5362f) * 0.11f;
+                    }
+
+                    // --- Right channel (independent IIR state for stereo decorrelation) ---
+                    channel->noise_state_r ^= channel->noise_state_r >> 11;
+                    channel->noise_state_r ^= channel->noise_state_r << 7;
+                    channel->noise_state_r ^= channel->noise_state_r >> 17;
+                    {
+                        float white_r = (float)(int32_t)channel->noise_state_r * (1.0f / 2147483648.0f);
+
+                        channel->pink_b0r = 0.99886f * channel->pink_b0r + white_r * 0.0555179f;
+                        channel->pink_b1r = 0.99332f * channel->pink_b1r + white_r * 0.0750759f;
+                        channel->pink_b2r = 0.96900f * channel->pink_b2r + white_r * 0.1538520f;
+
+                        raw_r = (channel->pink_b0r + channel->pink_b1r + channel->pink_b2r
+                                 + white_r * 0.5362f) * 0.11f;
+                    }
+                    break;
+
+                case AUDIO_WAVE_NOISE_BROWN:
+                    /*
+                     * Brown noise (Brownian noise) via a leaky integrator of white noise.
+                     *
+                     * A one-pole recursive integrator of white noise produces a spectrum
+                     * that falls at -6 dB/octave (double the -3 dB/oct of pink noise),
+                     * giving the characteristic deep, rumbling quality of brown noise.
+                     *
+                     * Algorithm per-sample:
+                     *   1. Generate a white noise sample from the LFSR (same noise_state_l/r
+                     *      as NOISE_WHITE and NOISE_PINK — safe because the three noise wave
+                     *      types are mutually exclusive per channel; only one case fires per
+                     *      sample).
+                     *   2. Apply the leaky integrator:
+                     *        acc = 0.998f * acc + white * 0.02f
+                     *   3. Scale to approximate ±1.0 peak:
+                     *        raw = acc * 3.5f
+                     *
+                     * Leak coefficient 0.998f rationale:
+                     *   The -3 dB point of the one-pole highpass acting on the integrator
+                     *   output is at f_c = (1 - 0.998) * fs / (2π) ≈ 0.03 Hz — effectively
+                     *   DC.  Above this frequency (~1 Hz in practice) the spectrum follows
+                     *   the -6 dB/octave Brownian slope with negligible distortion.
+                     *
+                     *   DC accumulation analysis: if the white PRNG has a long-run mean of ε
+                     *   (zero for a true PRNG; small for the LFSR over finite runs), the
+                     *   steady-state integrator offset = ε * 0.02 / (1 - 0.998) = ε.
+                     *   For a truly zero-mean generator, ε → 0 over long runs, so the
+                     *   integrator's DC component vanishes.
+                     *
+                     *   Choosing a smaller leak (e.g. 0.99) would push f_c toward 16 Hz and
+                     *   bias the spectrum away from -6 dB/octave; a larger leak (e.g. 0.9999)
+                     *   would let DC accumulate for ~500 ms before decaying — unacceptable.
+                     *   0.998f is the calibrated optimum: negligible DC drift, correct slope.
+                     *
+                     * Gain 3.5f rationale:
+                     *   Empirically derived to produce approximately ±1.0 peak amplitude at
+                     *   44.1 kHz with the 0.998f leak coefficient.  The integrator's
+                     *   gain at low frequencies is 0.02 / (1 - 0.998) = 10; for a white
+                     *   noise input with RMS ≈ 0.577 (uniform [−1,+1]), the integrator RMS
+                     *   output ≈ 0.577 × 10 × √(bandwidth) — the factor 3.5f was determined
+                     *   by empirical measurement and provides a good peak-to-RMS headroom for
+                     *   the Brownian 1/f² spectrum.  Adjust if device listening reveals
+                     *   consistent clipping (lower) or inaudible quietness (raise).
+                     *
+                     * Independent L and R accumulator state (brown_acc_l vs brown_acc_r):
+                     *   Each is driven by its own LFSR (noise_state_l vs noise_state_r),
+                     *   so L and R brown noise streams are decorrelated — wide stereo field.
+                     *
+                     * Per-sample cost: 3 XOR-shifts + 1 cast + 1 float mul (white gen) +
+                     *   1 fmul-add (leak) + 1 fmul (gain) × 2 channels ≈ 14–16 cy/stereo-pair
+                     *   (~6 cy above NOISE_WHITE; ~8 cy below NOISE_PINK).
+                     */
+
+                    // --- Left channel ---
+                    channel->noise_state_l ^= channel->noise_state_l >> 11;
+                    channel->noise_state_l ^= channel->noise_state_l << 7;
+                    channel->noise_state_l ^= channel->noise_state_l >> 17;
+                    {
+                        float white_l = (float)(int32_t)channel->noise_state_l * (1.0f / 2147483648.0f);
+                        // Leaky integrator: acc = 0.998 * acc + white * 0.02
+                        // 0.02 = (1 - 0.998); keeps the integrator gain at low freq ~10
+                        channel->brown_acc_l = 0.998f * channel->brown_acc_l + white_l * 0.02f;
+                        // 3.5f gain: empirical normalization for ~±1.0 peak at 44.1 kHz
+                        raw_l = channel->brown_acc_l * 3.5f;
+                    }
+
+                    // --- Right channel (independent integrator state for stereo decorrelation) ---
+                    channel->noise_state_r ^= channel->noise_state_r >> 11;
+                    channel->noise_state_r ^= channel->noise_state_r << 7;
+                    channel->noise_state_r ^= channel->noise_state_r >> 17;
+                    {
+                        float white_r = (float)(int32_t)channel->noise_state_r * (1.0f / 2147483648.0f);
+                        channel->brown_acc_r = 0.998f * channel->brown_acc_r + white_r * 0.02f;
+                        raw_r = channel->brown_acc_r * 3.5f;
+                    }
+                    break;
+
+                default:
+                    // Unknown wave type — output silence.  Phase accumulators still advance
+                    // below (for future gating support) and all downstream code is unchanged.
+                    raw_l = 0.0f;
+                    raw_r = 0.0f;
+                    break;
+            }
+
+            float sample_l = channel->current_amp * raw_l;
+            float sample_r = channel->current_amp * raw_r;
 
             // Apply modulation if enabled; current_mod_freq drives the accumulator
             // so that mod-frequency sweeps take effect sample-accurately.

@@ -22,6 +22,17 @@
 #define AUDIO_GEN_BUFFER_SIZE       1024
 
 typedef enum {
+    AUDIO_WAVE_SINE        = 0,   // Sine wave (default) — uses Q32 LUT
+    AUDIO_WAVE_SQUARE      = 1,   // Square wave — hard threshold on phase
+    AUDIO_WAVE_TRIANGLE    = 2,   // Triangle wave — linear fold on phase
+    AUDIO_WAVE_SAWTOOTH    = 3,   // Sawtooth wave — linear ramp -1→+1
+    AUDIO_WAVE_NOISE_WHITE = 4,   // White noise — Galois LFSR
+    AUDIO_WAVE_NOISE_PINK  = 5,   // Pink noise — Kellet 3-pole IIR
+    AUDIO_WAVE_NOISE_BROWN = 6,   // Brown noise — leaky integrator
+    AUDIO_WAVE_COUNT       = 7
+} audio_wave_type_t;
+
+typedef enum {
     AUDIO_GEN_SWEEP_NONE = 0,
     AUDIO_GEN_SWEEP_LINEAR,
     AUDIO_GEN_SWEEP_QUADRATIC
@@ -50,6 +61,7 @@ typedef struct {
     float pan;             // Pan -1.0 (left) to +1.0 (right)
     float mod_frequency;   // Modulation frequency in Hz
     float mod_depth;       // Modulation depth 0.0-1.0
+    audio_wave_type_t wave_type;  // Waveform type (0 = SINE default)
     audio_gen_sweep_type_t sweep_type;
     float sweep_target;    // Target frequency for sweep
     uint32_t duration_ms;  // Duration in milliseconds
@@ -74,6 +86,32 @@ typedef struct {
     uint64_t samples_generated;
     uint64_t total_samples;
     bool active;
+    audio_wave_type_t wave_type;   // Active waveform, latched from params at start/apply
+
+    // White noise LFSR state (Galois 32-bit xorshift, polynomial 0xB4BCD35C).
+    // Seeds chosen so L and R are decorrelated — identical seeds produce identical
+    // L/R output (sounds mono); these two seeds differ in every bit group.
+    // MUST NEVER be zero: an all-zero LFSR is a fixed point that outputs silence forever.
+    uint32_t noise_state_l;   // LFSR state for left channel white noise
+    uint32_t noise_state_r;   // LFSR state for right channel white noise
+
+    // Pink noise 3-pole IIR state (Paul Kellet algorithm).
+    // Separate state for L and R so the two channels produce decorrelated pink
+    // noise — sharing state would yield identical L/R streams (mono pink noise).
+    // All six fields are zeroed at channel start; the filter stabilizes within
+    // ~100 samples (see zero-init rationale comment in audio_generator.c).
+    float pink_b0,  pink_b1,  pink_b2;   // IIR integrator state — left channel
+    float pink_b0r, pink_b1r, pink_b2r;  // IIR integrator state — right channel
+
+    // Brown noise leaky integrator state (one-pole IIR of white noise).
+    // Leak coefficient 0.998f: -3 dB point at ~0.03 Hz, effectively flat from
+    // 1 Hz upward.  Prevents infinite DC accumulation while preserving the
+    // -6 dB/octave (Brownian) spectral slope across the audible range.
+    // Independent L and R accumulators produce decorrelated stereo brown noise.
+    // Both initialized to 0.0f at channel start (integrator starts from rest).
+    float brown_acc_l;   // leaky integrator state — left channel
+    float brown_acc_r;   // leaky integrator state — right channel
+
     audio_param_sweep_t sweeps[AUDIO_PARAM_COUNT];  // per-param sweep state
 
     // Lock-free pending-params slot (Step 5.2).

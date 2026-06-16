@@ -654,8 +654,26 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
         audio_entry->channel = 0;
     }
 
-    // Set right channel frequency (same as left for now, binaural beats can be added later)
-    audio_entry->frequency_r = audio_entry->frequency;
+    // Token 6 (optional): freq_r — right channel frequency for binaural beat.
+    // If absent or <= 0 or out of range, set to 0.0 which means "same as left"
+    // (audio_generator_start_channel_locked interprets 0 as copy of freq_l).
+    if (token_count >= 7) {
+        float freq_r = atof(tokens[6]);
+        audio_entry->frequency_r = (freq_r > 0.0f && freq_r <= (AUDIO_GEN_SAMPLE_RATE / 2.0f))
+                                   ? freq_r : 0.0f;
+    } else {
+        audio_entry->frequency_r = 0.0f;
+    }
+
+    // Token 7 (optional): wave_type — integer 0-6 mapped to audio_wave_type_t.
+    // Defaults to 0 (AUDIO_WAVE_SINE) if absent or out of range.
+    if (token_count >= 8) {
+        int wave_type_int = atoi(tokens[7]);
+        audio_entry->wave_type = (wave_type_int >= 0 && wave_type_int < AUDIO_WAVE_COUNT)
+                                 ? (uint8_t)wave_type_int : 0;
+    } else {
+        audio_entry->wave_type = 0;
+    }
 
     return ESP_OK;
 }
@@ -1026,6 +1044,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             // mod_depth hardcoded per spec (no field defined); Phase 4 may
             // expose a Kconfig override.
             .mod_depth   = 0.1f,
+            .wave_type   = (audio_wave_type_t)audio->wave_type,
             // Legacy sweep fields unused — sweep is driven via
             // audio_generator_start_sweep() after channel start.
             .sweep_type  = AUDIO_GEN_SWEEP_NONE,

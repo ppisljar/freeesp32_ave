@@ -618,6 +618,86 @@ esp_err_t audio_test_multichannel_soak(void)
 }
 
 // ---------------------------------------------------------------------------
+// Waveform type demonstration (Plan 005 Step 2)
+// ---------------------------------------------------------------------------
+// Cycles through SQUARE → TRIANGLE → SAWTOOTH → SINE on channel 0 at 40 Hz,
+// 2 seconds each, so the operator can hear each waveform's distinct timbre.
+//
+// 40 Hz is chosen because:
+//   - It is well within the therapeutic frequency range (< 100 Hz).
+//   - It is audible as a tone on most speakers (not just a bass thump).
+//   - It is the target isochronic frequency for gamma entrainment.
+//
+// Channel 0 is used so this test can run standalone without interfering with
+// other channels.  The amplitude ramp (5 ms de-click) fires at the start of
+// each tone to prevent onset clicks.
+// ---------------------------------------------------------------------------
+
+#define WAVETYPE_TEST_CHANNEL    0
+#define WAVETYPE_TEST_FREQ_HZ    40.0f
+#define WAVETYPE_TEST_AMP        0.4f
+#define WAVETYPE_TEST_DUR_MS     3000U   // long enough for each waveform to be audible
+
+esp_err_t audio_test_waveform_types(void)
+{
+    ESP_LOGI(TAG, "=== WAVEFORM TYPE TEST START (square→triangle→sawtooth→sine @ 40 Hz) ===");
+
+    static const struct {
+        audio_wave_type_t wave_type;
+        const char* name;
+    } wave_sequence[] = {
+        { AUDIO_WAVE_SQUARE,   "SQUARE"   },
+        { AUDIO_WAVE_TRIANGLE, "TRIANGLE" },
+        { AUDIO_WAVE_SAWTOOTH, "SAWTOOTH" },
+        { AUDIO_WAVE_SINE,     "SINE"     },
+    };
+    static const int WAVE_SEQ_LEN = (int)(sizeof(wave_sequence) / sizeof(wave_sequence[0]));
+
+    for (int i = 0; i < WAVE_SEQ_LEN; i++) {
+        audio_gen_params_t params = {
+            .frequency     = WAVETYPE_TEST_FREQ_HZ,
+            .frequency_r   = WAVETYPE_TEST_FREQ_HZ,
+            .amplitude     = WAVETYPE_TEST_AMP,
+            .pan           = 0.0f,
+            .mod_frequency = 0.0f,
+            .mod_depth     = 0.0f,
+            .wave_type     = wave_sequence[i].wave_type,
+            .sweep_type    = AUDIO_GEN_SWEEP_NONE,
+            .sweep_target  = 0.0f,
+            .duration_ms   = WAVETYPE_TEST_DUR_MS,
+        };
+
+        ESP_LOGI(TAG, "waveform_types: starting %s @ %.0f Hz for %u ms",
+                 wave_sequence[i].name, WAVETYPE_TEST_FREQ_HZ, WAVETYPE_TEST_DUR_MS);
+
+        esp_err_t ret = audio_manager_start_generation(WAVETYPE_TEST_CHANNEL, &params);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "waveform_types: failed to start %s: %s",
+                     wave_sequence[i].name, esp_err_to_name(ret));
+            return ret;
+        }
+
+        // Wait for the tone to finish.  Add 100 ms margin so the previous channel
+        // finishes before we start the next one.
+        vTaskDelay(pdMS_TO_TICKS(WAVETYPE_TEST_DUR_MS + 100U));
+
+        // Stop the channel before starting the next waveform type.
+        // (channel will have auto-stopped via total_samples check, but be explicit)
+        audio_manager_stop_generation(WAVETYPE_TEST_CHANNEL);
+        vTaskDelay(pdMS_TO_TICKS(50));  // brief silence between waveforms
+    }
+
+    ESP_LOGI(TAG, "=== WAVEFORM TYPE TEST COMPLETE ===");
+    ESP_LOGI(TAG, "Operator: verify four distinct timbres were audible:");
+    ESP_LOGI(TAG, "  SQUARE:   harsh/buzzy (contains only odd harmonics)");
+    ESP_LOGI(TAG, "  TRIANGLE: softer than square but brighter than sine");
+    ESP_LOGI(TAG, "  SAWTOOTH: richest/harshest (odd and even harmonics)");
+    ESP_LOGI(TAG, "  SINE:     pure tone (no harmonics)");
+
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
 // Binaural-beat precision check (Plan 002 Step 5.5)
 // ---------------------------------------------------------------------------
 // Configures channel 0 with L=200.0 Hz, R=200.01 Hz (0.01 Hz beat — one full
@@ -710,5 +790,190 @@ esp_err_t audio_test_binaural_precision_verify(void)
     // Note: acoustic precision (counting L-R beat cycles at the speaker) requires
     // external ADC capture over 100+ seconds and is deferred to Phase 5
     // hardware-in-loop validation.
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// White noise generator demonstration (Plan 005 Step 3)
+// ---------------------------------------------------------------------------
+// Starts channel 1 (not 0, to avoid overlap with audio_test_waveform_types)
+// with AUDIO_WAVE_NOISE_WHITE, frequency=0 Hz (noise channels bypass the
+// frequency > 0 guard in audio_generator_start_channel), volume=50%.
+//
+// Device-level verification checklist:
+//   - Audible as broadband "sh" hiss (not a tone, not silence).
+//   - Wide stereo field (L and R are decorrelated via different LFSR seeds).
+//   - No click on start (5 ms amplitude ramp fires — especially important for
+//     broadband noise where onset transients are particularly audible).
+//   - Duration: 30 seconds (allowing time for the operator to assess the output).
+//
+// Channel 1 is used so this test can be called alongside the waveform-type test
+// on channel 0 without conflict.
+// ---------------------------------------------------------------------------
+
+#define NOISE_WHITE_TEST_CHANNEL    1
+#define NOISE_WHITE_TEST_AMP        0.5f     // 50% volume per substep 3.5 spec
+#define NOISE_WHITE_TEST_DUR_MS     30000U   // 30 seconds per substep 3.5 spec
+
+esp_err_t audio_test_noise_white(void)
+{
+    ESP_LOGI(TAG, "=== WHITE NOISE TEST START (channel %d, %.0f%% volume, %u ms) ===",
+             NOISE_WHITE_TEST_CHANNEL,
+             NOISE_WHITE_TEST_AMP * 100.0f,
+             NOISE_WHITE_TEST_DUR_MS);
+
+    audio_gen_params_t params = {
+        .frequency     = 0.0f,              // No carrier; bypass frequency guard for noise types
+        .frequency_r   = 0.0f,              // No right-channel carrier offset
+        .amplitude     = NOISE_WHITE_TEST_AMP,
+        .pan           = 0.0f,              // Centre pan; L/R decorrelation comes from LFSR seeds
+        .mod_frequency = 0.0f,              // No amplitude modulation
+        .mod_depth     = 0.0f,
+        .wave_type     = AUDIO_WAVE_NOISE_WHITE,
+        .sweep_type    = AUDIO_GEN_SWEEP_NONE,
+        .sweep_target  = 0.0f,
+        .duration_ms   = NOISE_WHITE_TEST_DUR_MS,
+    };
+
+    esp_err_t ret = audio_manager_start_generation(NOISE_WHITE_TEST_CHANNEL, &params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "noise_white: failed to start channel %d: %s",
+                 NOISE_WHITE_TEST_CHANNEL, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "noise_white: channel %d started -- broadband hiss for %u ms",
+             NOISE_WHITE_TEST_CHANNEL, NOISE_WHITE_TEST_DUR_MS);
+    ESP_LOGI(TAG, "noise_white: operator -- verify:");
+    ESP_LOGI(TAG, "  1. Broadband 'sh' hiss (not a tone)");
+    ESP_LOGI(TAG, "  2. Wide stereo field (L/R decorrelated via LFSR seeds)");
+    ESP_LOGI(TAG, "  3. No click on start (5 ms amp ramp)");
+
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Pink noise generator demonstration (Plan 005 Step 4)
+// ---------------------------------------------------------------------------
+// Starts channel 2 (distinct from white noise test on channel 1 and waveform
+// test on channel 0) with AUDIO_WAVE_NOISE_PINK, frequency=0 Hz (noise channels
+// bypass the frequency > 0 guard), volume=50%, 30 second duration.
+//
+// Pink noise uses the Paul Kellet 3-pole IIR filter applied to white noise to
+// approximate a -3 dB/octave spectrum.  It should sound noticeably warmer than
+// white noise — more low-frequency energy, less high-frequency hiss.
+//
+// The amplitude ramp (5 ms de-click, 220 samples) fires at channel start,
+// same as all other waveform types.  The IIR state is zeroed at start and
+// stabilizes within ~100 samples — well within the ramp window.
+//
+// Device-level verification checklist:
+//   - Warmer sound than white noise (more bass, less hiss).
+//   - Wide stereo field (L/R use independent IIR state via pink_b*r).
+//   - No click on start (5 ms amplitude ramp).
+//   - Approximate amplitude matches white noise at the same volume setting.
+// ---------------------------------------------------------------------------
+
+#define NOISE_PINK_TEST_CHANNEL    2
+#define NOISE_PINK_TEST_AMP        0.5f     // 50% volume per substep 4.5 spec
+#define NOISE_PINK_TEST_DUR_MS     30000U   // 30 seconds per substep 4.5 spec
+
+// ---------------------------------------------------------------------------
+// Brown noise generator demonstration (Plan 005 Step 5)
+// ---------------------------------------------------------------------------
+// Starts channel 3 (distinct from white ch1, pink ch2, waveform ch0) with
+// AUDIO_WAVE_NOISE_BROWN, frequency=0 Hz (noise channels bypass the carrier
+// frequency guard), volume=50%, 30 second duration.
+//
+// Brown noise (Brownian / red noise) is produced by integrating white noise
+// through a leaky one-pole IIR filter (leak coeff = 0.998f, gain = 3.5f),
+// resulting in a -6 dB/octave spectrum.  It should sound distinctly deeper
+// and more bass-heavy than both white and pink noise — dominated by low-
+// frequency rumble with very little high-frequency content.
+//
+// Device-level verification checklist:
+//   - Deep, rumbling low-frequency sound (the deepest of the three noise types).
+//   - Wide stereo field (L/R use independent brown_acc_l / brown_acc_r state).
+//   - No click on start (5 ms amplitude ramp; integrator DC transient masked).
+//   - Noticeably more bass-heavy than pink noise at the same volume setting.
+// ---------------------------------------------------------------------------
+
+#define NOISE_BROWN_TEST_CHANNEL   3
+#define NOISE_BROWN_TEST_AMP       0.5f     // 50% volume per substep 5.5 spec
+#define NOISE_BROWN_TEST_DUR_MS    30000U   // 30 seconds per substep 5.5 spec
+
+esp_err_t audio_test_noise_pink(void)
+{
+    ESP_LOGI(TAG, "=== PINK NOISE TEST START (channel %d, %.0f%% volume, %u ms) ===",
+             NOISE_PINK_TEST_CHANNEL,
+             NOISE_PINK_TEST_AMP * 100.0f,
+             NOISE_PINK_TEST_DUR_MS);
+
+    audio_gen_params_t params = {
+        .frequency     = 0.0f,              // No carrier; bypass frequency guard for noise types
+        .frequency_r   = 0.0f,              // No right-channel carrier offset
+        .amplitude     = NOISE_PINK_TEST_AMP,
+        .pan           = 0.0f,              // Centre pan; stereo width from independent IIR state
+        .mod_frequency = 0.0f,              // No amplitude modulation
+        .mod_depth     = 0.0f,
+        .wave_type     = AUDIO_WAVE_NOISE_PINK,
+        .sweep_type    = AUDIO_GEN_SWEEP_NONE,
+        .sweep_target  = 0.0f,
+        .duration_ms   = NOISE_PINK_TEST_DUR_MS,
+    };
+
+    esp_err_t ret = audio_manager_start_generation(NOISE_PINK_TEST_CHANNEL, &params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "noise_pink: failed to start channel %d: %s",
+                 NOISE_PINK_TEST_CHANNEL, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "noise_pink: channel %d started -- warmer noise for %u ms",
+             NOISE_PINK_TEST_CHANNEL, NOISE_PINK_TEST_DUR_MS);
+    ESP_LOGI(TAG, "noise_pink: operator -- verify:");
+    ESP_LOGI(TAG, "  1. Warmer than white noise (more bass, less high-frequency hiss)");
+    ESP_LOGI(TAG, "  2. Wide stereo field (L/R use independent Kellet IIR state)");
+    ESP_LOGI(TAG, "  3. No click on start (5 ms amp ramp covers IIR stabilization window)");
+    ESP_LOGI(TAG, "  4. Approximate level matches white noise at same volume setting");
+
+    return ESP_OK;
+}
+
+esp_err_t audio_test_noise_brown(void)
+{
+    ESP_LOGI(TAG, "=== BROWN NOISE TEST START (channel %d, %.0f%% volume, %u ms) ===",
+             NOISE_BROWN_TEST_CHANNEL,
+             NOISE_BROWN_TEST_AMP * 100.0f,
+             NOISE_BROWN_TEST_DUR_MS);
+
+    audio_gen_params_t params = {
+        .frequency     = 0.0f,              // No carrier; bypass frequency guard for noise types
+        .frequency_r   = 0.0f,              // No right-channel carrier offset
+        .amplitude     = NOISE_BROWN_TEST_AMP,
+        .pan           = 0.0f,              // Centre pan; stereo width from independent integrators
+        .mod_frequency = 0.0f,              // No amplitude modulation
+        .mod_depth     = 0.0f,
+        .wave_type     = AUDIO_WAVE_NOISE_BROWN,
+        .sweep_type    = AUDIO_GEN_SWEEP_NONE,
+        .sweep_target  = 0.0f,
+        .duration_ms   = NOISE_BROWN_TEST_DUR_MS,
+    };
+
+    esp_err_t ret = audio_manager_start_generation(NOISE_BROWN_TEST_CHANNEL, &params);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "noise_brown: failed to start channel %d: %s",
+                 NOISE_BROWN_TEST_CHANNEL, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "noise_brown: channel %d started -- deep rumble for %u ms",
+             NOISE_BROWN_TEST_CHANNEL, NOISE_BROWN_TEST_DUR_MS);
+    ESP_LOGI(TAG, "noise_brown: operator -- verify:");
+    ESP_LOGI(TAG, "  1. Deep, rumbling low-frequency sound (deepest of the three noise types)");
+    ESP_LOGI(TAG, "  2. Wide stereo field (L/R use independent brown_acc_l / brown_acc_r)");
+    ESP_LOGI(TAG, "  3. No click on start (5 ms amp ramp masks integrator DC transient)");
+    ESP_LOGI(TAG, "  4. Distinctly more bass-heavy than pink noise at same volume");
+
     return ESP_OK;
 }
