@@ -117,9 +117,8 @@ void audio_test_output_task(void* pvParameters)
     size_t bytes_written = 0;
 
     while (audio_output_running) {
-        // Clear audio buffer
-        memset(audio_buffer, 0, stereo_samples * 2 * sizeof(float));
-
+        // audio_generator_fill_buffer memsets the buffer to 0 as its first act,
+        // so an additional memset here is wasted ~256 cycles per cycle.
         // Generate audio samples from all active channels
         esp_err_t ret = audio_generator_fill_buffer(audio_buffer, stereo_samples);
         if (ret != ESP_OK) {
