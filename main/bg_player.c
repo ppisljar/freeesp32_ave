@@ -894,6 +894,7 @@ esp_err_t bg_player_start(const config_bg_entry_t *bg)
     s_bg.current_loudness       = 0.0f;
     s_bg.target_loudness        = bg->loudness;
     s_bg.loudness_step          = bg->loudness / (float)BG_AMP_RAMP_SAMPLES;
+    __sync_synchronize();   /* release: step+target visible before remaining (see bg_player_stop) */
     s_bg.loudness_ramp_remaining = BG_AMP_RAMP_SAMPLES;
 
     /* Reset diagnostics for this session.                                     */
@@ -985,8 +986,16 @@ esp_err_t bg_player_stop(void)
      * This is read by bg_player_mix_into() (consumer task), which is safe because
      * active remains true through the ramp window.                               */
     if (s_bg.current_loudness > 1.0e-4f) {
+        // Cross-core ordering: the consumer (audio_test_output_task on core 1)
+        // reads loudness_ramp_remaining FIRST and gates step/target reads on
+        // (remaining > 0).  Therefore we must publish step and target BEFORE
+        // remaining, with a release barrier between, so the consumer cannot
+        // see (remaining=220 + stale step=0) — which would run 220 no-op
+        // iterations then snap to silence in one sample.
+        // Reference: bug_stop_click_deep_investigation_2026-06-17.md (Inv 16 #3).
         s_bg.target_loudness         = 0.0f;
         s_bg.loudness_step           = -(s_bg.current_loudness / (float)BG_AMP_RAMP_SAMPLES);
+        __sync_synchronize();   /* release: step+target visible before remaining */
         s_bg.loudness_ramp_remaining  = BG_AMP_RAMP_SAMPLES;
     } else {
         /* Already silent — no ramp needed.                                    */
@@ -999,10 +1008,19 @@ esp_err_t bg_player_stop(void)
     s_bg.streaming = false;
 
     /* Gate the consumer AFTER the ramp is complete.
-     * Wait for the fade-out to drain (220 samples / 44100 Hz ≈ 5 ms → allow 30 ms
-     * to account for task scheduling jitter at 1 ms tick rate).               */
+     * Poll loudness_ramp_remaining instead of sleeping a fixed 30 ms — if the
+     * audio output task is briefly starved (e.g., by a higher-priority task),
+     * a fixed 30 ms can elapse without the ramp ever running, in which case
+     * the next `active=false` cuts BG abruptly while current_loudness is still
+     * non-zero — a click.  Polling at 2 ms intervals with a 100 ms ceiling
+     * waits exactly as long as needed (typically one buffer ≈ 6 ms) and is a
+     * safety net against the consumer being completely stalled.
+     * Reference: bug_stop_click_bg_i2s_state_2026-06-17.md (Inv 17 #2).        */
     xSemaphoreGive(s_bg.state_mutex);
-    vTaskDelay(pdMS_TO_TICKS(30));
+    for (int waited = 0; waited < 100; waited += 2) {
+        if (s_bg.loudness_ramp_remaining == 0u) break;
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
     xSemaphoreTake(s_bg.state_mutex, portMAX_DELAY);
 
     /* Now safe to stop the consumer.                                          */
@@ -1122,10 +1140,16 @@ void bg_player_mix_into(float *output_buffer, size_t samples)
     for (size_t i = 0; i < samples; i++) {
 
         /* Advance amplitude ramp if active.                                   */
-        if (s_bg.loudness_ramp_remaining > 0u) {
+        /* Cross-core acquire: pair with the release barrier in bg_player_stop
+         * (and the channel-start path) so that when we observe ramp_remaining > 0
+         * we also see the latest loudness_step and target_loudness — not stale
+         * values that would cause a 220-sample no-op then a hard cut.         */
+        uint32_t remaining = s_bg.loudness_ramp_remaining;
+        __sync_synchronize();
+        if (remaining > 0u) {
             s_bg.current_loudness += s_bg.loudness_step;
-            s_bg.loudness_ramp_remaining--;
-            if (s_bg.loudness_ramp_remaining == 0u) {
+            s_bg.loudness_ramp_remaining = remaining - 1u;
+            if (remaining - 1u == 0u) {
                 /* Snap to exact target — eliminates float-accumulation drift.  */
                 s_bg.current_loudness = s_bg.target_loudness;
             }

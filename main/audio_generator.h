@@ -86,6 +86,12 @@ typedef struct {
     uint64_t samples_generated;
     uint64_t total_samples;
     bool active;
+    // Stop-fade flag: when true, the channel is amp-ramping toward 0 and will
+    // self-deactivate (active=false) at the end of the ramp.  Set by
+    // audio_generator_stop_channel() and by the duration-end path in fill_buffer.
+    // Cleared by fill_buffer when the ramp completes.  Eliminates the click that
+    // would otherwise occur when active=false snaps a non-zero current_amp to 0.
+    volatile bool stopping;
     audio_wave_type_t wave_type;   // Active waveform, latched from params at start/apply
 
     // White noise LFSR state (Galois 32-bit xorshift, polynomial 0xB4BCD35C).
@@ -151,6 +157,18 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
  * @return esp_err_t ESP_OK on success
  */
 esp_err_t audio_generator_stop_channel(int channel);
+
+/**
+ * @brief Check whether any channel is currently fading out (stopping).
+ *
+ * Returns true while at least one channel has its stop-fade ramp active.
+ * Used by web_server's stop_handler to wait for all channels to complete
+ * their 5 ms fade-to-zero before turning off LEDs, so the user perceives
+ * a clean synchronized stop.
+ *
+ * @return true if any channel is still fading out, false otherwise.
+ */
+bool audio_generator_any_stopping(void);
 
 /**
  * @brief Generate audio samples for mixing with I2S output

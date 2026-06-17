@@ -248,11 +248,13 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
         ch->sweeps[AUDIO_PARAM_FREQUENCY].duration_samples = ch->total_samples;
         ch->sweeps[AUDIO_PARAM_FREQUENCY].curve            = params->sweep_type;
     }
+    ch->stopping = false;  // clear any prior stop-fade state from a reused channel slot
     ch->active = true;
 
     if (params->duration_ms > 0 && ch->total_samples == 0) {
         ESP_LOGW(TAG, "Duration calculation resulted in zero samples - possible overflow");
         ch->active = false;
+        ch->stopping = false;
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -352,12 +354,59 @@ esp_err_t audio_generator_stop_channel(int channel) {
 
     xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
 
-    audio_channels[channel].active = false;
-    ESP_LOGI(TAG, "Stopped audio channel %d", channel);
+    audio_gen_channel_t* ch = &audio_channels[channel];
+    if (ch->active && !ch->stopping) {
+        // Arm a 5 ms amp ramp toward 0 and mark the channel as stopping.
+        // fill_buffer's per-sample loop will deactivate the channel when the
+        // ramp completes.  This eliminates the click that would otherwise
+        // happen when active=false snaps a non-zero current_amp instantly to 0.
+        //
+        // Cancel any in-progress amplitude sweep: without this, the per-sample
+        // sweep recomputation (lines ~556-569) would overwrite the ramp's
+        // current_amp on every sample after the snap, defeating the fade and
+        // causing the channel to emit ~800 samples of stale audio per buffer.
+        // Reference: bug_stop_click_deep_investigation_2026-06-17.md (Inv 16 #1).
+        ch->amp_target          = 0.0f;
+        ch->amp_step            = -ch->current_amp / (float)AUDIO_AMP_RAMP_SAMPLES;
+        ch->amp_ramp_remaining  = AUDIO_AMP_RAMP_SAMPLES;
+        ch->sweeps[AUDIO_PARAM_AMPLITUDE].duration_samples = 0;
+        ch->stopping            = true;
+        ESP_LOGD(TAG, "Channel %d entering stop fade", channel);
+    } else if (!ch->active) {
+        // Already inactive — nothing to fade.  Idempotent.
+        ESP_LOGD(TAG, "Channel %d stop requested but already inactive", channel);
+    }
+    // else: already stopping — repeat stop is a no-op (don't re-arm the ramp).
 
     xSemaphoreGive(audio_gen_mutex);
     return ESP_OK;
 }
+
+bool audio_generator_any_stopping(void) {
+    if (!generator_initialized) return false;
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    bool any = false;
+    for (int i = 0; i < MAX_AUDIO_CHANNELS; i++) {
+        if (audio_channels[i].active && audio_channels[i].stopping) {
+            any = true;
+            break;
+        }
+    }
+    xSemaphoreGive(audio_gen_mutex);
+    return any;
+}
+
+// Cross-buffer smoothing state for the 1/N_active scaling factor.  Without
+// smoothing, the moment a channel deactivates N drops by 1, so each surviving
+// channel's contribution is multiplied by N/(N-1) on the next buffer — a hard
+// step (6 dB at N=2→1).  We instead ramp inv_n_active over AUDIO_AMP_RAMP_SAMPLES
+// samples whenever the target changes, eliminating the click.
+// Reference: bug_stop_click_deep_investigation_2026-06-17.md (Inv 16 #2),
+// bug_stop_click_bg_i2s_state_2026-06-17.md (Inv 17 #1).
+static float    s_inv_n_current     = 1.0f;
+static float    s_inv_n_target      = 1.0f;
+static float    s_inv_n_step        = 0.0f;
+static uint32_t s_inv_n_ramp_left   = 0u;
 
 esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     if (!generator_initialized || !output_buffer) {
@@ -376,7 +425,32 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     for (int ch = 0; ch < MAX_AUDIO_CHANNELS; ch++) {
         if (audio_channels[ch].active) n_active++;
     }
-    float inv_n_active = (n_active > 0) ? (1.0f / (float)n_active) : 1.0f;
+    float new_target = (n_active > 0) ? (1.0f / (float)n_active) : 1.0f;
+
+    // Arm a smoothing ramp whenever the target gain changes.  This prevents
+    // the step-up click that would otherwise fire at the buffer boundary
+    // immediately after a channel deactivates (when N drops by 1, the
+    // surviving channels' scale jumps from 1/N to 1/(N-1)).
+    if (new_target != s_inv_n_target) {
+        s_inv_n_target    = new_target;
+        s_inv_n_step      = (new_target - s_inv_n_current) / (float)AUDIO_AMP_RAMP_SAMPLES;
+        s_inv_n_ramp_left = AUDIO_AMP_RAMP_SAMPLES;
+    }
+
+    // Pre-compute per-sample inv_n values so each per-channel mix loop reads
+    // the same value at sample index i (rather than advancing the ramp once
+    // per channel × sample).  Stack cost: samples × 4 bytes; ~1 KB at samples=256.
+    float inv_n_per_sample[samples];
+    for (size_t i = 0; i < samples; i++) {
+        if (s_inv_n_ramp_left > 0u) {
+            s_inv_n_current += s_inv_n_step;
+            s_inv_n_ramp_left--;
+            if (s_inv_n_ramp_left == 0u) {
+                s_inv_n_current = s_inv_n_target;  // snap absorbs float drift
+            }
+        }
+        inv_n_per_sample[i] = s_inv_n_current;
+    }
 
     // Mix all active channels
     for (int ch = 0; ch < MAX_AUDIO_CHANNELS; ch++) {
@@ -386,12 +460,22 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             continue;
         }
 
-        // Check if channel has finished its duration
+        // Check if channel has finished its duration.  Instead of snapping
+        // active=false (which clicks because current_amp is non-zero), arm a
+        // 5 ms fade-to-zero and let the per-sample ramp-completion path
+        // deactivate cleanly.  Adds ~5 ms past the nominal end of the
+        // channel's duration but eliminates the click.
         if (channel->total_samples > 0 && channel->samples_generated >= channel->total_samples) {
-            channel->active = false;
-            ESP_LOGI(TAG, "Channel %d completed (%llu samples, %.1f%% progress)", ch, channel->samples_generated,
-                     (float)channel->samples_generated * 100.0f / channel->total_samples);
-            continue;
+            if (!channel->stopping) {
+                channel->amp_target          = 0.0f;
+                channel->amp_step            = -channel->current_amp / (float)AUDIO_AMP_RAMP_SAMPLES;
+                channel->amp_ramp_remaining  = AUDIO_AMP_RAMP_SAMPLES;
+                // Same amp-sweep cancellation as in audio_generator_stop_channel.
+                channel->sweeps[AUDIO_PARAM_AMPLITUDE].duration_samples = 0;
+                channel->stopping            = true;
+                ESP_LOGD(TAG, "Channel %d duration reached, entering stop fade", ch);
+            }
+            // Fall through to normal mixing so the fade-out is actually emitted.
         }
 
         // --- Lock-free pending-params snapshot (Step 5.2) ---
@@ -501,6 +585,16 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                 channel->amp_ramp_remaining--;
                 if (channel->amp_ramp_remaining == 0) {
                     channel->current_amp = channel->amp_target;  // snap to exact target — eliminates float-accumulation drift
+                    // Stop-fade complete: deactivate channel now that amp is 0.
+                    // Setting active=false mid per-sample-loop is safe: the
+                    // outer per-channel loop's `if (!active) continue;` only
+                    // runs at the start of each buffer, so the remaining
+                    // samples in THIS buffer keep mixing — but at current_amp=0
+                    // they contribute silence anyway.
+                    if (channel->stopping) {
+                        channel->active   = false;
+                        channel->stopping = false;
+                    }
                 }
             }
 
@@ -858,9 +952,10 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                 final_right = binaural_right;
             }
 
-            // Mix into output buffer (stereo interleaved).
-            output_buffer[i * 2]     += final_left  * inv_n_active;
-            output_buffer[i * 2 + 1] += final_right * inv_n_active;
+            // Mix into output buffer (stereo interleaved).  Use the smoothed
+            // per-sample gain so transitions in N_active don't click.
+            output_buffer[i * 2]     += final_left  * inv_n_per_sample[i];
+            output_buffer[i * 2 + 1] += final_right * inv_n_per_sample[i];
 
             // Update phase accumulators.  Modular uint32_t arithmetic wraps for
             // free at 2^32; no branch is needed to keep phase in range.

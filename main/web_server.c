@@ -631,12 +631,31 @@ static esp_err_t stop_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Stopping all audio + LED flicker + timeline");
 
-    // Stop timeline execution first so it can't restart anything we're about to stop.
-    config_parser_stop_timeline();
-
-    // Stop all audio generators
+    // ARM all audio fades FIRST, before any blocking call.  Both audio_generator
+    // and bg_player respond to stop by arming a 5 ms amp fade and then
+    // (in parallel) tearing down their producer state.  If we called
+    // config_parser_stop_timeline() first (it calls bg_player_stop which blocks
+    // up to 2 s for the HTTP producer task to exit), the generator channels
+    // would keep playing for those 2 s — producing a delayed second click.
+    // By arming all fades first, BG and generators fade together over ~5 ms.
+    // Reference: bug_stop_click_bg_i2s_state_2026-06-17.md (Inv 17 #3).
     for (int i = 0; i < 8; i++) {
         audio_manager_stop_generation(i);
+    }
+
+    // Now do the heavy stop work (BG producer teardown can take up to 2 s).
+    // The generator fades have already started silencing the audio, and the
+    // BG fade is armed inside bg_player_stop() which uses a poll loop now
+    // (Inv 17 #2 fix) so it won't drain less than needed.
+    config_parser_stop_timeline();
+
+    // Wait for every channel's stop-fade to complete before silencing the LEDs.
+    // The fade is AUDIO_AMP_RAMP_SAMPLES (220) samples = ~5 ms at 44.1 kHz;
+    // a 50 ms ceiling is a safety net in case the synthesis loop is starved.
+    // Polling at 2 ms intervals keeps the loop cheap.
+    for (int waited = 0; waited < 50; waited += 2) {
+        if (!audio_generator_any_stopping()) break;
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 
     // Stop LED flicker on all 4 channels (mask 0x0F).
