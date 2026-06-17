@@ -14,6 +14,7 @@
 #include "lock_free_comm.h"
 #include "isr_profiling.h"
 #include "memory_pool.h"
+#include "bg_player.h"
 
 static const char* TAG = "main";
 
@@ -117,6 +118,15 @@ void app_main(void)
         return;
     }
 
+    // Initialize background audio player (Plan 006).
+    // Ring buffer is in static .bss — no heap impact, no ordering constraints.
+    ret = bg_player_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize bg_player: %s", esp_err_to_name(ret));
+        // Non-fatal: session continues without BG audio support.
+    }
+
+
     ESP_LOGI(TAG, "ESP32 Audio Player initialized successfully");
 
     // Start lock-free performance monitoring task — disabled during soak validation;
@@ -205,6 +215,7 @@ void app_main(void)
             ESP_LOGI(TAG, "Web interface available at: %s", url_buffer);
         }
     }
+
 
     // Main application loop
     while (1) {

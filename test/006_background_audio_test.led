@@ -1,0 +1,97 @@
+# Plan 006 — Background Audio Playback Test
+#
+# BEFORE USING THIS FILE:
+# =======================
+# 1. Replace "CHANGE_ME" in the BG line below with the actual HTTP URL of a
+#    WAV file accessible from the ESP32 device over WiFi.
+#
+#    The WAV file MUST meet all of these requirements:
+#      - Sample rate:   44100 Hz  (any other rate is rejected with an error log)
+#      - Channels:      1 (mono) or 2 (stereo)
+#      - Bit depth:     16-bit integer PCM  OR  32-bit IEEE float PCM
+#      - Container:     Standard RIFF/WAVE (not RF64, not BWF extensible format 0xFFFE)
+#      - Minimum length: 60 seconds recommended (the BG stream loops on EOF, but
+#                         very short files loop frequently with a 200 ms gap each time)
+#
+#    Example replacements:
+#      BG http://192.168.1.10:8000/rain.wav 0 25
+#      BG https://your-server.example.com/audio/pad.wav 0 20
+#      BG http://192.168.1.1:8080/meditation_pad.wav -10 30
+#
+#    Quick test server (run on your development machine in a directory that
+#    contains a suitable WAV file):
+#      python3 -m http.server 8000
+#    Then set the BG URL to http://<your-machine-ip>:8000/<filename>.wav
+#
+# 2. Make sure the ESP32 is connected to WiFi (configured via wifi_manager).
+#    If WiFi is not connected when the timeline starts, bg_player_start()
+#    returns ESP_ERR_INVALID_STATE, BG is silenced, and a warning is logged.
+#    The synthesized channels continue regardless.
+#
+# 3. To verify sdcard:// no-op behaviour (CONFIG_BG_SDCARD_ENABLED=n, default):
+#    Replace the BG line with: BG sdcard://test.wav 0 30
+#    Expected serial output:
+#      E bg_player: BG: SD card support not enabled in this build
+#              (CONFIG_BG_SDCARD_ENABLED=n). Ignoring BG entry: sdcard://test.wav
+#    The synthesized channels below must still function normally.
+#
+# WHAT THIS TEST VERIFIES:
+# ========================
+#  - BG pre-roll: BG audio is audible BEFORE any synthesized tone fires
+#  - BG continues underneath synthesized channels (separate post-mix stage)
+#  - binaural beat pair (ch1 + ch2) with Plan 005 freq_r 7th-token syntax
+#  - pink noise underlay (wave_type=5) mixed alongside BG
+#  - synthesized channel fade-out while BG continues
+#  - BG loops seamlessly at EOF (re-opens HTTP connection)
+#  - bg_player_stop fade-out at timeline end (220-sample ramp, no click)
+#
+# EXPECTED SERIAL LOG SEQUENCE:
+# ==============================
+#  I config_parser: BG pre-roll: starting http://... pan=0.00 loudness=0.25
+#  I bg_player: BG: HTTP streaming <N> bytes from 'http://...'
+#  I bg_player: BG fade-in: target_loudness=0.25 ramp=220 samples
+#  [synthesized channel entries fire at their scheduled times]
+#  I bg_player: BG: EOF on 'http://...', re-opening for loop (iteration 2)
+#  [... loop continues ...]
+#  I bg_player: BG fade-out complete, stopping producer task
+#
+# HEADROOM NOTE:
+# ==============
+#  At the loudness levels below the total peak is:
+#    BG = 0.25 + ch1+ch2 binaural = 0.50 (inv_n_active) + ch3 noise = 0.30
+#    Theoretical peak = 1.05  (just above 0 dBFS)
+#  The existing int16 clamp in audio_test.c absorbs this without audible
+#  distortion at these modest levels. If you increase any loudness values,
+#  keep the sum of BG loudness + sum of active synthesized channel amplitudes
+#  below 100 to avoid clipping.
+#
+# ────────────────────────────────────────────────────────────────────────────
+
+# === Background audio (pre-roll — starts BEFORE any timeline event) ===
+# Replace CHANGE_ME with your actual HTTP URL (see instructions above)
+BG http://CHANGE_ME/path/to/test.wav 0 25
+
+# === Section 1 (t=0-7s): short 200 Hz tone — verify BG continues underneath ===
+# ch0: 200 Hz sine, centred, 50% amplitude, 0 pan, wave_type=0 (sine)
+A 2000 200 -100 50 0 0
+A 7000 200 -100 0 0 0
+
+# === Section 2 (t=8-14s): binaural pair using Plan 005 freq_r 7th-token syntax ===
+# ch1: left ear  200 Hz
+# ch2: right ear 208 Hz  →  8 Hz alpha-range binaural beat
+A 8000 200 -100 50 0 1 200
+A 8000 200 100 50 0 2 208
+A 14000 200 -100 0 0 1
+A 14000 200 100 0 0 2
+
+# === Section 3 (t=15-30s): pink noise underlay alongside BG — verify mix stack ===
+# ch3: pink noise (wave_type=5), centred, 30% amplitude
+# 9-token form: A <time_ms> <freq_hz> <pan> <amplitude> <mod_depth> <channel> <freq_r> <wave_type>
+A 15000 0 0 30 0 3 0 5
+A 30000 0 0 0 0 3 0 5
+
+# === Section 4 (t=31-35s): all synthesized channels off, BG still playing ===
+# (Nothing needed — ch0-3 already ramp to 0 above.  BG loops on.)
+
+# === End of test (t=35s): silence all channels; timeline stop will call bg_player_stop ===
+A 35000 200 -100 0 0 0

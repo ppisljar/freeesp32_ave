@@ -7,6 +7,7 @@
 #include "timing_engine.h"
 #include "lock_free_comm.h"
 #include "memory_pool.h"
+#include "bg_player.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -15,6 +16,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <math.h>
 
 static const char* TAG = "config_parser";
 
@@ -32,6 +34,7 @@ static bool timeline_loop = false;
 static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t *entry);
 static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config_led_entry_t *led_entry);
 static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, config_audio_entry_t *audio_entry);
+static esp_err_t parse_bg_line(const char *tokens[], size_t token_count, config_bg_entry_t *bg_entry);
 static float parse_value_with_interpolation(const char *str, config_interpolation_t *interp);
 static void timeline_timing_callback(uint64_t timestamp_us, void *user_data);
 static void timeline_execution_task(void *pvParameters);
@@ -146,6 +149,83 @@ esp_err_t config_parser_parse_content(const char *content, size_t content_length
         // Remove carriage return if present
         if (line_length > 0 && line_buffer[line_length - 1] == '\r') {
             line_buffer[line_length - 1] = '\0';
+        }
+
+        // ---------------------------------------------------------------------------
+        // BG line pre-check (Plan 006 Step 3)
+        //
+        // Detect "BG <url> <pan> <loudness>" BEFORE calling parse_line.
+        // Rationale: BG is a session-level annotation, not a timeline entry.
+        // It must NOT be added to timeline->entries[] and must NOT route through
+        // parse_line's union dispatch.  We intercept it here, parse it into
+        // timeline->bg, and skip the rest of the per-entry processing.
+        //
+        // Detection: skip leading whitespace, then check for two-character keyword
+        // "BG" (case-insensitive) followed by whitespace or end-of-string.
+        // Comments and empty lines will have already been caught by parse_line's
+        // early-return check, but we replicate the skip here to be safe.
+        // ---------------------------------------------------------------------------
+        {
+            const char *bg_scan = line_buffer;
+            while (isspace((unsigned char)*bg_scan)) { bg_scan++; }
+
+            if ((bg_scan[0] == 'B' || bg_scan[0] == 'b') &&
+                (bg_scan[1] == 'G' || bg_scan[1] == 'g') &&
+                (bg_scan[2] == '\0' || isspace((unsigned char)bg_scan[2]))) {
+
+                // Tokenize this line to extract url, pan, loudness
+                char bg_line_copy[CONFIG_PARSER_MAX_LINE_LENGTH];
+                strncpy(bg_line_copy, line_buffer, sizeof(bg_line_copy) - 1);
+                bg_line_copy[sizeof(bg_line_copy) - 1] = '\0';
+
+                // Strip inline comments before tokenizing
+                char *bg_comment = strchr(bg_line_copy, '#');
+                if (bg_comment) { *bg_comment = '\0'; }
+
+                const char *bg_tokens[8];
+                size_t bg_token_count = 0;
+                char *bg_tok = strtok(bg_line_copy, " \t");
+                while (bg_tok && bg_token_count < sizeof(bg_tokens) / sizeof(bg_tokens[0])) {
+                    bg_tokens[bg_token_count++] = bg_tok;
+                    bg_tok = strtok(NULL, " \t");
+                }
+
+                // bg_tokens[0] is "BG"; pass the rest to parse_bg_line
+                if (bg_token_count >= 1) {
+                    // Save old URL before parse_bg_line overwrites it (for last-wins warning)
+                    char old_url[sizeof(timeline->bg.url)];
+                    if (timeline->has_bg) {
+                        strncpy(old_url, timeline->bg.url, sizeof(old_url) - 1);
+                        old_url[sizeof(old_url) - 1] = '\0';
+                    } else {
+                        old_url[0] = '\0';
+                    }
+
+                    esp_err_t bg_ret = parse_bg_line(bg_tokens + 1, bg_token_count - 1,
+                                                     &timeline->bg);
+                    if (bg_ret == ESP_OK) {
+                        if (timeline->has_bg) {
+                            // Last-wins: warn that previous BG URL is being replaced
+                            ESP_LOGW(TAG, "Line %zu: multiple BG lines — last one wins "
+                                     "(replacing previous URL: %s with: %s)",
+                                     line_number, old_url, timeline->bg.url);
+                        }
+                        timeline->has_bg = true;
+                        ESP_LOGI(TAG, "Line %zu: BG parsed — url=%s pan=%.2f loudness=%.2f",
+                                 line_number, timeline->bg.url, timeline->bg.pan,
+                                 timeline->bg.loudness);
+                    } else {
+                        ESP_LOGW(TAG, "Line %zu: BG parse failed (%s) — skipping",
+                                 line_number, esp_err_to_name(bg_ret));
+                    }
+                }
+
+                // Advance to next line — do NOT add BG to entries[]
+                line_start = line_end;
+                if (*line_start == '\n') { line_start++; }
+                line_number++;
+                continue;
+            }
         }
 
         // Parse line
@@ -294,11 +374,37 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
         }
     }
 
+    // Copy BG descriptor (added in Plan 006 Step 1)
+    persistent_timeline.has_bg = timeline->has_bg;
+    if (timeline->has_bg) {
+        memcpy(&persistent_timeline.bg, &timeline->bg, sizeof(config_bg_entry_t));
+    }
+
     current_timeline = &persistent_timeline;
     current_entry_index = 0;
     timeline_start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
     timeline_running = true;
     timeline_loop = loop;
+
+    // ---- BG pre-roll (Plan 006 Step 7) ----------------------------------------
+    // Start the background audio stream BEFORE dispatching the t=0 batch so that
+    // the BG producer task has a head-start filling the ring buffer.  This means
+    // BG audio is already streaming when the first synthesized tone fires.
+    //
+    // Error handling: bg_player_start() returns ESP_ERR_INVALID_STATE when WiFi is
+    // not connected (Step 6 guard).  A warning is logged and the timeline continues
+    // without BG — the synthesised channels are unaffected.
+    if (persistent_timeline.has_bg) {
+        ESP_LOGI(TAG, "BG pre-roll: starting %s pan=%.2f loudness=%.2f",
+                 persistent_timeline.bg.url,
+                 persistent_timeline.bg.pan,
+                 persistent_timeline.bg.loudness);
+        esp_err_t bg_ret = bg_player_start(&persistent_timeline.bg);
+        if (bg_ret != ESP_OK) {
+            ESP_LOGW(TAG, "BG player start failed (%s) — continuing without BG",
+                     esp_err_to_name(bg_ret));
+        }
+    }
 
     // Send lock-free message for timeline start
     lock_free_message_t start_msg = {
@@ -409,6 +515,14 @@ esp_err_t config_parser_stop_timeline(void)
     current_entry_index = 0;
 
     xSemaphoreGive(timeline_mutex);
+
+    // ---- BG shutdown (Plan 006 Step 7) ----------------------------------------
+    // Stop the background audio stream on timeline stop.  bg_player_stop() is
+    // safe to call when BG is not active (returns ESP_OK immediately), so we
+    // call it unconditionally here rather than guarding with bg_player_is_active().
+    // Called AFTER releasing timeline_mutex to avoid holding the mutex during the
+    // fade-out + streamer-task join (which may block up to 2 s).
+    bg_player_stop();
 
     // Cancel any pending timeline events in timing engine
     timing_engine_cancel_events_by_type(TIMING_EVENT_TIMELINE);
@@ -674,6 +788,77 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
     } else {
         audio_entry->wave_type = 0;
     }
+
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// parse_bg_line — Plan 006 Step 3
+//
+// Called from config_parser_parse_content when the first token of a line is
+// "BG" (case-insensitive).  The BG keyword token is consumed by the caller;
+// this function receives only the REMAINING tokens: [0]=url, [1]=pan, [2]=loudness.
+//
+// Validation summary:
+//   - Exactly 3 tokens required (url, pan, loudness).
+//   - URL scheme must be "http://", "https://", or "sdcard://" (shallow check only;
+//     no DNS resolution or header fetch — that is Step 6).
+//   - pan  clamped to [-100, +100] and stored as pan / 100.0f in bg_entry->pan.
+//   - loudness clamped to [0, 100] and stored as loudness / 100.0f in bg_entry->loudness.
+//   - URL copied with strncpy into bg_entry->url[256]; null-terminated.
+//
+// Return:
+//   ESP_OK              — bg_entry populated; caller sets timeline->has_bg = true.
+//   ESP_ERR_INVALID_ARG — wrong token count or invalid URL scheme; bg_entry unchanged.
+// ---------------------------------------------------------------------------
+static esp_err_t parse_bg_line(const char *tokens[], size_t token_count,
+                                config_bg_entry_t *bg_entry)
+{
+    if (!tokens || !bg_entry) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Must have at least 3 tokens: url, pan, loudness
+    if (token_count < 3) {
+        ESP_LOGW(TAG, "BG line needs 3 tokens (url pan loudness), got %zu -- skipping", token_count);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // ----- URL: validate scheme (shallow prefix check only) -----
+    const char *url = tokens[0];
+    bool valid_scheme =
+        (strncmp(url, "http://",   7) == 0) ||
+        (strncmp(url, "https://",  8) == 0) ||
+        (strncmp(url, "sdcard://", 9) == 0);
+
+    if (!valid_scheme) {
+        ESP_LOGW(TAG, "BG line: unsupported URL scheme in '%s' "
+                 "(must be http://, https://, or sdcard://) -- skipping", url);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Copy URL; warn and truncate if too long for the buffer
+    size_t url_len = strlen(url);
+    if (url_len >= sizeof(bg_entry->url)) {
+        ESP_LOGW(TAG, "BG URL truncated from %zu to %zu chars",
+                 url_len, sizeof(bg_entry->url) - 1);
+    }
+    strncpy(bg_entry->url, url, sizeof(bg_entry->url) - 1);
+    bg_entry->url[sizeof(bg_entry->url) - 1] = '\0';
+
+    // ----- pan: range [-100, +100] -> stored as [-1.0, +1.0] -----
+    float pan_raw = (float)atof(tokens[1]);
+    if (pan_raw < -100.0f || pan_raw > 100.0f) {
+        ESP_LOGW(TAG, "BG pan value %.1f clamped to [-100, +100]", pan_raw);
+    }
+    bg_entry->pan = fmaxf(-1.0f, fminf(1.0f, pan_raw / 100.0f));
+
+    // ----- loudness: range [0, 100] -> stored as [0.0, 1.0] -----
+    float loud_raw = (float)atof(tokens[2]);
+    if (loud_raw < 0.0f || loud_raw > 100.0f) {
+        ESP_LOGW(TAG, "BG loudness value %.1f clamped to [0, 100]", loud_raw);
+    }
+    bg_entry->loudness = fmaxf(0.0f, fminf(1.0f, loud_raw / 100.0f));
 
     return ESP_OK;
 }

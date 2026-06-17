@@ -14,7 +14,9 @@
  * - System configuration
  */
 
-#define WEB_SERVER_MAX_UPLOAD_SIZE  (64 * 1024)  // 64KB max file size
+#define WEB_SERVER_MAX_UPLOAD_SIZE  (32 * 1024)  // 32KB max .led file size
+// 32KB gives ~6x headroom over the worst-case 100-entry timeline (~5KB raw text).
+// Was 64KB; downsized to free DRAM for the BG audio ring buffer (Plan 006).
 #define WEB_SERVER_PORT            80
 
 typedef struct {

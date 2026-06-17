@@ -5,6 +5,7 @@
 #include "led_matrix_example.h"
 #include "audio_led_sync.h"
 #include "isr_profiling.h"
+#include "bg_player.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -123,6 +124,17 @@ void audio_test_output_task(void* pvParameters)
         esp_err_t ret = audio_generator_fill_buffer(audio_buffer, stereo_samples);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Audio generation failed: %s", esp_err_to_name(ret));
+        }
+
+        // Mix background audio into the buffer (Plan 006 Step 5).
+        // bg_player_mix_into reads from the internal ring buffer (non-blocking),
+        // applies the amplitude ramp and linear pan law, and accumulates BG
+        // samples into audio_buffer.  Called AFTER fill_buffer so BG is a
+        // post-mix stage independent of inv_n_active headroom division.
+        // Step 7 wires bg_player_start/stop into the timeline executor; this
+        // call site is already in place so Step 7 only needs to confirm the path.
+        if (bg_player_is_active()) {
+            bg_player_mix_into(audio_buffer, stereo_samples);
         }
 
         // Convert float samples to int16 for I2S output

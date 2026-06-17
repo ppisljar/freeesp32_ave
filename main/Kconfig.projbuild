@@ -18,4 +18,17 @@ config TIMELINE_DEBUG
         curve=C".  Off in production; enable during Phase 3 validation to
         confirm sweep wiring without an oscilloscope.
 
+config BG_SDCARD_ENABLED
+    bool "Enable SD card backend for BG audio"
+    default n
+    help
+        When enabled, BG audio entries with sdcard:// URLs are streamed from
+        an SD card via SDMMC/SDSPI.  Requires SD card hardware wired to the
+        ESP32 GPIO pins (not currently present on the dev board), GPIO pin
+        configuration in sdkconfig (CONFIG_SDMMC_HOST_* or CONFIG_SDSPI_*),
+        and the appropriate host driver enabled in menuconfig.
+        When disabled (default), BG entries with sdcard:// URLs are logged
+        as an error and the BG entry is treated as a no-op for that session.
+        See Plan 006 Section 2.4 for the SD bring-up checklist.
+
 endmenu

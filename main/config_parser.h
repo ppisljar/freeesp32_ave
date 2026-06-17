@@ -3,6 +3,7 @@
 
 #include "esp_err.h"
 #include "audio_generator.h"
+#include <stdbool.h>
 
 /**
  * @brief Config File Parser for .LED format
@@ -19,7 +20,8 @@
 
 typedef enum {
     CONFIG_ENTRY_LED = 0,
-    CONFIG_ENTRY_AUDIO
+    CONFIG_ENTRY_AUDIO,
+    CONFIG_ENTRY_BG          // Session-level background audio descriptor (not a timeline entry)
 } config_entry_type_t;
 
 typedef enum {
@@ -60,6 +62,29 @@ typedef struct {
     config_interpolation_t mod_interp;
 } config_audio_entry_t;
 
+/**
+ * @brief Background audio entry descriptor.
+ *
+ * Holds the session-level BG annotation parsed from a "BG <url> <pan> <loudness>" line.
+ * This struct is NOT placed in the config_entry_t.data union (which would inflate the
+ * entries array by ~200 bytes per slot).  Instead it lives directly in config_timeline_t,
+ * embedded by value, and is valid only when has_bg == true.
+ *
+ * URL buffer: 256 bytes (null-terminated).  Sufficient for any realistic HTTP/HTTPS URL
+ * in a local WiFi session (~230 usable path characters after the scheme).  If a longer
+ * URL is ever needed, increase the constant here and recompile — there is no heap
+ * allocation, so the change only adds 256 bytes to sizeof(config_timeline_t).
+ *
+ * pan:      stored as −1.0 … +1.0 (divided by 100 from the BG line's −100 … +100 token).
+ * loudness: stored as 0.0 … 1.0 (divided by 100 from the BG line's 0 … 100 token).
+ *           Maps directly to the per-sample gain applied by bg_player_mix_into().
+ */
+typedef struct {
+    char    url[256];        // Source URL: http://..., https://..., or sdcard://...
+    float   pan;             // −1.0 (hard left) to +1.0 (hard right); 0.0 = center
+    float   loudness;        // 0.0 to 1.0 gain multiplier (from BG line loudness / 100.0)
+} config_bg_entry_t;
+
 typedef struct {
     config_entry_type_t type;
     union {
@@ -73,6 +98,8 @@ typedef struct {
     size_t count;
     size_t capacity;
     char *source_content;
+    config_bg_entry_t bg;    // Background audio descriptor (valid only when has_bg == true)
+    bool has_bg;             // true when a valid BG line was parsed from this file
 } config_timeline_t;
 
 /**
