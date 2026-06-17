@@ -267,6 +267,16 @@ bool led_matrix_is_flickering_masked(uint8_t channel_mask);
  */
 float led_matrix_get_current_frequency(void);
 
+/**
+ * @brief Return bitmask of channels currently flickering.
+ *
+ * Bit N is set iff flicker_state[N].active.  Used by the VU meter sync path to
+ * broadcast brightness updates to every active channel, not just channel 0.
+ *
+ * @return uint8_t Bitmask 0x00-0x0F.
+ */
+uint8_t led_matrix_get_active_mask(void);
+
 #ifdef __cplusplus
 }
 #endif

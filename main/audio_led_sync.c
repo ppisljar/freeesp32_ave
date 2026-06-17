@@ -395,9 +395,14 @@ static void calculate_vu_meter(const float *audio_samples, size_t sample_count) 
                                                         g_sync_state->vu_config.brightness_min));
 
     // Update LEDs with new brightness (non-blocking call)
-    // Only update if LEDs are currently flickering to avoid conflicts
-    if (led_matrix_is_flickering()) {
-        led_matrix_update_flicker_params(led_matrix_get_current_frequency(), 50, brightness);
+    // Apply to ALL currently-active channels, not only channel 0.  The previous
+    // implementation used the mask=0x01 trampoline which left channels 1-3
+    // un-modulated — see bug_led_multichannel_state_2026-06-17.md (Bug B).
+    uint8_t active_mask = led_matrix_get_active_mask();
+    if (active_mask) {
+        led_matrix_update_flicker_params_masked(active_mask,
+                                                led_matrix_get_current_frequency(),
+                                                50, brightness);
     }
 }
 
@@ -457,15 +462,17 @@ static void update_led_from_sync_data(void) {
         return;
     }
 
-    // Update LEDs based on current synchronization data
-    if (led_matrix_is_flickering()) {
+    // Update LEDs based on current synchronization data — broadcast to every
+    // active channel, not just channel 0 (Bug B fix).
+    uint8_t active_mask = led_matrix_get_active_mask();
+    if (active_mask) {
         float current_freq = led_matrix_get_current_frequency();
         uint8_t brightness = (uint8_t)(g_sync_state->vu_config.brightness_min +
                                       g_sync_state->current_amplitude *
                                       (g_sync_state->vu_config.brightness_max -
                                        g_sync_state->vu_config.brightness_min));
 
-        led_matrix_update_flicker_params(current_freq, 50, brightness);
+        led_matrix_update_flicker_params_masked(active_mask, current_freq, 50, brightness);
     }
 }
 
@@ -543,6 +550,10 @@ bool audio_led_sync_is_active(void) {
     return g_sync_state && g_sync_state->active;
 }
 
+audio_led_sync_mode_t audio_led_sync_get_mode(void) {
+    return g_sync_state ? g_sync_state->mode : SYNC_MODE_DISABLED;
+}
+
 float audio_led_sync_get_current_amplitude(void) {
     return g_sync_state ? g_sync_state->current_amplitude : 0.0f;
 }
@@ -616,10 +627,11 @@ static void audio_analysis_task(void *pvParameters) {
                     // Moved from ISR: led_matrix_get_current_frequency (FPU) and
                     // led_matrix_update_flicker_params (non-IRAM, logs, gptimer) are task-safe.
                     if (sample_msg.total_samples_after_batch % 1024 == 0) {
-                        if (led_matrix_is_flickering()) {
+                        uint8_t active_mask = led_matrix_get_active_mask();
+                        if (active_mask) {
                             uint8_t brightness = (g_sync_state->vu_config.brightness_min +
                                                   g_sync_state->vu_config.brightness_max) / 2;
-                            led_matrix_update_flicker_params(
+                            led_matrix_update_flicker_params_masked(active_mask,
                                 led_matrix_get_current_frequency(), 50, brightness);
                         }
                     }

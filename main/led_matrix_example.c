@@ -719,7 +719,22 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         // ISR continues the existing rhythm — resetting it here would produce a
         // cycle of arbitrary length at the dispatch instant (the stutter the user sees).
         if (!s->active) {
-            s->cycle_start_time_us = now_us;
+            // Phase-lock new channel to any already-running peer at the same
+            // frequency so 4 channels dispatched across separate calls (with
+            // different `now_us`) still blink in unison.  Without this each
+            // call captured an independent cycle origin, producing visible
+            // phase offsets that read to a human as "different frequencies".
+            // See reports/non_planned_reports/bug_led_frequency_drift_2026-06-17.md.
+            uint64_t ref_start = now_us;
+            for (uint8_t peer = 0; peer < 4; peer++) {
+                if (peer == ch) continue;
+                if (flicker_state[peer].active &&
+                    flicker_state[peer].frequency_milliHz == freq_milliHz) {
+                    ref_start = flicker_state[peer].cycle_start_time_us;
+                    break;
+                }
+            }
+            s->cycle_start_time_us = ref_start;
             s->latched_on_time_us  = 0;
             s->led_state           = false;
             s->led_dirty           = false;
@@ -761,10 +776,27 @@ esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask)
         portEXIT_CRITICAL(&s_flicker_mux);
     }
 
+    // Teardown the timer+task only when all channels are now idle.  When this
+    // returns, either (a) no channels remain active and the render task has
+    // self-deleted (handle is NULL), or (b) channels remain and the render task
+    // is still alive.
     s_maybe_teardown_timer_and_task();
 
     if (matrix_handle) {
-        led_strip_set_all(matrix_handle, 0, 0, 0);
+        if (led_flicker_task_handle == NULL) {
+            // Render task is gone — safe to paint a final black frame ourselves.
+            // No concurrent refresh can race with this set_all (Bug F).
+            led_strip_set_all(matrix_handle, 0, 0, 0);
+            led_strip_refresh(matrix_handle);
+        } else {
+            // Render task is still running.  Don't touch the strip directly —
+            // that would (i) blank the whole strip including channels we didn't
+            // stop (Bug E) and (ii) race with led_strip_refresh in the task
+            // (Bug F).  Instead wake the task; its next snapshot will paint the
+            // stopped channels black because their active/led_state are false,
+            // leaving the still-running channels' LEDs untouched.
+            xTaskNotifyGive(led_flicker_task_handle);
+        }
     }
     return ESP_OK;
 }
@@ -1001,6 +1033,14 @@ bool led_matrix_is_flickering_masked(uint8_t channel_mask) {
         if ((channel_mask & (1u << ch)) && !flicker_state[ch].active) return false;
     }
     return (channel_mask != 0);
+}
+
+uint8_t led_matrix_get_active_mask(void) {
+    uint8_t mask = 0;
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        if (flicker_state[ch].active) mask |= (uint8_t)(1u << ch);
+    }
+    return mask;
 }
 
 float led_matrix_get_current_frequency(void) {

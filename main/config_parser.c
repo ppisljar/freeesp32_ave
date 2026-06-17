@@ -1425,8 +1425,16 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
 
     esp_err_t led_ret = ESP_OK;
 
-    // Stop audio-LED synchronization before reconfiguring LEDs
-    if (audio_led_sync_is_active()) {
+    // Stop audio-LED sync ONLY when its mode would actually change.  The LED
+    // matrix params are independent of the analysis task — the VU meter only
+    // reads samples and modulates brightness, and the LED writes here happen
+    // under s_flicker_mux which the VU update also takes.  Stopping the task
+    // here cost 200 ms (vTaskDelay in stop_audio_analysis_task) per LED entry,
+    // which serialized a 4-channel t=0 batch into ~640 ms of staggered startup.
+    // See reports/non_planned_reports/bug_led_startup_delay_2026-06-17.md.
+    bool need_sync_restart = audio_led_sync_is_active() &&
+                             (audio_led_sync_get_mode() != SYNC_MODE_VU_METER);
+    if (need_sync_restart) {
         esp_err_t sync_ret = audio_led_sync_stop();
         if (sync_ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to stop audio-LED sync: %s", esp_err_to_name(sync_ret));
@@ -1599,13 +1607,15 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                  led->channel_mask, led->frequency, led->duty_cycle, led->brightness,
                  any_sweep ? "(with sweep)" : "");
 
-        // Re-enable audio-LED synchronization in VU-meter mode
+        // Re-enable audio-LED sync in VU-meter mode, but only if it isn't
+        // already active in that mode.  In the common case (steady-state
+        // VU_METER), this entire block is a no-op — no vTaskDelay paid.
         if (!audio_led_sync_is_active()) {
             esp_err_t sync_ret = audio_led_sync_start(SYNC_MODE_VU_METER);
             if (sync_ret != ESP_OK) {
                 ESP_LOGW(TAG, "Failed to start audio-LED sync: %s", esp_err_to_name(sync_ret));
             }
-        } else {
+        } else if (audio_led_sync_get_mode() != SYNC_MODE_VU_METER) {
             audio_led_sync_set_mode(SYNC_MODE_VU_METER);
         }
     }

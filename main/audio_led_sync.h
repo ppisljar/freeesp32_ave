@@ -63,6 +63,7 @@ esp_err_t audio_led_sync_set_mode(audio_led_sync_mode_t mode);
 
 // Real-time status
 bool audio_led_sync_is_active(void);
+audio_led_sync_mode_t audio_led_sync_get_mode(void);
 float audio_led_sync_get_current_amplitude(void);
 float audio_led_sync_get_beat_frequency(void);
 uint64_t audio_led_sync_get_sync_errors(void);
