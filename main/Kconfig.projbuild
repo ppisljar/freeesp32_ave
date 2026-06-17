@@ -89,7 +89,7 @@ config LED_COUNT
 
 config LED_CHANNEL_MAP
     string "Per-pixel channel map (comma-separated, length = LED_COUNT)"
-    default "0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3"
+    default "1,1,1,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,2,2,2,2,2,3,3,2,2,3,3,2,2,3,3,2,2,3,3,2,2,2,2,2"
     depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
     help
         Flat comma-separated list of channel indices (0-3), one entry per LED.
@@ -97,11 +97,14 @@ config LED_CHANNEL_MAP
         LED_COUNT; if fewer entries are provided, missing pixels default to
         channel 0 (with a boot-time LOGW).  Extra entries beyond LED_COUNT are
         silently truncated.
-        Default value encodes the current 12×4 region layout on a 48-pixel strip:
-          pixels  0-5  → channel 0 (12 pixels total across all such runs)
-          pixels  6-17 → channel 1
-          pixels 18-29 → channel 2
-          pixels 30-47 → channel 3
+        Default value reproduces the 12×4 frame+inner-rect topology with the
+        original zig-zag wiring (even columns top-to-bottom, odd columns
+        bottom-to-top).  Region distribution matches plan 008 / the prior
+        region_grid[][] static const:
+          channel 0 (r1 inner-left rectangle)  — 8 LEDs
+          channel 1 (r2 outer-left frame)      — 16 LEDs
+          channel 2 (r3 outer-right frame)     — 16 LEDs
+          channel 3 (r4 inner-right rectangle) — 8 LEDs
 
 config LED_DIRECT_PIN_CH1
     int "Direct mode — GPIO pin for channel 1"

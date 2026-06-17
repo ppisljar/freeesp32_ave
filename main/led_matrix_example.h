@@ -153,6 +153,20 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
                                                     uint8_t duty_cycle, uint8_t brightness);
 
 /**
+ * @brief Update ONLY brightness on the masked channels.
+ *
+ * Unlike led_matrix_update_flicker_params_masked, this leaves
+ * frequency_milliHz, duty_cycle, sweep state, and cycle timing untouched.
+ * Used by the audio->LED VU sync to modulate brightness in response to
+ * audio amplitude without clobbering each channel's flicker frequency.
+ *
+ * @param channel_mask  Bitmask 0x01-0x0F.
+ * @param brightness    New brightness (0-100).
+ * @return ESP_OK on success.
+ */
+esp_err_t led_matrix_update_brightness_masked(uint8_t channel_mask, uint8_t brightness);
+
+/**
  * @brief Set flicker color on channels indicated by channel_mask.
  *
  * @param channel_mask Bitmask 0x01-0x0F.

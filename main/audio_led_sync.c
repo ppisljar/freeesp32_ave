@@ -398,15 +398,13 @@ static void calculate_vu_meter(const float *audio_samples, size_t sample_count) 
                                   normalized_amplitude * (g_sync_state->vu_config.brightness_max -
                                                         g_sync_state->vu_config.brightness_min));
 
-    // Update LEDs with new brightness (non-blocking call)
-    // Apply to ALL currently-active channels, not only channel 0.  The previous
-    // implementation used the mask=0x01 trampoline which left channels 1-3
-    // un-modulated — see bug_led_multichannel_state_2026-06-17.md (Bug B).
+    // Update LEDs with new brightness only — do NOT touch frequency/duty/sweep.
+    // The previous call to update_flicker_params_masked passed ch0's frequency
+    // (via get_current_frequency()) to every active channel, clobbering channels
+    // 1-3's distinct per-channel rates at ~172 Hz (I2S DMA tick rate).
     uint8_t active_mask = led_matrix_get_active_mask();
     if (active_mask) {
-        led_matrix_update_flicker_params_masked(active_mask,
-                                                led_matrix_get_current_frequency(),
-                                                50, brightness);
+        led_matrix_update_brightness_masked(active_mask, brightness);
     }
 }
 
@@ -420,17 +418,16 @@ static void update_led_from_sync_data(void) {
         return;
     }
 
-    // Update LEDs based on current synchronization data — broadcast to every
-    // active channel, not just channel 0 (Bug B fix).
+    // Update LEDs based on current synchronization data — brightness only,
+    // so each channel's independent flicker frequency is preserved.
     uint8_t active_mask = led_matrix_get_active_mask();
     if (active_mask) {
-        float current_freq = led_matrix_get_current_frequency();
         uint8_t brightness = (uint8_t)(g_sync_state->vu_config.brightness_min +
                                       g_sync_state->current_amplitude *
                                       (g_sync_state->vu_config.brightness_max -
                                        g_sync_state->vu_config.brightness_min));
 
-        led_matrix_update_flicker_params_masked(active_mask, current_freq, 50, brightness);
+        led_matrix_update_brightness_masked(active_mask, brightness);
     }
 }
 

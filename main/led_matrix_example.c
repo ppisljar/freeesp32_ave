@@ -885,6 +885,38 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
 }
 
 /**
+ * @brief Update ONLY brightness on the masked channels.
+ *
+ * Leaves frequency_milliHz, duty_cycle, sweep state, and cycle timing untouched.
+ * Used by the VU sync path so audio amplitude modulates brightness without
+ * clobbering each channel's independent flicker frequency.
+ */
+esp_err_t led_matrix_update_brightness_masked(uint8_t channel_mask, uint8_t brightness)
+{
+    if (brightness > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (uint8_t ch = 0; ch < 4; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        if (!flicker_state[ch].active) continue;
+
+        led_flicker_state_t *s = &flicker_state[ch];
+        portENTER_CRITICAL(&s_flicker_mux);
+        s->brightness = brightness;
+        // Mirror into sw_brightness so the ISR's cycle-boundary recompute
+        // (which reads sw_brightness via led_interp_param) preserves this
+        // value instead of reverting to the prior sweep target.
+        s->sw_brightness = (led_sweep_param_t){
+            (uint32_t)brightness * 256u,
+            (uint32_t)brightness * 256u,
+            LED_INTERP_NONE
+        };
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
+/**
  * @brief Set flicker color on channels indicated by channel_mask.
  *
  * @param channel_mask Bitmask 0x01-0x0F.
