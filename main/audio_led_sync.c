@@ -12,6 +12,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/idf_additions.h"   /* xQueueCreateWithCaps */
+#include "esp_heap_caps.h"            /* MALLOC_CAP_SPIRAM */
 #include <math.h>
 #include <string.h>
 
@@ -110,8 +112,14 @@ esp_err_t audio_led_sync_init(void) {
     // Configure VU meter timing coefficients
     configure_vu_meter_timing(&g_sync_state->vu_config);
 
-    // Create audio sample queue for task communication
-    audio_sample_queue = xQueueCreate(AUDIO_ANALYSIS_QUEUE_SIZE, sizeof(audio_sample_msg_t));
+    // Create audio sample queue in PSRAM — this queue holds ~34 KB of
+    // per-buffer audio samples (AUDIO_ANALYSIS_QUEUE_SIZE × sizeof(audio_sample_msg_t)).
+    // Putting it in PSRAM frees that DRAM for FreeRTOS task stacks, the BG ring,
+    // WiFi/lwIP buffers, and I2S DMA descriptors.  ISR access (xQueueSendFromISR)
+    // is safe per ESP-IDF docs since this codebase does no flash writes from ISR.
+    audio_sample_queue = xQueueCreateWithCaps(AUDIO_ANALYSIS_QUEUE_SIZE,
+                                              sizeof(audio_sample_msg_t),
+                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!audio_sample_queue) {
         free(g_sync_state);
         g_sync_state = NULL;
@@ -218,7 +226,7 @@ esp_err_t audio_led_sync_deinit(void) {
         queue_ready = false;
         // Small delay to ensure any ongoing ISR completes
         vTaskDelay(pdMS_TO_TICKS(10));
-        vQueueDelete(audio_sample_queue);
+        vQueueDeleteWithCaps(audio_sample_queue);
         audio_sample_queue = NULL;
     }
 

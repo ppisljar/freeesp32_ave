@@ -120,6 +120,7 @@
 #include "audio_generator.h"    /* AUDIO_GEN_BUFFER_SIZE */
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"           /* esp_timer_get_time for hot-path profiling */
 #include "esp_system.h"          /* esp_get_free_heap_size */
 #include "esp_heap_caps.h"       /* MALLOC_CAP_SPIRAM */
 #include "freertos/FreeRTOS.h"
@@ -137,14 +138,7 @@ static const char *TAG = "bg_player";
 /** Ring buffer capacity in bytes (float stereo interleaved).
  *  32 KB ≈ 93 ms at 44 100 Hz / stereo / float.
  *  Must be a power-of-2 multiple for stream-buffer alignment.  */
-#define BG_RING_BYTES           65536u  /* 64 KB float stereo ≈ 186 ms headroom.
-                                            * Stays in INTERNAL DRAM (fits the
-                                            * largest ~111 KB region).  Tried
-                                            * 128 KB in PSRAM but the per-sample
-                                            * consumer read jitter from PSRAM
-                                            * caused more clicking, not less.
-                                            * 186 ms is plenty for typical WiFi
-                                            * micro-stalls on a quiet LAN. */
+#define BG_RING_BYTES         1048576u  /* 1 MB float stereo ≈ 3 s headroom. */
 
 /** Trigger level: xStreamBufferCreate wakes a blocking receiver when at least
  *  this many bytes are available.  1024 = 128 stereo float samples.  We use
@@ -175,7 +169,11 @@ static const char *TAG = "bg_player";
 /** HTTP receive buffer size (bytes).
  *  4 KB balances TCP segment coalescing with memory pressure.  The esp_http_client
  *  internal buffer holds at most this many bytes before returning to the caller.  */
-#define BG_HTTP_RECV_BUF_BYTES   4096u
+#define BG_HTTP_RECV_BUF_BYTES  16384u  /* match BG_HTTP_CHUNK_BYTES so each
+                                         * esp_http_client_read of one chunk
+                                         * needs only ONE underlying recv()
+                                         * instead of looping 4× through a
+                                         * smaller internal buffer. */
 
 /** HTTP transmit buffer size (bytes).
  *  GET request has no body; 1 KB is more than sufficient for the request line
@@ -196,7 +194,7 @@ static const char *TAG = "bg_player";
 /** PCM streaming chunk size (raw bytes from HTTP).
  *  2 KB = 512 stereo int16 frames.  Small enough to keep the ring buffer
  *  filling in fine-grained increments without excessive call overhead.           */
-#define BG_HTTP_CHUNK_BYTES      2048u
+#define BG_HTTP_CHUNK_BYTES     16384u  /* 16 KB per HTTP read. */
 
 /** Maximum consecutive URL re-open failures before the streamer task gives up.
  *  On each success the counter resets to 0, so transient failures during a
@@ -235,12 +233,8 @@ typedef struct {
 
 static bg_player_t s_bg;   /* zero-initialised by the linker (.bss)                */
 
-/* Static .bss storage for the ring buffer.
- * +1 byte: FreeRTOS reserves one extra byte for the stream buffer's internal
- * empty/full disambiguation.  Static allocation eliminates heap fragmentation
- * failures — if BG_RING_BYTES is ever too large for internal DRAM, the build
- * fails at link time (not at runtime). */
-static uint8_t s_bg_ring_storage[BG_RING_BYTES + 1];
+/* Ring buffer: 1 MB storage in PSRAM, control struct in DRAM .bss. */
+static uint8_t *s_bg_ring_storage = NULL;
 static StaticStreamBuffer_t s_bg_ring_ctrl;
 
 /* ---------------------------------------------------------------------------
@@ -333,15 +327,15 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
                                 const wav_format_t *fmt,
                                 const uint8_t *leftover, size_t leftover_len)
 {
-    /* Allocate raw int16 read buffer on heap (avoids 2 KB stack pressure).     */
-    uint8_t *raw_buf = malloc(BG_HTTP_CHUNK_BYTES);
-    /* Float output buffer: worst case BG_HTTP_CHUNK_BYTES / 2 int16 samples,
-     * each converted to a stereo pair of floats.  For 16-bit stereo the frame
-     * size is 4 bytes, so max_frames = BG_HTTP_CHUNK_BYTES / 4 = 512 frames
-     * = 1024 floats = 4096 bytes.                                              */
+    /* Scratch buffers explicitly in INTERNAL DRAM. At BG_HTTP_CHUNK_BYTES=16 KB
+     * default malloc would route them to PSRAM (above ALWAYSINTERNAL threshold)
+     * which slows the producer's per-byte conversion loop. */
+    uint8_t *raw_buf = heap_caps_malloc(BG_HTTP_CHUNK_BYTES,
+                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t frame_bytes  = (size_t)(fmt->channels) * (fmt->bits_per_sample / 8u);
     const size_t max_frames   = BG_HTTP_CHUNK_BYTES / frame_bytes;
-    float       *flt_buf      = malloc(max_frames * 2u * sizeof(float));
+    float       *flt_buf      = heap_caps_malloc(max_frames * 2u * sizeof(float),
+                                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
     if (!raw_buf || !flt_buf) {
         ESP_LOGE(TAG, "BG HTTP: PCM buffer malloc failed (raw=%p flt=%p)",
@@ -378,13 +372,21 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
      * 2. Main streaming loop: read BG_HTTP_CHUNK_BYTES at a time from HTTP,
      *    convert int16→float, push to ring.
      * ----------------------------------------------------------------------- */
+    /* Per-stage timing accumulators (microseconds). */
+    uint64_t total_http_us = 0, total_conv_us = 0, total_send_us = 0;
+    uint32_t chunk_count = 0;
+    uint64_t last_report_us = esp_timer_get_time();
+
     while (s_bg.streaming) {
         if (s_bg.ring == NULL) {
             break;
         }
 
+        uint64_t t0 = esp_timer_get_time();
         int bytes_read = esp_http_client_read(client, (char *)raw_buf,
                                               (int)BG_HTTP_CHUNK_BYTES);
+        uint64_t t1 = esp_timer_get_time();
+        total_http_us += (t1 - t0);
         if (bytes_read <= 0) {
             /* bytes_read == 0: clean EOF (server closed connection).
              * bytes_read  < 0: socket error / timeout.
@@ -401,6 +403,7 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
         }
 
         /* Convert raw bytes to stereo float frames.                          */
+        uint64_t t2 = esp_timer_get_time();
         size_t frames = (size_t)bytes_read / frame_bytes;
         for (size_t i = 0; i < frames; i++) {
             const int16_t *p = (const int16_t *)(raw_buf + i * frame_bytes);
@@ -408,6 +411,8 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
             flt_buf[i * 2u + 1u]  = (fmt->channels == 2u) ? (float)p[1] / 32768.0f
                                                             : flt_buf[i * 2u];
         }
+        uint64_t t3 = esp_timer_get_time();
+        total_conv_us += (t3 - t2);
 
         size_t bytes_to_send = frames * 2u * sizeof(float);
         if (bytes_to_send == 0u) {
@@ -419,8 +424,12 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
          * pressure mechanism: if the consumer (audio output task at priority 5)
          * falls behind, this send blocks and the producer waits rather than
          * over-filling the ring.                                              */
+        uint64_t t4 = esp_timer_get_time();
         size_t sent = xStreamBufferSend(s_bg.ring, flt_buf, bytes_to_send,
                                         pdMS_TO_TICKS(500));
+        uint64_t t5 = esp_timer_get_time();
+        total_send_us += (t5 - t4);
+        chunk_count++;
         if (sent < bytes_to_send) {
             /* Timeout on send — ring should not stay full for 500 ms.
              * This can happen if the consumer task was suspended.  Log once
@@ -431,23 +440,40 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
         }
         s_bg.bytes_streamed += (uint32_t)sent;
 
-        /* Periodic diagnostic — every ~5 s log underrun count and ring level.
-         * 5 s at 176 KB/s file rate = ~880 KB → ~440 chunks of 2 KB.           */
-        static uint32_t s_diag_counter = 0u;
+        /* Periodic diagnostic — every ~3 seconds, log ring health AND per-stage
+         * timing breakdown so we can see whether the bottleneck is HTTP reads,
+         * the conversion loop, or the ring send. */
+        uint64_t now_us = esp_timer_get_time();
         static uint32_t s_last_underrun_count = 0u;
-        if (++s_diag_counter >= 440u) {
+        if ((now_us - last_report_us) >= 3000000ull) {
+            uint64_t window_us = now_us - last_report_us;
             uint32_t now_underruns = s_bg.underrun_count;
             uint32_t delta_underruns = now_underruns - s_last_underrun_count;
             size_t ring_filled = xStreamBufferBytesAvailable(s_bg.ring);
+            uint64_t avg_http_us = chunk_count ? total_http_us / chunk_count : 0;
+            uint64_t avg_conv_us = chunk_count ? total_conv_us / chunk_count : 0;
+            uint64_t avg_send_us = chunk_count ? total_send_us / chunk_count : 0;
+            uint64_t total_busy_us = total_http_us + total_conv_us + total_send_us;
+            uint32_t busy_pct = (uint32_t)((total_busy_us * 100ull) / window_us);
             ESP_LOGI(TAG,
-                     "BG diag: ring=%zu/%u B (%.0f%% full), underruns=%u (+%u in last 5s), "
+                     "BG diag: ring=%zu/%u B (%.0f%% full), underruns=%u (+%u in 3s), "
                      "bytes_streamed=%u",
                      ring_filled, BG_RING_BYTES,
                      100.0f * (float)ring_filled / (float)BG_RING_BYTES,
                      now_underruns, delta_underruns,
                      s_bg.bytes_streamed);
+            ESP_LOGI(TAG,
+                     "BG timing: %u chunks in %ums | avg per chunk: http=%uus conv=%uus send=%uus | producer busy=%u%%",
+                     (unsigned)chunk_count,
+                     (unsigned)(window_us / 1000),
+                     (unsigned)avg_http_us,
+                     (unsigned)avg_conv_us,
+                     (unsigned)avg_send_us,
+                     busy_pct);
             s_last_underrun_count = now_underruns;
-            s_diag_counter = 0u;
+            last_report_us = now_us;
+            total_http_us = total_conv_us = total_send_us = 0;
+            chunk_count = 0;
         }
     }
 
@@ -780,16 +806,23 @@ esp_err_t bg_player_init(void)
      * (not the runtime).  Same pattern as memory_pool's static entry pool
      * and audio_generator's static sine LUT.                                 */
     if (s_bg.ring == NULL) {
-        ESP_LOGI(TAG, "bg_player_init: free heap = %u bytes (ring is static .bss)",
-                 (unsigned)esp_get_free_heap_size());
+        ESP_LOGI(TAG, "bg_player_init: PSRAM free = %u bytes, DRAM free = %u bytes",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        s_bg_ring_storage = heap_caps_malloc(BG_RING_BYTES + 1,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_bg_ring_storage == NULL) {
+            ESP_LOGE(TAG, "bg_player_init: PSRAM ring storage malloc failed");
+            return ESP_ERR_NO_MEM;
+        }
         s_bg.ring = xStreamBufferCreateStatic(BG_RING_BYTES, BG_RING_TRIGGER_BYTES,
                                               s_bg_ring_storage, &s_bg_ring_ctrl);
         if (s_bg.ring == NULL) {
-            /* Cannot actually fail with static storage — kept for defensiveness. */
-            ESP_LOGE(TAG, "bg_player_init: xStreamBufferCreateStatic returned NULL?!");
+            heap_caps_free(s_bg_ring_storage);
+            s_bg_ring_storage = NULL;
             return ESP_ERR_NO_MEM;
         }
-        ESP_LOGI(TAG, "bg_player_init: ring buffer initialized (%u bytes, static)",
+        ESP_LOGI(TAG, "bg_player_init: ring buffer initialized (%u bytes, storage PSRAM, ctrl DRAM)",
                  BG_RING_BYTES);
     }
 

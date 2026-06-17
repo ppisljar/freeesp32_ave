@@ -96,6 +96,17 @@ esp_err_t wifi_manager_connect(const char* ssid, const char* password)
 
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connected to WiFi");
+        // Disable WiFi modem sleep — the default WIFI_PS_MIN_MODEM lets the
+        // radio sleep between DTIM beacons (~100ms), adding latency to every
+        // TCP segment delivery.  For real-time HTTP audio streaming we must
+        // keep the modem awake.  This is what squeezelite-esp32 does.
+        // (Cost: higher idle current draw.  Worth it for streaming.)
+        esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
+        if (ps_err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_set_ps(NONE) failed: %s", esp_err_to_name(ps_err));
+        } else {
+            ESP_LOGI(TAG, "WiFi modem sleep disabled (WIFI_PS_NONE)");
+        }
         return ESP_OK;
     } else {
         ESP_LOGE(TAG, "Failed to connect to WiFi");

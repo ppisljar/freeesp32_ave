@@ -25,7 +25,7 @@ esp_err_t audio_manager_init(void)
 {
     ESP_LOGI(TAG, "Initializing Audio Manager");
 
-    // I2S configuration
+    // I2S configuration — back to committed/working baseline.
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
 
     esp_err_t ret = i2s_new_channel(&chan_cfg, &tx_handle, NULL);

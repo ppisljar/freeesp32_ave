@@ -159,8 +159,11 @@ void audio_test_output_task(void* pvParameters)
             }
         }
 
-        // Small delay to prevent task from consuming too much CPU
-        vTaskDelay(pdMS_TO_TICKS(1));
+        // No vTaskDelay here — i2s_channel_write with portMAX_DELAY is the
+        // natural pacing mechanism (blocks until the next DMA buffer is free).
+        // The previous 1ms delay introduced 4% per-cycle jitter and was the
+        // most likely cause of synth+BG combined clicks.  See squeezelite
+        // recon report 2026-06-17 for the reference comparison.
     }
 
     audio_output_task_handle = NULL;
@@ -176,13 +179,23 @@ esp_err_t audio_test_start_output_task(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    BaseType_t result = xTaskCreate(
+    // Audio output is the MOST time-critical task in the system.
+    //   Priority 23 = top tier (same as LED flicker, above BG streamer at 18,
+    //                  above WiFi at 19, above timing_dispatch at 22).
+    //   Pinned to core 1 — LED task is also on core 1 (per fix_led_drift_task_priority);
+    //   they take turns at priority 23, both well above WiFi/BG which run on core 0.
+    //
+    // Previous priority 5 made audio preemptable by every other real-time task,
+    // causing constant DMA underruns when synth + BG combined work approached the
+    // 23 ms buffer budget.  See squeezelite recon report 2026-06-17.
+    BaseType_t result = xTaskCreatePinnedToCore(
         audio_test_output_task,
         "audio_output",
         8192,                    // Stack size
         NULL,                    // Parameters
-        5,                       // Priority
-        &audio_output_task_handle
+        23,                      // Priority — top tier, real-time
+        &audio_output_task_handle,
+        1                        // Core 1 — keep WiFi/BG noise on core 0
     );
 
     if (result != pdPASS) {
