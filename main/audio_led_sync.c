@@ -23,7 +23,7 @@ static const char* TAG = "audio_led_sync";
 static audio_led_sync_state_t *g_sync_state = NULL;
 
 // Analysis task buffers and state
-#define ANALYSIS_BUFFER_SIZE 512
+// (ANALYSIS_BUFFER_SIZE removed with detect_beat_frequency in Layer 5)
 #define AUDIO_ANALYSIS_QUEUE_SIZE 32
 
 // Audio analysis task handle and queue
@@ -39,28 +39,27 @@ typedef struct {
     uint64_t total_samples_after_batch; // Snapshot of total_audio_samples_processed post-increment.
 } audio_sample_msg_t;
 
-// Analysis buffers (used in task context, not ISR)
-static float amplitude_buffer[ANALYSIS_BUFFER_SIZE];
-static float fft_buffer[ANALYSIS_BUFFER_SIZE * 2]; // Complex FFT buffer
-static size_t buffer_index = 0;
-
 // VU meter smoothing (task context)
 static float vu_meter_value = 0.0f;
 static float vu_attack_coeff = 0.0f;
 static float vu_decay_coeff = 0.0f;
-
-// Beat frequency detection (task context)
-static float beat_frequency_history[8] = {0};
-static size_t beat_history_index = 0;
+// NOTE: beat_frequency_history, beat_history_index, amplitude_buffer, fft_buffer,
+// and buffer_index were removed in Layer 5 together with detect_beat_frequency()
+// and SYNC_MODE_BEAT_FREQUENCY.
 
 // Sample-accurate timing variables
 static uint64_t last_i2s_callback_time = 0;
 static uint64_t total_audio_samples_processed = 0;
 
+// Task notification handle: audio_led_sync_start stores its own TaskHandle
+// here before spawning the analysis task.  The analysis task signals it once
+// the main loop is reached, replacing the former vTaskDelay(10ms) polling wait.
+static TaskHandle_t s_sync_start_caller = NULL;
+
 // Forward declarations
 static void audio_analysis_task(void *pvParameters);
 static void calculate_vu_meter(const float *audio_samples, size_t sample_count);
-static void detect_beat_frequency(const float *audio_samples, size_t sample_count);
+// detect_beat_frequency removed — SYNC_MODE_BEAT_FREQUENCY deleted in Layer 5.
 static void update_led_from_sync_data(void);
 static esp_err_t configure_vu_meter_timing(const vu_meter_config_t *config);
 static esp_err_t start_audio_analysis_task(void);
@@ -153,34 +152,41 @@ esp_err_t audio_led_sync_start(audio_led_sync_mode_t mode) {
     g_sync_state->sync_errors = 0;
     g_sync_state->queue_errors = 0;
 
-    // Reset analysis buffers
-    memset(amplitude_buffer, 0, sizeof(amplitude_buffer));
-    memset(fft_buffer, 0, sizeof(fft_buffer));
-    buffer_index = 0;
+    // Reset VU meter state
     vu_meter_value = 0.0f;
     total_audio_samples_processed = 0;
 
     g_sync_state->active = true;
 
+    // Store caller handle so the analysis task can signal us once its main
+    // loop is reached — replaces the former vTaskDelay(10ms) approximation.
+    s_sync_start_caller = xTaskGetCurrentTaskHandle();
+
     // Start audio analysis task BEFORE enabling ISR queue operations
     esp_err_t task_ret = start_audio_analysis_task();
     if (task_ret != ESP_OK) {
+        s_sync_start_caller = NULL;
         g_sync_state->active = false;
         queue_ready = false;  // Ensure ISR doesn't use queue on failure
         ESP_LOGE(TAG, "Failed to start audio analysis task: %s", esp_err_to_name(task_ret));
         return task_ret;
     }
 
-    // Brief delay to ensure analysis task is running and ready
-    vTaskDelay(pdMS_TO_TICKS(10));
+    // Wait for analysis task to signal it has reached its main loop (replaces
+    // the former vTaskDelay(pdMS_TO_TICKS(10)) polling approximation).
+    // 100 ms timeout is a safety net: if the task fails to signal, log a
+    // warning but continue so callers are not broken.
+    uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+    if (notified == 0) {
+        ESP_LOGW(TAG, "Analysis task did not signal ready within 100ms; continuing anyway");
+    }
+    s_sync_start_caller = NULL;
 
     // Initialize lock-free sync state
     lock_free_set_sync_state(true, mode, 0, 0);
 
     const char* mode_name =
         (mode == SYNC_MODE_VU_METER) ? "VU_METER" :
-        (mode == SYNC_MODE_BEAT_FREQUENCY) ? "BEAT_FREQUENCY" :
-        (mode == SYNC_MODE_PHASE_LOCK) ? "PHASE_LOCK" :
         (mode == SYNC_MODE_CUSTOM) ? "CUSTOM" : "DISABLED";
 
     ESP_LOGI(TAG, "Audio-LED sync started in %s mode (queue_ready=%s, task_handle=%p)",
@@ -342,8 +348,6 @@ bool IRAM_ATTR audio_led_sync_i2s_callback(i2s_chan_handle_t handle,
         }
 
         sync_state->led_update_counter++;
-        // SYNC_MODE_PHASE_LOCK LED update moved to audio_analysis_task (task context)
-        // to eliminate non-IRAM calls (led_matrix_update_flicker_params, led_matrix_get_current_frequency)
     }
 
     // Update lock-free sync state with performance data // ISR-OK: word "free" is in comment only, no malloc/free call
@@ -406,56 +410,10 @@ static void calculate_vu_meter(const float *audio_samples, size_t sample_count) 
     }
 }
 
-// Beat frequency detection using real-time FFT analysis
-static void detect_beat_frequency(const float *audio_samples, size_t sample_count) {
-    if (!audio_samples || sample_count == 0) {
-        return;
-    }
-
-    // Add samples to analysis buffer
-    for (size_t i = 0; i < sample_count && buffer_index < ANALYSIS_BUFFER_SIZE; i++) {
-        amplitude_buffer[buffer_index++] = audio_samples[i];
-    }
-
-    // Process when buffer is full
-    if (buffer_index >= ANALYSIS_BUFFER_SIZE) {
-        // Simple beat detection based on amplitude modulation
-        // Calculate amplitude envelope variation
-        float max_amp = 0.0f, min_amp = 1.0f;
-        float avg_amp = 0.0f;
-
-        for (size_t i = 0; i < ANALYSIS_BUFFER_SIZE; i++) {
-            float amp = fabsf(amplitude_buffer[i]);
-            if (amp > max_amp) max_amp = amp;
-            if (amp < min_amp) min_amp = amp;
-            avg_amp += amp;
-        }
-        avg_amp /= ANALYSIS_BUFFER_SIZE;
-
-        // Detect modulation depth
-        float modulation_depth = (max_amp - min_amp) / avg_amp;
-
-        if (g_sync_state->beat_config.auto_detect && modulation_depth > 0.1f) {
-            // Simple beat frequency estimation
-            // This is a placeholder - real implementation would use FFT
-            float estimated_frequency = 20.0f; // Default to 20Hz
-
-            // Store in history for smoothing
-            beat_frequency_history[beat_history_index] = estimated_frequency;
-            beat_history_index = (beat_history_index + 1) % 8;
-
-            // Average recent detections
-            float sum = 0.0f;
-            for (int i = 0; i < 8; i++) {
-                sum += beat_frequency_history[i];
-            }
-            g_sync_state->beat_frequency_detected = sum / 8.0f;
-        }
-
-        // Reset buffer for next analysis cycle
-        buffer_index = 0;
-    }
-}
+// detect_beat_frequency() removed in Layer 5 cleanup: it was a hardcoded 20 Hz
+// placeholder (no real FFT beat detection) called only from the
+// SYNC_MODE_BEAT_FREQUENCY case that was also removed.  The beat_config struct
+// and audio_led_sync_set_beat_sync_config() API are preserved for future use.
 
 static void update_led_from_sync_data(void) {
     if (!g_sync_state || !g_sync_state->active) {
@@ -537,8 +495,6 @@ esp_err_t audio_led_sync_set_mode(audio_led_sync_mode_t mode) {
 
     const char* mode_name =
         (mode == SYNC_MODE_VU_METER) ? "VU_METER" :
-        (mode == SYNC_MODE_BEAT_FREQUENCY) ? "BEAT_FREQUENCY" :
-        (mode == SYNC_MODE_PHASE_LOCK) ? "PHASE_LOCK" :
         (mode == SYNC_MODE_CUSTOM) ? "CUSTOM" : "DISABLED";
 
     ESP_LOGI(TAG, "Sync mode changed to %s", mode_name);
@@ -596,6 +552,13 @@ static void audio_analysis_task(void *pvParameters) {
 
     ESP_LOGI(TAG, "Audio analysis task started");
 
+    // Signal audio_led_sync_start() that this task has reached its main loop.
+    // s_sync_start_caller is set by the spawner before xTaskCreate and cleared
+    // after the notification is received, so the window is narrow and safe.
+    if (s_sync_start_caller != NULL) {
+        xTaskNotifyGive(s_sync_start_caller);
+    }
+
     while (1) {
         // Wait for audio samples from ISR (blocking with timeout)
         if (xQueueReceive(audio_sample_queue, &sample_msg, pdMS_TO_TICKS(100)) == pdTRUE) {
@@ -618,24 +581,14 @@ static void audio_analysis_task(void *pvParameters) {
                     calculate_vu_meter(audio_samples, sample_count);
                     break;
 
-                case SYNC_MODE_BEAT_FREQUENCY:
-                    detect_beat_frequency(audio_samples, sample_count);
-                    break;
+                // SYNC_MODE_BEAT_FREQUENCY removed (Layer 5): was a hardcoded 20 Hz
+                // placeholder with no real beat detection.  Superseded by structural
+                // phase lock from Layer 3 (DMA lag + Q32 pre-advance).
 
-                case SYNC_MODE_PHASE_LOCK:
-                    // Phase-lock update at ~23ms boundaries (~1024 stereo pairs @ 44.1kHz).
-                    // Moved from ISR: led_matrix_get_current_frequency (FPU) and
-                    // led_matrix_update_flicker_params (non-IRAM, logs, gptimer) are task-safe.
-                    if (sample_msg.total_samples_after_batch % 1024 == 0) {
-                        uint8_t active_mask = led_matrix_get_active_mask();
-                        if (active_mask) {
-                            uint8_t brightness = (g_sync_state->vu_config.brightness_min +
-                                                  g_sync_state->vu_config.brightness_max) / 2;
-                            led_matrix_update_flicker_params_masked(active_mask,
-                                led_matrix_get_current_frequency(), 50, brightness);
-                        }
-                    }
-                    break;
+                // SYNC_MODE_PHASE_LOCK removed (Layer 5): called
+                // led_matrix_update_flicker_params_masked every 23 ms but never
+                // adjusted cycle_start_time_us — no real phase locking.  Superseded
+                // by Layer 3 structural phase lock.
 
                 case SYNC_MODE_CUSTOM:
                     // Custom synchronization pattern

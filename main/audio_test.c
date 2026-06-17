@@ -486,7 +486,7 @@ esp_err_t audio_test_isr_baseline_soak(void)
     // Phase 1: 8 Hz on channel 1 (blue, inner-left rect) + channel 4 (red, inner-right rect)
     // Channel mask 0x09 = bit 0 (channel 1, r1) + bit 3 (channel 4, r4).
     ESP_LOGI(TAG, "SOAK phase 1/4: 8 Hz LED flicker — ch1 BLUE + ch4 RED @ 10%% brightness (15 s)");
-    led_matrix_start_flicker_masked(0x09, 8.0f, 50, 10);
+    led_matrix_start_flicker_masked(0x09, 8.0f, 50, 10, 0);
     led_matrix_set_flicker_color_masked(0x01,   0,   0, 255);  // ch 1 = blue
     led_matrix_set_flicker_color_masked(0x08, 255,   0,   0);  // ch 4 = red
     phase_start = xTaskGetTickCount();
@@ -506,7 +506,7 @@ esp_err_t audio_test_isr_baseline_soak(void)
     // pulses and any drop-outs in the pulse train.
     ESP_LOGI(TAG, "SOAK phase 2/4: 40 Hz LED flicker @ 10%% duty — ch2 RED + ch3 BLUE @ 10%% brightness (15 s)");
     led_matrix_stop_flicker_masked(0x09);  // stop phase 1's channels
-    led_matrix_start_flicker_masked(0x06, 40.0f, 10, 10);
+    led_matrix_start_flicker_masked(0x06, 40.0f, 10, 10, 0);
     led_matrix_set_flicker_color_masked(0x02, 255,   0,   0);  // ch 2 = red
     led_matrix_set_flicker_color_masked(0x04,   0,   0, 255);  // ch 3 = blue
     phase_start = xTaskGetTickCount();

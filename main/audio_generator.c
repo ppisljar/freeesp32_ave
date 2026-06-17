@@ -174,8 +174,40 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
     ch->amp_ramp_remaining  = AUDIO_AMP_RAMP_SAMPLES;
     ch->current_pan      = params->pan;
     ch->current_mod_freq = params->mod_frequency;
-    ch->phase_l_q32      = 0;
-    ch->phase_r_q32      = 0;
+
+    // Layer 3 (Plan 007 Step 3.3): pre-advance Q32 phase by the DMA pipeline depth
+    // so that phase = 0 lands at the moment the channel's first sample emerges from
+    // the DAC, not at the moment of channel activation.
+    //
+    // The I2S DMA ring buffer holds AUDIO_DMA_PIPELINE_SAMPLES frames in flight
+    // between "sample written by fill_buffer" and "sample emitted from DAC".
+    // By starting the phase accumulator at (0 - pre_advance) — which wraps in
+    // unsigned 32-bit arithmetic — the accumulator reaches exactly 0 after
+    // AUDIO_DMA_PIPELINE_SAMPLES increments, i.e. at the DAC emission instant.
+    //
+    // For binaural channels (current_freq != current_freq_r) the two sides carry
+    // different per-sample increments, so their pre-advance amounts differ.  Both
+    // reach phase=0 at DAC sample N = AUDIO_DMA_PIPELINE_SAMPLES.
+    //
+    // Overflow audit: max frequency = AUDIO_SAMPLE_RATE/2 = 22050 Hz.
+    //   Q32_PER_HZ = 4294967296 / 44100 ≈ 97391.
+    //   max_inc    = 22050 × 97391 ≈ 2147958550  (< UINT32_MAX).
+    //   max_preadvance = 2048 × 2147958550 ≈ 4.4 × 10^12 → wraps mod 2^32 cleanly.
+    //   No overflow issue; unsigned wraparound is defined behaviour in C.
+    //
+    // Symmetry: the LED anchor in config_parser.c is offset by +AUDIO_DMA_PIPELINE_LAG_US
+    // (Step 3.2), which equals AUDIO_DMA_PIPELINE_SAMPLES / AUDIO_SAMPLE_RATE seconds.
+    // Both corrections reference the same physical quantity so audio and LED align at DAC.
+    // Reference: bug_led_audio_proof_of_sync_2026-06-17.md (Inv 14).
+    {
+        uint32_t inc_l = (uint32_t)(ch->current_freq   * Q32_PER_HZ);
+        uint32_t inc_r = (uint32_t)(ch->current_freq_r * Q32_PER_HZ);
+        uint32_t pre_advance_l = inc_l * (uint32_t)AUDIO_DMA_PIPELINE_SAMPLES;
+        uint32_t pre_advance_r = inc_r * (uint32_t)AUDIO_DMA_PIPELINE_SAMPLES;
+        ch->phase_l_q32 = (uint32_t)(0u - pre_advance_l);  /* wraps: reaches 0 at sample N=PIPELINE_SAMPLES */
+        ch->phase_r_q32 = (uint32_t)(0u - pre_advance_r);  /* same, using right-channel increment */
+    }
+
     ch->mod_phase_q32    = 0;
     ch->samples_generated = 0;
     // Noise LFSR seeds: must be non-zero (all-zero is a fixed point).

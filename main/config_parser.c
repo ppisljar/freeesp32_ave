@@ -30,6 +30,15 @@ static size_t current_entry_index = 0;
 static bool timeline_running = false;
 static bool timeline_loop = false;
 
+// Transport clock (Layer 2 — Plan 007 Step 2.1):
+// Single canonical wall-clock anchor captured at the moment timeline playback
+// begins.  All event deadlines and LED cycle origins are computed relative to
+// this value so that accumulated dispatch lag can never produce phase drift
+// between channels or between successive batches.
+// Reset to 0 by config_parser_stop_timeline() and re-captured on each
+// config_parser_execute_timeline() call (including loop restarts).
+static uint64_t transport_origin_us = 0;
+
 // Forward declarations
 static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t *entry);
 static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config_led_entry_t *led_entry);
@@ -75,14 +84,18 @@ esp_err_t config_parser_init(void)
     // Timeline execution will use lock-free communication
     ESP_LOGI(TAG, "Timeline execution configured for lock-free operation");
 
-    // Create timeline execution task
-    BaseType_t result = xTaskCreate(
+    // Create timeline execution task pinned to core 0.
+    // audio_output_task runs on core 1 at priority 23; keeping timeline_exec
+    // on a different core prevents the audio task from preempting us during
+    // LED dispatch (which would stall the dispatch for a full I2S buffer, ~23 ms).
+    BaseType_t result = xTaskCreatePinnedToCore(
         timeline_execution_task,
         "timeline_exec",
         4096,                   // Stack size
         NULL,                   // Parameters
         4,                      // Priority (lower than audio)
-        &timeline_task_handle
+        &timeline_task_handle,
+        0                       // Core 0 (audio_output_task is on core 1)
     );
 
     if (result != pdPASS) {
@@ -383,6 +396,11 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
     current_timeline = &persistent_timeline;
     current_entry_index = 0;
     timeline_start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+    // Layer 2 (Plan 007 Step 2.1): capture the single canonical T0.
+    // Must happen BEFORE the first batch dispatch so that every LED entry's
+    // logical_anchor_us is computed relative to the same wall-clock instant.
+    transport_origin_us = esp_timer_get_time();
     timeline_running = true;
     timeline_loop = loop;
 
@@ -429,27 +447,85 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
         const size_t MAX_BATCH_SIZE = 50;
         size_t entries_executed = 0;
 
-        // Hold audio_gen_mutex for the entire batch so fill_buffer sees all
-        // same-timestamp channels become active in the same DMA buffer.
-        audio_generator_lock();
-
-        for (size_t i = 0; i < timeline->count && entries_executed < MAX_BATCH_SIZE; i++) {
+        // Pre-scan to locate the contiguous slice that belongs to this batch.
+        // batch_end is one past the last entry with time == batch_timestamp
+        // (or MAX_BATCH_SIZE cap, whichever comes first).
+        size_t batch_end = 0;
+        for (size_t i = 0; i < timeline->count && batch_end < MAX_BATCH_SIZE; i++) {
             uint32_t entry_time = timeline->entries[i].type == CONFIG_ENTRY_LED ?
                                   timeline->entries[i].data.led.time_ms :
                                   timeline->entries[i].data.audio.time_ms;
+            if (entry_time != batch_timestamp) break;
+            batch_end = i + 1;
+        }
 
-            if (entry_time != batch_timestamp) {
-                break;
-            }
+        // Layer 4 (Plan 007 Step 4.1): Two-pass batch dispatch for audio-audio
+        // phase coherence.
+        //
+        // Problem: In a mixed same-timestamp batch (audio + LED), the LED
+        // dispatch path calls audio_generator_unlock() (to avoid blocking
+        // fill_buffer during LED-side vTaskDelays — see fix_clicks_boundary).
+        // When the unlock fires between two audio entries, fill_buffer can
+        // preempt and advance some audio channels' Q32 phase before subsequent
+        // audio channels are activated, creating a stochastic per-session phase
+        // offset in multi-channel audio (e.g., binaural beats).
+        //
+        // Fix: restructure as three passes over the same entry slice.
+        //   Pass 1 — all AUDIO entries while mutex held uninterrupted.  All
+        //             channels start at the same sample N with phase pre-
+        //             advanced uniformly (Layer 3 Step 3.3).  fill_buffer
+        //             cannot preempt here because the mutex is held throughout.
+        //   Pass 2 — all LED entries.  Their unlock/relock is harmless now
+        //             because all audio channels are already running.
+        //   Pass 3 — anything else (CONFIG_ENTRY_BG, future types).
+        //
+        // Reference: bug_audio_multichannel_phase_2026-06-17.md (Inv 11),
+        //            bug_audio_multi_phase_coherence_2026-06-17.md (Inv 15).
 
+        audio_generator_lock();
+
+        // Pass 1: dispatch all AUDIO entries in the batch.  The mutex is held
+        // continuously across all audio activations — fill_buffer cannot
+        // interleave and advance any channel's phase between activations.
+        for (size_t i = 0; i < batch_end; i++) {
+            if (timeline->entries[i].type != CONFIG_ENTRY_AUDIO) continue;
             esp_err_t ret = execute_timeline_entry_ctx(&persistent_timeline, i, true);
             if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to execute timeline entry %zu at t=%u: %s",
+                ESP_LOGW(TAG, "Failed to execute audio entry %zu at t=%u: %s",
                          i, batch_timestamp, esp_err_to_name(ret));
             }
-
             entries_executed++;
-            current_entry_index = i;
+        }
+
+        // Pass 2: dispatch all LED entries.  Each LED entry releases and
+        // re-acquires the mutex internally (fix_clicks_boundary) — that is
+        // safe now because all audio channels are already running from pass 1.
+        for (size_t i = 0; i < batch_end; i++) {
+            if (timeline->entries[i].type != CONFIG_ENTRY_LED) continue;
+            esp_err_t ret = execute_timeline_entry_ctx(&persistent_timeline, i, true);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to execute LED entry %zu at t=%u: %s",
+                         i, batch_timestamp, esp_err_to_name(ret));
+            }
+            entries_executed++;
+        }
+
+        // Pass 3: anything else (CONFIG_ENTRY_BG and any future entry types).
+        for (size_t i = 0; i < batch_end; i++) {
+            if (timeline->entries[i].type == CONFIG_ENTRY_AUDIO ||
+                timeline->entries[i].type == CONFIG_ENTRY_LED) continue;
+            esp_err_t ret = execute_timeline_entry_ctx(&persistent_timeline, i, true);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to execute other entry %zu at t=%u: %s",
+                         i, batch_timestamp, esp_err_to_name(ret));
+            }
+            entries_executed++;
+        }
+
+        // Advance current_entry_index to the last entry of this batch so the
+        // post-loop "find next timestamp" scan starts from the correct position.
+        if (batch_end > 0) {
+            current_entry_index = batch_end - 1;
         }
 
         audio_generator_unlock();
@@ -473,10 +549,19 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
             }
 
             if (next_index < timeline->count && next_time > batch_timestamp) {
-                uint32_t delay_ms = next_time - batch_timestamp;
-                ESP_LOGD(TAG, "Setting timer for %u ms (from %u to %u)", delay_ms, batch_timestamp, next_time);
-
-                uint64_t target_time = timing_engine_get_time_us() + (delay_ms * 1000);
+                // Layer 2 (Plan 007 Step 2.2): absolute-deadline scheduling.
+                // target_time is anchored to T0, not to "now", so accumulated
+                // dispatch lag in previous batches does not compound into future ones.
+                uint64_t target_time = transport_origin_us + (uint64_t)next_time * 1000ULL;
+                uint64_t now_us      = timing_engine_get_time_us();
+                if (target_time <= now_us) {
+                    // Already late — fire immediately by scheduling 1 µs in the future.
+                    // This can happen if a batch is particularly slow; the next batch
+                    // will execute as soon as the task scheduler yields.
+                    target_time = now_us + 1ULL;
+                }
+                ESP_LOGD(TAG, "Scheduling next batch at T0+%u ms (target_us=%llu, now_us=%llu)",
+                         next_time, target_time, now_us);
                 esp_err_t ret = timing_engine_schedule_event(target_time, TIMING_EVENT_TIMELINE,
                                                              timeline_timing_callback, NULL);
                 if (ret != ESP_OK) {
@@ -513,6 +598,7 @@ esp_err_t config_parser_stop_timeline(void)
     timeline_running = false;
     current_timeline = NULL;
     current_entry_index = 0;
+    transport_origin_us = 0;  // Layer 2: reset so stale T0 can't leak into next run
 
     xSemaphoreGive(timeline_mutex);
 
@@ -916,9 +1002,12 @@ static void timeline_execution_task(void *pvParameters)
 
         if (current_entry_index >= current_timeline->count) {
             if (timeline_loop) {
-                // Restart timeline
+                // Restart timeline — re-capture T0 so the new loop iteration's
+                // absolute deadlines are anchored to its own start, not the
+                // original run's start.  (Layer 2, Plan 007 Step 2.1)
                 current_entry_index = 0;
                 timeline_start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+                transport_origin_us = esp_timer_get_time();
                 ESP_LOGI(TAG, "Timeline loop restarting");
             } else {
                 // Timeline finished
@@ -965,44 +1054,111 @@ static void timeline_execution_task(void *pvParameters)
         // Add timing measurement for batch execution
         uint64_t batch_start_time = esp_timer_get_time();
 
-        // Hold audio_gen_mutex for the entire batch so fill_buffer sees all
-        // same-timestamp channels become active in the same DMA buffer.
+        // Pre-scan to locate the contiguous slice that belongs to this batch.
+        // batch_end is one past the last entry with time == batch_timestamp
+        // (capped at MAX_BATCH_SIZE entries for safety).
+        const size_t MAX_BATCH_SIZE = 50; // Safety limit to prevent infinite loops
+        size_t batch_end_index = batch_start_index;
+        for (size_t i = batch_start_index;
+             i < current_timeline->count && (i - batch_start_index) < MAX_BATCH_SIZE;
+             i++) {
+            uint32_t entry_time = current_timeline->entries[i].type == CONFIG_ENTRY_LED ?
+                                  current_timeline->entries[i].data.led.time_ms :
+                                  current_timeline->entries[i].data.audio.time_ms;
+            if (entry_time != batch_timestamp) break;
+            batch_end_index = i + 1;
+        }
+
+        // Layer 4 (Plan 007 Step 4.1): Two-pass batch dispatch for audio-audio
+        // phase coherence.
+        //
+        // Problem: In a mixed same-timestamp batch (audio + LED), the LED
+        // dispatch path calls audio_generator_unlock() (to avoid blocking
+        // fill_buffer during LED-side vTaskDelays — see fix_clicks_boundary).
+        // When the unlock fires between two audio entries, fill_buffer can
+        // preempt and advance some audio channels' Q32 phase before subsequent
+        // audio channels are activated, creating a stochastic per-session phase
+        // offset in multi-channel audio (e.g., binaural beats).
+        //
+        // Fix: restructure as three passes over the same entry slice.
+        //   Pass 1 — all AUDIO entries while mutex held uninterrupted.  All
+        //             channels start at the same sample N with phase pre-
+        //             advanced uniformly (Layer 3 Step 3.3).  fill_buffer
+        //             cannot preempt here because the mutex is held throughout.
+        //   Pass 2 — all LED entries.  Their unlock/relock is harmless now
+        //             because all audio channels are already running.
+        //   Pass 3 — anything else (CONFIG_ENTRY_BG, future types).
+        //
+        // Reference: bug_audio_multichannel_phase_2026-06-17.md (Inv 11),
+        //            bug_audio_multi_phase_coherence_2026-06-17.md (Inv 15).
+
+        // Hold audio_gen_mutex across all three passes so fill_buffer cannot
+        // interleave between audio activations in pass 1.
         audio_generator_lock();
 
-        // Process all entries at the same timestamp (with safety limit)
-        const size_t MAX_BATCH_SIZE = 50; // Safety limit to prevent infinite loops
-        for (size_t i = batch_start_index; i < current_timeline->count && entries_executed < MAX_BATCH_SIZE; i++) {
-            uint32_t entry_time = current_timeline->entries[i].type == CONFIG_ENTRY_LED ?
-                                 current_timeline->entries[i].data.led.time_ms :
-                                 current_timeline->entries[i].data.audio.time_ms;
+        // Pass 1: dispatch all AUDIO entries in the batch.  The mutex is held
+        // continuously — fill_buffer cannot advance any channel's Q32 phase
+        // between activations.
+        for (size_t i = batch_start_index; i < batch_end_index; i++) {
+            if (current_timeline->entries[i].type != CONFIG_ENTRY_AUDIO) continue;
 
-            if (entry_time != batch_timestamp) {
-                // Different timestamp - stop batch processing
-                break;
-            }
-
-            // Execute this entry
-            // ESP_LOGD — runs inside audio_gen_mutex held by this batch loop.
-            // ESP_LOGI at 115200 baud blocks fill_buffer ~10 ms per line, causing
-            // audible click at DMA buffer boundary.  See fix_clicks_logging_2026-06-15.md.
-            ESP_LOGD(TAG, "Executing entry %zu: type=%s, time=%u ms",
-                     i,
-                     (current_timeline->entries[i].type == CONFIG_ENTRY_LED) ? "LED" : "AUDIO",
-                     entry_time);
-
+            ESP_LOGD(TAG, "Pass1/AUDIO entry %zu: time=%u ms", i, batch_timestamp);
             uint64_t entry_start_time = esp_timer_get_time();
             esp_err_t ret = execute_timeline_entry_ctx(current_timeline, i, true);
             uint64_t entry_execution_time = esp_timer_get_time() - entry_start_time;
 
             if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to execute timeline entry %zu: %s", i, esp_err_to_name(ret));
+                ESP_LOGW(TAG, "Failed to execute audio entry %zu: %s", i, esp_err_to_name(ret));
             } else {
-                ESP_LOGD(TAG, "Entry %zu executed in %llu μs (offset +%llu μs from batch start)",
+                ESP_LOGD(TAG, "Audio entry %zu executed in %llu μs (offset +%llu μs from batch start)",
                          i, entry_execution_time, entry_start_time - batch_start_time);
             }
-
             entries_executed++;
-            current_entry_index = i; // Update to last processed entry
+        }
+
+        // Pass 2: dispatch all LED entries.  Each LED entry releases and
+        // re-acquires the mutex internally (fix_clicks_boundary) — safe now
+        // because all audio channels are already running from pass 1.
+        for (size_t i = batch_start_index; i < batch_end_index; i++) {
+            if (current_timeline->entries[i].type != CONFIG_ENTRY_LED) continue;
+
+            ESP_LOGD(TAG, "Pass2/LED entry %zu: time=%u ms", i, batch_timestamp);
+            uint64_t entry_start_time = esp_timer_get_time();
+            esp_err_t ret = execute_timeline_entry_ctx(current_timeline, i, true);
+            uint64_t entry_execution_time = esp_timer_get_time() - entry_start_time;
+
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to execute LED entry %zu: %s", i, esp_err_to_name(ret));
+            } else {
+                ESP_LOGD(TAG, "LED entry %zu executed in %llu μs (offset +%llu μs from batch start)",
+                         i, entry_execution_time, entry_start_time - batch_start_time);
+            }
+            entries_executed++;
+        }
+
+        // Pass 3: anything else (CONFIG_ENTRY_BG and any future entry types).
+        for (size_t i = batch_start_index; i < batch_end_index; i++) {
+            if (current_timeline->entries[i].type == CONFIG_ENTRY_AUDIO ||
+                current_timeline->entries[i].type == CONFIG_ENTRY_LED) continue;
+
+            ESP_LOGD(TAG, "Pass3/OTHER entry %zu: time=%u ms", i, batch_timestamp);
+            uint64_t entry_start_time = esp_timer_get_time();
+            esp_err_t ret = execute_timeline_entry_ctx(current_timeline, i, true);
+            uint64_t entry_execution_time = esp_timer_get_time() - entry_start_time;
+
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to execute other entry %zu: %s", i, esp_err_to_name(ret));
+            } else {
+                ESP_LOGD(TAG, "Other entry %zu executed in %llu μs (offset +%llu μs from batch start)",
+                         i, entry_execution_time, entry_start_time - batch_start_time);
+            }
+            entries_executed++;
+        }
+
+        // Advance current_entry_index to the last entry of this batch so the
+        // post-loop "find next timestamp" scan starts from the correct position.
+        if (batch_end_index > batch_start_index) {
+            current_entry_index = batch_end_index - 1;
         }
 
         audio_generator_unlock();
@@ -1030,15 +1186,20 @@ static void timeline_execution_task(void *pvParameters)
 
             // Only set timer if we found a future entry
             if (next_index < current_timeline->count && next_time > batch_timestamp) {
-                uint32_t delay_ms = next_time - batch_timestamp;
-                ESP_LOGI(TAG, "Scheduling next batch in %u ms (t=%u → t=%u)",
-                         delay_ms, batch_timestamp, next_time);
+                // Layer 2 (Plan 007 Step 2.2): absolute-deadline scheduling.
+                // target_time = T0 + logical_time_ms * 1000 so that drift from
+                // earlier-batch overhead never propagates forward in the timeline.
+                uint64_t target_time = transport_origin_us + (uint64_t)next_time * 1000ULL;
+                uint64_t now_us      = timing_engine_get_time_us();
+                if (target_time <= now_us) {
+                    // Already late (batch took longer than the inter-event gap).
+                    // Fire as soon as possible — 1 µs gives the scheduler a tick.
+                    target_time = now_us + 1ULL;
+                }
+                ESP_LOGI(TAG, "Scheduling next batch at T0+%u ms (target_us=%llu, now_us=%llu)",
+                         next_time, target_time, now_us);
 
-                // Release mutex before timing operations
                 // Lock-free operation - no mutex needed
-
-                // Schedule next event with hardware precision timing engine
-                uint64_t target_time = timing_engine_get_time_us() + (delay_ms * 1000); // Convert ms to μs
                 esp_err_t ret = timing_engine_schedule_event(target_time, TIMING_EVENT_TIMELINE,
                                                            timeline_timing_callback, NULL);
                 if (ret != ESP_OK) {
@@ -1400,6 +1561,32 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     // ------------------------------------------------------------------
     const config_led_entry_t *led = &entry->data.led;
 
+    // Layer 2 (Plan 007 Step 2.3): compute the transport-clock anchor for this
+    // entry.  logical_anchor_us = T0 + entry->time_ms * 1000.
+    // When transport_origin_us == 0 (timeline not started, or called from a
+    // legacy path), pass 0 so the LED API falls back to its peer-piggyback /
+    // now_us behaviour without any change.
+    //
+    // Layer 3 (Plan 007 Step 3.2): offset the anchor forward by AUDIO_DMA_PIPELINE_LAG_US
+    // so the LED cycle-origin coincides with the wall-clock instant that the
+    // corresponding audio samples actually emerge from the DAC — not the instant
+    // the dispatcher writes them into the I2S DMA ring buffer.
+    //
+    // Symmetry proof:
+    //   T0 = transport_origin_us (captured once at timeline start).
+    //   T_audio_dispatch ≈ T0  (audio entry dispatched at the first batch tick).
+    //   T_audio_DAC = T_audio_dispatch + DMA_LAG ≈ T0 + DMA_LAG.
+    //   T_led_anchor = T0 + entry_time_ms * 1000 + DMA_LAG.
+    //   For entry_time_ms == 0: T_led_anchor = T0 + DMA_LAG = T_audio_DAC.  ✓
+    //   Audio phase is also pre-advanced by DMA_LAG at channel start (Step 3.3),
+    //   so the audio phase-0 sample and the LED cycle-0 onset occur at the same
+    //   wall-clock instant within ISR/timer quantization.
+    //   Reference: bug_led_audio_proof_of_sync_2026-06-17.md (Inv 14).
+    uint64_t logical_anchor_us = (transport_origin_us != 0)
+                                 ? transport_origin_us + (uint64_t)led->time_ms * 1000ULL
+                                   + AUDIO_DMA_PIPELINE_LAG_US
+                                 : 0ULL;
+
     // ESP_LOGD — same audio_gen_mutex blocking concern as the audio entry log above.
     // The lock is released a few lines below for the LED dispatch itself, but the
     // log line currently fires while the lock is still held.
@@ -1568,7 +1755,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                  (float)sweep_spec.freq_milliHz_target / 1000.0f,
                  sweep_spec.duration_ms);
 #endif
-        ret = led_matrix_start_sweep_masked(led->channel_mask, &sweep_spec);
+        ret = led_matrix_start_sweep_masked(led->channel_mask, &sweep_spec, logical_anchor_us);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to start LED sweep on mask 0x%02x: %s",
                      led->channel_mask, esp_err_to_name(ret));
@@ -1593,7 +1780,8 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             ret = led_matrix_start_flicker_masked(led->channel_mask,
                                                   led->frequency,
                                                   led->duty_cycle,
-                                                  led->brightness);
+                                                  led->brightness,
+                                                  logical_anchor_us);
         }
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to start/update LED flicker on mask 0x%02x: %s",
@@ -1603,7 +1791,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     }
 
     if (led_ret == ESP_OK) {
-        ESP_LOGI(TAG, "LED mask 0x%02x started: %.1f Hz, %d%% duty, %d%% brightness %s",
+        ESP_LOGD(TAG, "LED mask 0x%02x started: %.1f Hz, %d%% duty, %d%% brightness %s",
                  led->channel_mask, led->frequency, led->duty_cycle, led->brightness,
                  any_sweep ? "(with sweep)" : "");
 

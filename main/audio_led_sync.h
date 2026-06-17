@@ -13,8 +13,9 @@ typedef struct audio_led_sync_state audio_led_sync_state_t;
 typedef enum {
     SYNC_MODE_DISABLED,         // No synchronization
     SYNC_MODE_VU_METER,        // LED intensity follows audio amplitude
-    SYNC_MODE_BEAT_FREQUENCY,  // LED flicker locked to binaural beat frequency
-    SYNC_MODE_PHASE_LOCK,      // LED timing phase-locked to audio samples
+    // SYNC_MODE_BEAT_FREQUENCY and SYNC_MODE_PHASE_LOCK removed (Layer 5 cleanup):
+    // both were no-op stubs superseded by the structural phase-lock introduced in
+    // Layer 3 (LED anchor + DMA lag offset + audio Q32 pre-advance).
     SYNC_MODE_CUSTOM           // User-defined synchronization pattern
 } audio_led_sync_mode_t;
 

@@ -98,6 +98,10 @@ static TaskHandle_t led_flicker_task_handle = NULL;
 // task could read active=true between writes of `led_state` and `active`.
 static portMUX_TYPE s_flicker_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// Forward declaration: defined after led_matrix_init but called from it for
+// pre-warming the timer and flicker task at boot (Layer 5, Step 5.2).
+static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz);
+
 // ---------------------------------------------------------------------------
 // Spec-defined region map indexed by (row, col).
 //
@@ -183,6 +187,20 @@ esp_err_t led_matrix_init(void)
     // Clear all LEDs
     led_strip_clear(matrix_handle);
     led_strip_refresh(matrix_handle);
+
+    // Pre-create the flicker gptimer and led_flicker_task at boot so that the
+    // first call to led_matrix_start_flicker_masked does not pay the ~5 ms
+    // one-time setup cost during live timeline dispatch.
+    // min_freq_milliHz=1000 → timer_freq_hz clamps to 1000 Hz (1 kHz tick).
+    // When a real channel later calls s_ensure_timer_and_task the timer already
+    // exists, so the alarm period is NOT changed — 1 kHz is adequate for all
+    // supported flicker rates.  See Layer 5 Step 5.2 in plan 007.
+    esp_err_t timer_ret = s_ensure_timer_and_task(1000);
+    if (timer_ret != ESP_OK) {
+        // Non-fatal: flicker will still work, just with first-call setup cost.
+        ESP_LOGW(TAG, "Pre-init of flicker timer/task failed (%s); will retry on first use",
+                 esp_err_to_name(timer_ret));
+    }
 
     ESP_LOGI(TAG, "LED matrix initialized successfully");
     return ESP_OK;
@@ -679,7 +697,8 @@ static void s_maybe_teardown_timer_and_task(void)
  * @param brightness   Maximum brightness (0-100).
  */
 esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
-                                           uint8_t duty_cycle, uint8_t brightness)
+                                           uint8_t duty_cycle, uint8_t brightness,
+                                           uint64_t cycle_hint_us)
 {
     if (!matrix_handle) {
         ESP_LOGE(TAG, "Matrix handle not initialized");
@@ -719,23 +738,49 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         // ISR continues the existing rhythm — resetting it here would produce a
         // cycle of arbitrary length at the dispatch instant (the stutter the user sees).
         if (!s->active) {
-            // Phase-lock new channel to any already-running peer at the same
-            // frequency so 4 channels dispatched across separate calls (with
-            // different `now_us`) still blink in unison.  Without this each
-            // call captured an independent cycle origin, producing visible
-            // phase offsets that read to a human as "different frequencies".
-            // See reports/non_planned_reports/bug_led_frequency_drift_2026-06-17.md.
-            uint64_t ref_start = now_us;
-            for (uint8_t peer = 0; peer < 4; peer++) {
-                if (peer == ch) continue;
-                if (flicker_state[peer].active &&
-                    flicker_state[peer].frequency_milliHz == freq_milliHz) {
-                    ref_start = flicker_state[peer].cycle_start_time_us;
-                    break;
+            // Anchor selection priority (Layer 2 transport clock):
+            //   1. cycle_hint_us — transport_origin_us + entry->time_ms * 1000, passed
+            //      by config_parser when a canonical T0 is known.  All channels at the
+            //      same logical timestamp get the identical ref_start regardless of when
+            //      they are dispatched, eliminating inter-channel phase drift entirely.
+            //   2. Already-running peer at the same frequency (peer-piggyback) — used
+            //      when cycle_hint_us is 0 (legacy callers) and a channel is already
+            //      active at the matching frequency.
+            //   3. now_us — true first activation with no hint and no peer match.
+            //
+            // Late-anchor note (Step 2.4): ref_start may be in the past when the
+            // transport clock anchor precedes esp_timer_get_time() by more than a few
+            // milliseconds (e.g. dispatch lag in a busy batch).  The ISR's rollover
+            // logic in the timer callback handles this naturally: elapsed_us will be
+            // large on the first tick, causing immediate modulo wrap into the correct
+            // cycle position.  This is correct at all frequencies — a 0.1 Hz channel
+            // with a 30 ms late anchor has elapsed_us = 30 000 µs << 10 000 000 µs
+            // cycle, so it starts at the right phase offset without any special case.
+            uint64_t ref_start;
+            if (cycle_hint_us != 0) {
+                ref_start = cycle_hint_us;
+            } else {
+                ref_start = now_us;
+                for (uint8_t peer = 0; peer < 4; peer++) {
+                    if (peer == ch) continue;
+                    if (flicker_state[peer].active &&
+                        flicker_state[peer].frequency_milliHz == freq_milliHz) {
+                        ref_start = flicker_state[peer].cycle_start_time_us;
+                        break;
+                    }
                 }
             }
             s->cycle_start_time_us = ref_start;
-            s->latched_on_time_us  = 0;
+            // Compute the correct on-time immediately so the ISR's
+            // (elapsed_us < latched_on_time_us) test is correct from the very
+            // first tick.  Initialising to 0 caused one full dark cycle
+            // (≈ 166 ms at 6 Hz) before the ISR's cycle-boundary recompute
+            // set the real value.  See plans/007_timeline_sync_architecture.md
+            // Step 1.3 and bug_led_audio_phase_sync_2026-06-17.md (Inv 10).
+            {
+                uint64_t cycle_duration_us = (1000000ULL * 1000ULL) / (uint64_t)freq_milliHz;
+                s->latched_on_time_us = (cycle_duration_us * (uint64_t)duty_cycle) / 100ULL;
+            }
             s->led_state           = false;
             s->led_dirty           = false;
         }
@@ -878,7 +923,8 @@ esp_err_t led_matrix_set_flicker_color_masked(uint8_t channel_mask,
  * @param channel_mask Bitmask 0x01-0x0F.
  * @param spec         Pointer to sweep specification; contents are copied per channel.
  */
-esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_spec_t *spec)
+esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_spec_t *spec,
+                                         uint64_t cycle_hint_us)
 {
     if (!spec) return ESP_ERR_INVALID_ARG;
     if (!matrix_handle) return ESP_ERR_INVALID_STATE;
@@ -903,7 +949,13 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
     if (ret != ESP_OK) return ret;
 
     uint64_t sweep_duration_us = (uint64_t)spec->duration_ms * 1000ULL;
-    uint64_t sweep_start_us    = esp_timer_get_time();
+    // Transport-clock anchor (Layer 2): when the caller supplies a non-zero
+    // cycle_hint_us (= transport_origin_us + entry->time_ms * 1000), use it as
+    // the sweep origin so all channels at the same logical timestamp share the
+    // identical sweep_start_us regardless of dispatch lag.  When zero (legacy
+    // callers / trampolines), fall back to wall-clock at call time.
+    // The anchor may be in the past; see late-anchor note in start_flicker_masked.
+    uint64_t sweep_start_us = (cycle_hint_us != 0) ? cycle_hint_us : esp_timer_get_time();
 
     for (uint8_t ch = 0; ch < 4; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
@@ -923,9 +975,17 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
         // existing cycle_start_time_us so the rhythm continues uninterrupted.
         // The sweep interpolation uses sweep_start_us (below) as its own clock
         // reference — it does not need cycle_start_time_us to be reset.
+        // sweep_start_us already honors cycle_hint_us (computed above), so
+        // new channels inherit the transport-clock anchor automatically.
         if (!s->active) {
             s->cycle_start_time_us = sweep_start_us;
-            s->latched_on_time_us  = 0;
+            // Compute latched_on_time_us from the initial frequency so the first
+            // ISR tick knows the on-time without waiting for a cycle boundary.
+            uint64_t init_cycle_us = (init_freq_milliHz > 0)
+                                     ? (1000000ULL * 1000ULL) / (uint64_t)init_freq_milliHz
+                                     : 0ULL;
+            uint8_t init_duty = (spec->duty_curve != LED_INTERP_NONE) ? spec->duty_start : spec->duty_target;
+            s->latched_on_time_us  = (init_cycle_us * (uint64_t)init_duty) / 100ULL;
             s->led_state           = false;
         }
 
@@ -997,7 +1057,7 @@ float led_matrix_get_current_frequency_masked(uint8_t channel_mask)
 // ===========================================================================
 
 esp_err_t led_matrix_start_flicker(float frequency, uint8_t duty_cycle, uint8_t brightness) {
-    return led_matrix_start_flicker_masked(0x01u, frequency, duty_cycle, brightness);
+    return led_matrix_start_flicker_masked(0x01u, frequency, duty_cycle, brightness, 0);
 }
 
 esp_err_t led_matrix_stop_flicker(void) {
@@ -1016,7 +1076,7 @@ esp_err_t led_matrix_set_flicker_color(uint8_t red, uint8_t green, uint8_t blue)
 // delegates to channel 1 only (mask=0x01).  Step 4b adds the masked variant
 // as the primary API.
 esp_err_t led_matrix_start_sweep(const led_sweep_spec_t *spec) {
-    return led_matrix_start_sweep_masked(0x01u, spec);
+    return led_matrix_start_sweep_masked(0x01u, spec, 0);
 }
 
 bool led_matrix_is_flickering(void) {

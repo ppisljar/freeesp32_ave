@@ -120,14 +120,21 @@ esp_err_t led_matrix_test_pattern(void);
 /**
  * @brief Start LED flicker on channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F; bit 0 = channel 1, bit 3 = channel 4.
- * @param frequency    Flicker frequency in Hz (0.1-100.0).
- * @param duty_cycle   Duty cycle percentage (0-100).
- * @param brightness   Maximum brightness (0-100).
+ * @param channel_mask  Bitmask 0x01-0x0F; bit 0 = channel 1, bit 3 = channel 4.
+ * @param frequency     Flicker frequency in Hz (0.1-100.0).
+ * @param duty_cycle    Duty cycle percentage (0-100).
+ * @param brightness    Maximum brightness (0-100).
+ * @param cycle_hint_us Transport-clock anchor for cycle_start_time_us (µs, from
+ *                      esp_timer_get_time() domain).  When non-zero, all new
+ *                      channels in the mask use this value as their cycle origin
+ *                      so that entries at the same logical timestamp are always
+ *                      phase-locked regardless of dispatch lag.  When zero,
+ *                      falls back to the existing peer-piggyback / now_us path.
  * @return ESP_OK on success.
  */
 esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
-                                           uint8_t duty_cycle, uint8_t brightness);
+                                           uint8_t duty_cycle, uint8_t brightness,
+                                           uint64_t cycle_hint_us);
 
 /**
  * @brief Stop LED flicker on channels indicated by channel_mask.
@@ -171,11 +178,17 @@ esp_err_t led_matrix_set_flicker_color_masked(uint8_t channel_mask,
  *
  * Thread-safe to call from task context.  Not callable from ISR.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
- * @param spec         Pointer to sweep specification; contents are copied per channel.
+ * @param channel_mask  Bitmask 0x01-0x0F.
+ * @param spec          Pointer to sweep specification; contents are copied per channel.
+ * @param cycle_hint_us Transport-clock anchor for sweep_start_us (µs, from
+ *                      esp_timer_get_time() domain).  When non-zero, new channels
+ *                      use this value as their sweep (and cycle) origin so that
+ *                      same-timestamp entries are phase-locked.  When zero, falls
+ *                      back to esp_timer_get_time() at call time.
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG / ESP_ERR_INVALID_STATE on error.
  */
-esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_spec_t *spec);
+esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_spec_t *spec,
+                                         uint64_t cycle_hint_us);
 
 /**
  * @brief Get current flicker frequency for the lowest-bit-set channel in the mask.
@@ -197,7 +210,9 @@ float led_matrix_get_current_frequency_masked(uint8_t channel_mask);
 /**
  * @brief Start LED flicker for meditation/brainwave entrainment (channel 1 only).
  *
- * @param frequency Flicker frequency in Hz (0.1-100.0)
+ * Backwards-compat trampoline; calls led_matrix_start_flicker_masked(0x01, ..., 0).
+ *
+ * @param frequency  Flicker frequency in Hz (0.1-100.0)
  * @param duty_cycle Duty cycle percentage (0-100)
  * @param brightness Maximum brightness (0-100)
  * @return esp_err_t ESP_OK on success
@@ -234,7 +249,7 @@ esp_err_t led_matrix_set_flicker_color(uint8_t red, uint8_t green, uint8_t blue)
 /**
  * @brief Start a parametric LED flicker sweep (channel 1 only).
  *
- * Trampoline to led_matrix_start_sweep_masked(0x01, spec).
+ * Backwards-compat trampoline; calls led_matrix_start_sweep_masked(0x01, spec, 0).
  *
  * @param spec  Pointer to sweep specification; contents are copied.
  * @return ESP_OK on success.
