@@ -31,4 +31,140 @@ config BG_SDCARD_ENABLED
         as an error and the BG entry is treated as a no-op for that session.
         See Plan 006 Section 2.4 for the SD bring-up checklist.
 
+
+# ---------------------------------------------------------------------------
+# LED Backend Selection (Step 1 of Plan 008)
+# ---------------------------------------------------------------------------
+
+choice LED_TYPE
+    prompt "LED hardware backend"
+    default LED_TYPE_NEOPIXEL
+    help
+        Select the physical LED hardware attached to this build.
+        NEOPIXEL  — single-wire addressable strips (WS2812/SK6812), driven by RMT.
+        DOTSTAR   — two-wire addressable strips (APA102), driven by hardware SPI (SPI3_HOST).
+        DIRECT    — 4 discrete LEDs (one per logical channel) driven by LEDC PWM; only
+                    brightness is meaningful — R/G/B from .led timelines are silently ignored.
+
+    config LED_TYPE_NEOPIXEL
+        bool "Neopixel (WS2812/SK6812) — single-wire RMT"
+
+    config LED_TYPE_DOTSTAR
+        bool "DotStar (APA102) — two-wire SPI"
+
+    config LED_TYPE_DIRECT
+        bool "Direct — 4 discrete GPIOs via LEDC PWM"
+
+endchoice
+
+config LED_DATA_PIN
+    int "LED data GPIO pin"
+    range 0 39
+    default 12
+    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    help
+        GPIO pin connected to the DIN (data-in) line of the LED strip.
+        For DotStar this is the DATA line; the CLOCK line is LED_CLOCK_PIN.
+        Must not conflict with I2S audio pins (25, 26, 22) or UART (1, 3).
+
+config LED_CLOCK_PIN
+    int "DotStar clock GPIO pin"
+    range 0 39
+    default 14
+    depends on LED_TYPE_DOTSTAR
+    help
+        GPIO pin connected to the CLK line of the DotStar (APA102) strip.
+        Must not conflict with I2S audio pins (25, 26, 22), UART (1, 3),
+        or the data pin (LED_DATA_PIN).
+
+config LED_COUNT
+    int "Number of LEDs in the strip"
+    range 1 1000
+    default 48
+    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    help
+        Total number of individually addressable pixels on the strip.
+        Must match the actual wired pixel count.  The channel-map string
+        (LED_CHANNEL_MAP) must have exactly this many comma-separated entries.
+
+config LED_CHANNEL_MAP
+    string "Per-pixel channel map (comma-separated, length = LED_COUNT)"
+    default "0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3"
+    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    help
+        Flat comma-separated list of channel indices (0-3), one entry per LED.
+        Entry i controls which logical channel owns LED i.  Length must equal
+        LED_COUNT; if fewer entries are provided, missing pixels default to
+        channel 0 (with a boot-time LOGW).  Extra entries beyond LED_COUNT are
+        silently truncated.
+        Default value encodes the current 12×4 region layout on a 48-pixel strip:
+          pixels  0-5  → channel 0 (12 pixels total across all such runs)
+          pixels  6-17 → channel 1
+          pixels 18-29 → channel 2
+          pixels 30-47 → channel 3
+
+config LED_DIRECT_PIN_CH1
+    int "Direct mode — GPIO pin for channel 1"
+    range 0 39
+    default 12
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 0 (channel index 0).
+        Brightness from the .led timeline controls PWM duty; R/G/B are ignored.
+
+config LED_DIRECT_PIN_CH2
+    int "Direct mode — GPIO pin for channel 2"
+    range 0 39
+    default 13
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 1 (channel index 1).
+
+config LED_DIRECT_PIN_CH3
+    int "Direct mode — GPIO pin for channel 3"
+    range 0 39
+    default 14
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 2 (channel index 2).
+
+config LED_DIRECT_PIN_CH4
+    int "Direct mode — GPIO pin for channel 4"
+    range 0 39
+    default 15
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 3 (channel index 3).
+
+config LED_DOTSTAR_SPI_CLOCK_HZ
+    int "DotStar SPI bus clock frequency (Hz)"
+    range 100000 40000000
+    default 10000000
+    depends on LED_TYPE_DOTSTAR
+    help
+        SPI clock rate for the DotStar (APA102) strip in Hz.
+        APA102 supports up to ~30 MHz.  Lower values improve signal integrity
+        over long cables; higher values reduce refresh latency.
+        Default 10 MHz is conservative and works reliably up to ~2 m of wire.
+
+config LED_GRID_WIDTH
+    int "LED grid width (columns) for optional grid addressing"
+    range 1 64
+    default 12
+    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    help
+        Number of columns in the logical pixel grid used by led_matrix_set_pixel(x, y, ...).
+        Only meaningful when LED_GRID_WIDTH * LED_GRID_HEIGHT == LED_COUNT.
+        Ignored if direct mode is selected.  Set to 1 for a 1-D strip.
+
+config LED_GRID_HEIGHT
+    int "LED grid height (rows) for optional grid addressing"
+    range 1 64
+    default 4
+    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    help
+        Number of rows in the logical pixel grid used by led_matrix_set_pixel(x, y, ...).
+        Only meaningful when LED_GRID_WIDTH * LED_GRID_HEIGHT == LED_COUNT.
+        Ignored if direct mode is selected.  Set to 1 for a 1-D strip.
+
 endmenu

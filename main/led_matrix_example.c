@@ -1,8 +1,10 @@
-// TODO Step 3: config_parser passes raw RGBW (default 255,255,255,0 if missing) via channel_mask interface
+// Step 7: led_matrix_example.c updated to use per-channel API (led_strip_set_channel).
+// region_grid and led_to_channel_bit LUT removed — channel mapping lives in led_strip.c.
 
 #include "led_matrix_example.h"
 #include "led_strip.h"
 #include "audio_config.h"
+#include "sdkconfig.h"
 #include "isr_profiling.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -38,21 +40,19 @@ typedef struct {
     volatile uint8_t duty_cycle;       // On-time percentage (0-100); written at cycle boundary by ISR
     volatile uint8_t brightness;       // Maximum brightness (0-100); written at cycle boundary by ISR
     volatile uint8_t red, green, blue; // LED colors when ON; written at cycle boundary by ISR
-    volatile uint8_t _w_value;         // White component (0-255); composited into R/G/B at write time
     volatile bool led_state;           // Target ON/OFF state; written by ISR, read by flicker task
     volatile bool led_dirty;           // ISR sets true when led_state changes; task clears it
     volatile uint64_t cycle_start_time_us; // Timestamp of current cycle start (ISR-owned)
     volatile uint64_t latched_on_time_us;  // ON-time latched at cycle boundary; prevents mid-cycle duty glitch
 
     // Sweep state — written by led_matrix_start_sweep_masked() (task context),
-    // read at cycle boundaries inside the ISR.  7 parameters × led_sweep_param_t.
+    // read at cycle boundaries inside the ISR.  6 parameters × led_sweep_param_t.
     led_sweep_param_t sw_freq;        // milliHz units
     led_sweep_param_t sw_duty;        // Q8.8 units
     led_sweep_param_t sw_brightness;  // Q8.8 units
     led_sweep_param_t sw_r;           // Q8.8 units
     led_sweep_param_t sw_g;           // Q8.8 units
     led_sweep_param_t sw_b;           // Q8.8 units
-    led_sweep_param_t sw_w;           // Q8.8 units
     volatile uint64_t sweep_start_us;     // esp_timer_get_time() when sweep began
     volatile uint64_t sweep_duration_us;  // Total sweep duration in microseconds
 } led_flicker_state_t;
@@ -67,7 +67,6 @@ static led_flicker_state_t flicker_state[4] = {
         .red                  = 255,
         .green                = 255,
         .blue                 = 255,
-        ._w_value             = 0,
         .led_state            = false,
         .led_dirty            = false,
         .cycle_start_time_us  = 0,
@@ -78,7 +77,6 @@ static led_flicker_state_t flicker_state[4] = {
         .sw_r           = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_g           = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_b           = { .start_q = 0, .target_q = 0, .curve = 0 },
-        .sw_w           = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sweep_start_us    = 0,
         .sweep_duration_us = 0,
     },
@@ -102,89 +100,77 @@ static portMUX_TYPE s_flicker_mux = portMUX_INITIALIZER_UNLOCKED;
 // pre-warming the timer and flicker task at boot (Layer 5, Step 5.2).
 static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz);
 
-// ---------------------------------------------------------------------------
-// Spec-defined region map indexed by (row, col).
-//
-// Row-3 col-4 belongs to r1 (per ledc_spec.md asymmetry); row-3 col-7 does
-// NOT belong to r4 (intentional per spec — the inner-right rectangle has no
-// bottom corner extension).  These asymmetries are part of the spec, not bugs.
-//
-// Bit positions in led_to_channel_bit[]: r1=0, r2=1, r3=2, r4=3.
-// So led_to_channel_bit[i] == (1 << channel_bit) for the channel owning LED i.
-// ---------------------------------------------------------------------------
-static const uint8_t region_grid[LED_MATRIX_HEIGHT][LED_MATRIX_WIDTH] = {
-    { 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2 },  // row 0: r2 r2 r2 r2 r2 r2 r3 r3 r3 r3 r3 r3
-    { 1, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 2 },  // row 1: r2 r1 r1 r1 r1 r2 r3 r4 r4 r4 r4 r3
-    { 1, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 2 },  // row 2: r2 r1 r1 r1 r1 r2 r3 r4 r4 r4 r4 r3
-    { 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2 },  // row 3: symmetric layout (r1 = 8 LEDs, r2 = 16, r3 = 16, r4 = 8)
-};
-
-// led_to_channel_bit[led_index] = (1 << channel_bit), indexed by LINEAR LED
-// index 0-47 (not by (x,y)).  Filled in led_matrix_init() by walking the
-// region_grid above and translating (x,y) through matrix_xy_to_index() so
-// that the zig-zag physical wiring is correctly accounted for.
-static uint8_t led_to_channel_bit[LED_STRIP_COUNT];
-
 /**
- * @brief Convert 2D matrix coordinates to linear LED index (zig-zag pattern)
+ * @brief Convert 2D grid coordinates to linear LED index (zig-zag column pattern).
  *
- * @param x Column (0-11)
- * @param y Row (0-3)
- * @return Linear LED index (0-47)
+ * Only meaningful when pixel addressing is supported (NEOPIXEL / DOTSTAR) and
+ * CONFIG_LED_GRID_WIDTH × CONFIG_LED_GRID_HEIGHT == led_strip_get_pixel_count().
+ *
+ * Returns led_strip_get_pixel_count(matrix_handle) (an invalid index) when:
+ *   - pixel addressing is not supported (DIRECT mode), or
+ *   - (x, y) is out of the configured grid bounds.
+ *
+ * Callers must check the returned value before passing it to led_strip_set_pixel_rgb.
  */
 static uint32_t matrix_xy_to_index(uint8_t x, uint8_t y)
 {
-    if (x >= LED_MATRIX_WIDTH || y >= LED_MATRIX_HEIGHT) {
-        return LED_STRIP_COUNT; // Invalid index
+    // Gate: direct mode has no individually addressable pixels.
+    if (!matrix_handle || !led_strip_supports_pixel_addressing(matrix_handle)) {
+        return led_strip_get_pixel_count(matrix_handle); // invalid sentinel
     }
 
+#ifdef CONFIG_LED_GRID_WIDTH
+    uint8_t grid_w = (uint8_t)CONFIG_LED_GRID_WIDTH;
+#else
+    uint8_t grid_w = LED_MATRIX_WIDTH;
+#endif
+#ifdef CONFIG_LED_GRID_HEIGHT
+    uint8_t grid_h = (uint8_t)CONFIG_LED_GRID_HEIGHT;
+#else
+    uint8_t grid_h = LED_MATRIX_HEIGHT;
+#endif
+
+    if (x >= grid_w || y >= grid_h) {
+        return led_strip_get_pixel_count(matrix_handle); // out of bounds
+    }
+
+    // Zig-zag pattern: even columns top-to-bottom, odd columns bottom-to-top.
     uint32_t index;
-
-    // Zig-zag pattern: even columns go down, odd columns go up
     if (x % 2 == 0) {
-        // Even column: top to bottom (normal)
-        index = x * LED_MATRIX_HEIGHT + y;
+        index = (uint32_t)x * grid_h + y;
     } else {
-        // Odd column: bottom to top (reversed)
-        index = x * LED_MATRIX_HEIGHT + (LED_MATRIX_HEIGHT - 1 - y);
+        index = (uint32_t)x * grid_h + (grid_h - 1u - y);
     }
-
     return index;
 }
 
 /**
- * @brief Initialize 12x4 LED matrix on GPIO 12
+ * @brief Initialize LED matrix / strip backend from menuconfig.
+ *
+ * All hardware parameters (backend type, GPIO pin(s), pixel count, channel
+ * map) are read from menuconfig via LED_STRIP_CONFIG_FROM_MENUCONFIG.  No
+ * compile-time constants from audio_config.h are used here; the strip layer
+ * owns all hardware details.
  */
 esp_err_t led_matrix_init(void)
 {
-    ESP_LOGI(TAG, "Initializing 12x4 LED matrix on GPIO %d", LED_STRIP_GPIO);
+    ESP_LOGI(TAG, "Initializing LED strip backend from menuconfig");
 
-    led_strip_config_t config = {
-        .type = LED_STRIP_WS2812,       // WS2812B compatible
-        .length = LED_STRIP_COUNT,      // 48 LEDs (12x4)
-        .gpio_pin = LED_STRIP_GPIO      // GPIO 12
-    };
+    // Pull all hardware parameters from CONFIG_LED_* menuconfig symbols.
+    // The channel map string (CONFIG_LED_CHANNEL_MAP) is parsed by led_strip_init.
+    led_strip_config_t config = LED_STRIP_CONFIG_FROM_MENUCONFIG;
 
     esp_err_t ret = led_strip_init(&config, &matrix_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize LED matrix: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to initialize LED strip: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    // Build the led_to_channel_bit LUT by walking (x,y) through the region_grid,
-    // translating each (x,y) via matrix_xy_to_index() to get the physical linear
-    // index, then storing 1<<bit at that slot.  This correctly handles the zig-zag
-    // wiring so that logical (row,col) positions map to the right physical LEDs.
-    for (uint8_t y = 0; y < LED_MATRIX_HEIGHT; y++) {
-        for (uint8_t x = 0; x < LED_MATRIX_WIDTH; x++) {
-            uint32_t idx = matrix_xy_to_index(x, y);
-            if (idx < LED_STRIP_COUNT) {
-                led_to_channel_bit[idx] = (uint8_t)(1u << region_grid[y][x]);
-            }
-        }
-    }
+    ESP_LOGI(TAG, "LED strip initialized: backend=%d, pixels=%lu",
+             (int)led_strip_get_backend(matrix_handle),
+             (unsigned long)led_strip_get_pixel_count(matrix_handle));
 
-    // Clear all LEDs
+    // Clear all LEDs / channels on startup.
     led_strip_clear(matrix_handle);
     led_strip_refresh(matrix_handle);
 
@@ -207,9 +193,10 @@ esp_err_t led_matrix_init(void)
 }
 
 /**
- * @brief Set LED at matrix coordinates (x,y) with color order correction
+ * @brief Set LED at matrix coordinates (x,y) with color order correction.
  *
- * Many WS2812 strips use GRB order instead of RGB
+ * Only valid for addressable backends (NEOPIXEL / DOTSTAR).  Returns
+ * ESP_ERR_NOT_SUPPORTED for DIRECT mode (no per-pixel addressing).
  */
 esp_err_t led_matrix_set_pixel(uint8_t x, uint8_t y, uint8_t red, uint8_t green, uint8_t blue)
 {
@@ -218,15 +205,20 @@ esp_err_t led_matrix_set_pixel(uint8_t x, uint8_t y, uint8_t red, uint8_t green,
         return ESP_ERR_INVALID_STATE;
     }
 
+    // Gate: direct mode has no individually addressable pixels.
+    if (!led_strip_supports_pixel_addressing(matrix_handle)) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    uint32_t pixel_count = led_strip_get_pixel_count(matrix_handle);
     uint32_t index = matrix_xy_to_index(x, y);
-    if (index >= LED_STRIP_COUNT) {
+    if (index >= pixel_count) {
         ESP_LOGE(TAG, "Invalid LED index %lu for coordinates (%d,%d)", index, x, y);
         return ESP_ERR_INVALID_ARG;
     }
 
     ESP_LOGD(TAG, "Setting LED[%d,%d] (index %lu) to RGB(%d,%d,%d)", x, y, index, red, green, blue);
 
-    // Use RGB color order first, then try GRB if colors are wrong
     return led_strip_set_pixel_rgb(matrix_handle, index, red, green, blue);
 }
 
@@ -260,12 +252,20 @@ esp_err_t led_matrix_clear(void)
 }
 
 /**
- * @brief Display VU meter on matrix (12 columns for levels)
+ * @brief Display VU meter on matrix (12 columns for levels).
+ *
+ * Only valid for addressable backends (NEOPIXEL / DOTSTAR).  Returns
+ * ESP_ERR_NOT_SUPPORTED for DIRECT mode.
  */
 esp_err_t led_matrix_vu_meter(float left_level, float right_level)
 {
     if (!matrix_handle) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    // Gate: direct mode has no individually addressable pixels.
+    if (!led_strip_supports_pixel_addressing(matrix_handle)) {
+        return ESP_ERR_NOT_SUPPORTED;
     }
 
     // Clear matrix first
@@ -296,12 +296,20 @@ esp_err_t led_matrix_vu_meter(float left_level, float right_level)
 }
 
 /**
- * @brief Demo pattern - test all LEDs in sequence
+ * @brief Demo pattern - test all LEDs in sequence.
+ *
+ * Only valid for addressable backends (NEOPIXEL / DOTSTAR).  Returns
+ * ESP_ERR_NOT_SUPPORTED for DIRECT mode.
  */
 esp_err_t led_matrix_test_pattern(void)
 {
     if (!matrix_handle) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    // Gate: direct mode has no individually addressable pixels.
+    if (!led_strip_supports_pixel_addressing(matrix_handle)) {
+        return ESP_ERR_NOT_SUPPORTED;
     }
 
     ESP_LOGI(TAG, "Running LED matrix test pattern");
@@ -407,7 +415,7 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
         uint64_t elapsed_us = now_us - s->cycle_start_time_us;
 
         // --- Cycle boundary: advance cycle and recompute all swept params ---
-        // Critical section: snapshot sw_* and write red/green/blue/_w_value
+        // Critical section: snapshot sw_* and write red/green/blue
         // atomically vs task-context writers (set_color/start/update).
         portENTER_CRITICAL_ISR(&s_flicker_mux);
         if (elapsed_us >= cycle_duration_us) {
@@ -448,11 +456,9 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             uint32_t r_q8 = led_interp_param(&s->sw_r, progress_q16);
             uint32_t g_q8 = led_interp_param(&s->sw_g, progress_q16);
             uint32_t b_q8 = led_interp_param(&s->sw_b, progress_q16);
-            uint32_t w_q8 = led_interp_param(&s->sw_w, progress_q16);
-            s->red      = (uint8_t)(r_q8 >> 8);
-            s->green    = (uint8_t)(g_q8 >> 8);
-            s->blue     = (uint8_t)(b_q8 >> 8);
-            s->_w_value = (uint8_t)(w_q8 >> 8);
+            s->red   = (uint8_t)(r_q8 >> 8);
+            s->green = (uint8_t)(g_q8 >> 8);
+            s->blue  = (uint8_t)(b_q8 >> 8);
         }
         portEXIT_CRITICAL_ISR(&s_flicker_mux);
 
@@ -483,14 +489,21 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
 /**
  * @brief Task that performs actual LED I/O for the flicker effect.
  *
- * Priority 22, pinned to core 1.  Woken by led_flicker_timer_callback via
- * vTaskNotifyGiveFromISR.  On wake, it walks all 48 LEDs, looks up each
- * LED's owning channel via led_to_channel_bit[], applies that channel's
- * current on/off state and color, and calls led_strip_refresh once.
+ * Priority 23, pinned to core 1.  Woken by led_flicker_timer_callback via
+ * vTaskNotifyGiveFromISR.
  *
- * Pre-computes per-channel (r,g,b) with brightness scaling and W compositing
- * once per wake before the per-LED loop (48 iterations × 4 channel checks = 192
- * ops per wake — negligible vs. the actual RMT DMA transfer).
+ * On each wake: snapshot all 4 channels under s_flicker_mux (one critical
+ * section per channel), then call led_strip_set_channel() × 4 and a single
+ * led_strip_refresh().  The strip layer handles per-backend compositing
+ * (brightness scaling for NEOPIXEL/DOTSTAR; PWM duty for DIRECT).
+ *
+ * The per-LED walk and led_to_channel_bit[] LUT that previously lived here
+ * have been removed — the channel-map is now owned by led_strip.c and applied
+ * inside led_strip_set_channel().  The flicker ON/OFF semantics shift from
+ * "set RGB = 0 when OFF" to "set brightness = 0 when OFF", which is correct
+ * for all three backends:
+ *   - NEOPIXEL/DOTSTAR: brightness=0 → R'=G'=B'=0 in the working buffer.
+ *   - DIRECT:           brightness=0 → LEDC duty = 0 (LED off).
  */
 static void led_flicker_task(void *arg) {
     while (1) {
@@ -508,64 +521,44 @@ static void led_flicker_task(void *arg) {
             continue;
         }
 
-        // Pre-compute per-channel output colors so the per-LED loop only indexes.
-        // Colors are only meaningful when led_state == true; the false case writes (0,0,0).
-        // The snapshot under s_flicker_mux is essential: the ISR writes red/green/blue
-        // as three separate stores under portENTER_CRITICAL_ISR, so reading them
-        // unprotected here produces torn (mixed-epoch) color triples.
-        uint8_t ch_r[4], ch_g[4], ch_b[4];
+        // Snapshot per-channel state under s_flicker_mux.
+        // The ISR writes red/green/blue as three separate stores under
+        // portENTER_CRITICAL_ISR; reading them unprotected produces torn
+        // (mixed-epoch) color triples.  One critical section per channel
+        // is adequate — the ISR's cycle-boundary block takes the same mux.
+        bool    ch_active[4], ch_led_state[4];
+        uint8_t ch_brightness[4], ch_red[4], ch_green[4], ch_blue[4];
         for (uint8_t ch = 0; ch < 4; ch++) {
             led_flicker_state_t *s = &flicker_state[ch];
-            bool active, led_state;
-            uint8_t bri, w_val, red, green, blue;
             portENTER_CRITICAL(&s_flicker_mux);
-            active    = s->active;
-            led_state = s->led_state;
-            bri       = s->brightness;
-            w_val     = s->_w_value;
-            red       = s->red;
-            green     = s->green;
-            blue      = s->blue;
+            ch_active[ch]     = s->active;
+            ch_led_state[ch]  = s->led_state;
+            ch_brightness[ch] = s->brightness;
+            ch_red[ch]        = s->red;
+            ch_green[ch]      = s->green;
+            ch_blue[ch]       = s->blue;
             portEXIT_CRITICAL(&s_flicker_mux);
-
-            if (!active || !led_state) {
-                ch_r[ch] = ch_g[ch] = ch_b[ch] = 0;
-                continue;
-            }
-            uint8_t w_scaled = (w_val * bri) / 100;
-            uint8_t r = (red   * bri) / 100;
-            uint8_t g = (green * bri) / 100;
-            uint8_t b = (blue  * bri) / 100;
-            // W ("white component") is added to R, G, B and clamped to 255.
-            // Strategy (b): lift toward white — visually intuitive for RGB-only strip.
-            if ((uint16_t)r + w_scaled > 255u) r = 255; else r = (uint8_t)(r + w_scaled);
-            if ((uint16_t)g + w_scaled > 255u) g = 255; else g = (uint8_t)(g + w_scaled);
-            if ((uint16_t)b + w_scaled > 255u) b = 255; else b = (uint8_t)(b + w_scaled);
-            ch_r[ch] = r;
-            ch_g[ch] = g;
-            ch_b[ch] = b;
         }
 
-        // Walk every physical LED, look up its owning channel, apply that
-        // channel's precomputed color.  led_to_channel_bit[i] == (1<<ch_bit),
-        // so we find ch_bit by scanning 0-3 (only 4 iterations per LED).
-        for (uint32_t led = 0; led < LED_STRIP_COUNT; led++) {
-            uint8_t mask = led_to_channel_bit[led];
-            uint8_t r = 0, g = 0, b = 0;
-            for (uint8_t ch = 0; ch < 4; ch++) {
-                if (mask & (1u << ch)) {
-                    // Each LED belongs to exactly one channel per the spec's
-                    // region map, so first match wins and we break immediately.
-                    r = ch_r[ch];
-                    g = ch_g[ch];
-                    b = ch_b[ch];
-                    break;
-                }
+        // One set_channel call per logical channel.  Brightness compositing
+        // (r' = r × brightness / 100) now lives inside led_strip.c so the
+        // caller passes raw values from the timeline.
+        //
+        // When a channel is inactive or in the OFF half of its flicker cycle,
+        // we pass brightness=0 so the strip layer drives the output to black /
+        // zero duty — semantically equivalent to the old "write RGB=0" path
+        // but portable across all three backends.
+        for (uint8_t ch = 0; ch < 4; ch++) {
+            if (!ch_active[ch] || !ch_led_state[ch]) {
+                led_strip_set_channel(matrix_handle, ch, 0, 0, 0, 0);
+            } else {
+                led_strip_set_channel(matrix_handle, ch,
+                                      ch_brightness[ch],
+                                      ch_red[ch], ch_green[ch], ch_blue[ch]);
             }
-            led_strip_set_pixel_rgb(matrix_handle, led, r, g, b);
         }
 
-        // Single refresh at the end — all pixel data was written above.
+        // Single refresh at the end — all channel data was written above.
         led_strip_refresh(matrix_handle);
     }
 
@@ -785,15 +778,14 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
             s->led_dirty           = false;
         }
         // Clear any pending sweep so the new params are held constant.
-        // ALL seven swept params (freq/duty/bright/R/G/B/W) must be set so the
+        // ALL six swept params (freq/duty/bright/R/G/B) must be set so the
         // cycle-boundary recompute in the ISR doesn't overwrite the fields with 0.
         s->sw_freq       = (led_sweep_param_t){ freq_milliHz, freq_milliHz, LED_INTERP_NONE };
         s->sw_duty       = (led_sweep_param_t){ (uint32_t)duty_cycle * 256u, (uint32_t)duty_cycle * 256u, LED_INTERP_NONE };
         s->sw_brightness = (led_sweep_param_t){ (uint32_t)brightness * 256u, (uint32_t)brightness * 256u, LED_INTERP_NONE };
-        s->sw_r          = (led_sweep_param_t){ (uint32_t)s->red      * 256u, (uint32_t)s->red      * 256u, LED_INTERP_NONE };
-        s->sw_g          = (led_sweep_param_t){ (uint32_t)s->green    * 256u, (uint32_t)s->green    * 256u, LED_INTERP_NONE };
-        s->sw_b          = (led_sweep_param_t){ (uint32_t)s->blue     * 256u, (uint32_t)s->blue     * 256u, LED_INTERP_NONE };
-        s->sw_w          = (led_sweep_param_t){ (uint32_t)s->_w_value * 256u, (uint32_t)s->_w_value * 256u, LED_INTERP_NONE };
+        s->sw_r          = (led_sweep_param_t){ (uint32_t)s->red   * 256u, (uint32_t)s->red   * 256u, LED_INTERP_NONE };
+        s->sw_g          = (led_sweep_param_t){ (uint32_t)s->green * 256u, (uint32_t)s->green * 256u, LED_INTERP_NONE };
+        s->sw_b          = (led_sweep_param_t){ (uint32_t)s->blue  * 256u, (uint32_t)s->blue  * 256u, LED_INTERP_NONE };
         s->sweep_start_us    = now_us;
         s->sweep_duration_us = 0;
         s->active = true;
@@ -935,8 +927,7 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
             spec->bright_curve != LED_INTERP_NONE ||
             spec->r_curve      != LED_INTERP_NONE ||
             spec->g_curve      != LED_INTERP_NONE ||
-            spec->b_curve      != LED_INTERP_NONE ||
-            spec->w_curve      != LED_INTERP_NONE)) {
+            spec->b_curve      != LED_INTERP_NONE)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -969,7 +960,6 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
         s->red                 = (spec->r_curve      != LED_INTERP_NONE) ? spec->r_start      : spec->r_target;
         s->green               = (spec->g_curve      != LED_INTERP_NONE) ? spec->g_start      : spec->g_target;
         s->blue                = (spec->b_curve      != LED_INTERP_NONE) ? spec->b_start      : spec->b_target;
-        s->_w_value            = (spec->w_curve      != LED_INTERP_NONE) ? spec->w_start      : spec->w_target;
         // Only reset the cycle origin on FIRST activation of this channel.
         // When a sweep is dispatched on an already-running channel, preserve the
         // existing cycle_start_time_us so the rhythm continues uninterrupted.
@@ -1019,11 +1009,6 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
             .start_q  = (uint32_t)spec->b_start * 256u,
             .target_q = (uint32_t)spec->b_target * 256u,
             .curve    = (uint8_t)spec->b_curve,
-        };
-        s->sw_w = (led_sweep_param_t){
-            .start_q  = (uint32_t)spec->w_start * 256u,
-            .target_q = (uint32_t)spec->w_target * 256u,
-            .curve    = (uint8_t)spec->w_curve,
         };
         s->sweep_start_us    = sweep_start_us;
         s->sweep_duration_us = sweep_duration_us;
@@ -1111,4 +1096,8 @@ float led_matrix_get_current_frequency(void) {
         }
     }
     return 0.0f;
+}
+
+bool led_matrix_supports_pixel_addressing(void) {
+    return matrix_handle && led_strip_supports_pixel_addressing(matrix_handle);
 }

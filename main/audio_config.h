@@ -2,6 +2,7 @@
 #define AUDIO_CONFIG_H
 
 #include "driver/gpio.h"
+#include "sdkconfig.h"
 
 /**
  * @brief Audio Configuration
@@ -19,11 +20,24 @@
 #define AUDIO_BITS_PER_SAMPLE   16           // 16-bit
 #define AUDIO_CHANNELS          2            // Stereo
 
-// LED Matrix Configuration
-#define LED_STRIP_GPIO          GPIO_NUM_12  // LED data pin
-#define LED_STRIP_COUNT         48           // 12x4 matrix = 48 LEDs
-#define LED_MATRIX_WIDTH        12           // 12 columns
-#define LED_MATRIX_HEIGHT       4            // 4 rows
+// LED Matrix Configuration — driven by menuconfig (see Kconfig.projbuild).
+// For neopixel and dotstar builds the values come from CONFIG_LED_DATA_PIN,
+// CONFIG_LED_COUNT, CONFIG_LED_GRID_WIDTH, CONFIG_LED_GRID_HEIGHT.
+// For direct mode there is no addressable strip; the fallback constants below
+// are valid compile-time values for any code that references these macros as
+// array sizes, but they are never used at runtime because led_strip_supports_pixel_addressing()
+// returns false and the matrix layer gates all grid-dependent paths accordingly.
+#if defined(CONFIG_LED_TYPE_NEOPIXEL) || defined(CONFIG_LED_TYPE_DOTSTAR)
+#define LED_STRIP_GPIO          ((gpio_num_t)CONFIG_LED_DATA_PIN)
+#define LED_STRIP_COUNT         CONFIG_LED_COUNT
+#define LED_MATRIX_WIDTH        CONFIG_LED_GRID_WIDTH
+#define LED_MATRIX_HEIGHT       CONFIG_LED_GRID_HEIGHT
+#else  // LED_TYPE_DIRECT — no addressable strip
+#define LED_STRIP_GPIO          GPIO_NUM_NC
+#define LED_STRIP_COUNT         4            // 4 logical channels (one per LEDC output)
+#define LED_MATRIX_WIDTH        2            // compile-time fallback; gated at runtime
+#define LED_MATRIX_HEIGHT       2            // compile-time fallback; gated at runtime
+#endif
 
 // Buffer Settings
 #define AUDIO_DMA_BUFFER_COUNT  8            // Number of DMA buffers

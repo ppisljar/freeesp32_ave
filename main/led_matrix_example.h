@@ -26,8 +26,7 @@ typedef enum {
  * the parameter is swept from <param>_start to <param>_target over
  * duration_ms milliseconds using the selected curve.
  *
- * W ("white") is composited at write time: it is added to R, G, and B
- * (each clamped to 255) so the strip remains RGB-only at the wire level.
+ * W (white) channel has been removed. The strip is RGB-only.
  */
 typedef struct {
     uint32_t freq_milliHz_start;   /**< Frequency start value in milliHz */
@@ -39,18 +38,15 @@ typedef struct {
     uint8_t  r_start;              /**< Red start (0-255) */
     uint8_t  g_start;              /**< Green start (0-255) */
     uint8_t  b_start;              /**< Blue start (0-255) */
-    uint8_t  w_start;              /**< White start (0-255) */
     uint8_t  r_target;             /**< Red target (0-255) */
     uint8_t  g_target;             /**< Green target (0-255) */
     uint8_t  b_target;             /**< Blue target (0-255) */
-    uint8_t  w_target;             /**< White target (0-255) */
     led_interp_t freq_curve;       /**< Interpolation curve for frequency */
     led_interp_t duty_curve;       /**< Interpolation curve for duty cycle */
     led_interp_t bright_curve;     /**< Interpolation curve for brightness */
     led_interp_t r_curve;          /**< Interpolation curve for red */
     led_interp_t g_curve;          /**< Interpolation curve for green */
     led_interp_t b_curve;          /**< Interpolation curve for blue */
-    led_interp_t w_curve;          /**< Interpolation curve for white */
     uint32_t duration_ms;          /**< Sweep duration in milliseconds */
 } led_sweep_spec_t;
 
@@ -171,8 +167,8 @@ esp_err_t led_matrix_set_flicker_color_masked(uint8_t channel_mask,
 /**
  * @brief Start a parametric LED flicker sweep on channels indicated by channel_mask.
  *
- * Starts flicker (if not already running) and configures all seven parameters
- * (frequency, duty, brightness, R, G, B, W) to sweep from their start values to
+ * Starts flicker (if not already running) and configures all six parameters
+ * (frequency, duty, brightness, R, G, B) to sweep from their start values to
  * their target values over duration_ms.  Parameters whose curve is
  * LED_INTERP_NONE are snapped to target immediately.
  *
@@ -291,6 +287,19 @@ float led_matrix_get_current_frequency(void);
  * @return uint8_t Bitmask 0x00-0x0F.
  */
 uint8_t led_matrix_get_active_mask(void);
+
+/**
+ * @brief Return true if the underlying LED strip supports per-pixel addressing.
+ *
+ * Returns false when the backend is LED_STRIP_BACKEND_DIRECT (4 discrete GPIOs,
+ * no addressable pixels).  Web handlers and any other pixel-coord code must call
+ * this before invoking led_matrix_set_pixel(), led_matrix_test_pattern(), or
+ * led_matrix_vu_meter() to avoid returning ESP_ERR_NOT_SUPPORTED down the call
+ * chain and instead return a clear HTTP 501 to the caller.
+ *
+ * @return bool true for neopixel/dotstar backends, false for direct mode.
+ */
+bool led_matrix_supports_pixel_addressing(void);
 
 #ifdef __cplusplus
 }

@@ -658,8 +658,11 @@ esp_err_t config_parser_create_example(char *buffer, size_t buffer_size)
         "# 30-second demo: LED zones + binaural beat sweep\n"
         "#\n"
         "# LED line formats:\n"
-        "#   5-field (old):  time freq duty bright channel_mask\n"
-        "#   9-field (new):  time freq duty bright R G B W channel_mask\n"
+        "#   5-field (legacy):    time freq duty bright channel_mask\n"
+        "#   8-field (canonical): time freq duty bright R G B channel_mask\n"
+        "#\n"
+        "# White (W) channel is not supported. Old 9-field files must be re-saved\n"
+        "# as 8-field (drop the W column) or they will fail to parse.\n"
         "#\n"
         "# Channel mask bits (LED): 1=r1 inner-left, 2=r2 outer-left frame,\n"
         "#                          4=r3 outer-right frame, 8=r4 inner-right.\n"
@@ -672,23 +675,23 @@ esp_err_t config_parser_create_example(char *buffer, size_t buffer_size)
         "\n"
         "# t = 0 — start binaural beat on ch1 (left pan) + ch2 (right pan),\n"
         "# LED inner zones (r1+r4) BLUE at 8 Hz 30% brightness\n"
-        "0 8 50 30 0 0 255 0 9                # 9-field: channels 1+4, blue\n"
+        "0 8 50 30 0 0 255 9                  # 8-field: channels 1+4, blue\n"
         "A 0 200 -100 60 0 1                  # ch1 audio: 200 Hz, left\n"
         "A 0 208 100 60 0 2                   # ch2 audio: 208 Hz, right (= 8 Hz binaural)\n"
         "\n"
         "# t = 10 s — sweep LED color blue→green and frequency 8 Hz→12 Hz,\n"
         "# binaural beat sweeps from 8 Hz to 12 Hz (carrier stays 200 Hz)\n"
-        "10000 >12 50 30 0 >255 >0 0 9        # linear: freq 8→12, color blue→green\n"
+        "10000 >12 50 30 0 >255 >0 9          # linear: freq 8→12, color blue→green\n"
         "A 10000 200 -100 60 0 1               # ch1 holds at 200 Hz\n"
         "A 10000 >212 100 60 0 2              # ch2 sweeps 208→212 Hz\n"
         "\n"
         "# t = 20 s — quadratic ease back to slow alpha-band 8 Hz, color WHITE\n"
-        "20000 *8 50 30 *255 *255 *255 0 9    # quadratic ease freq + color to white\n"
+        "20000 *8 50 30 *255 *255 *255 9      # quadratic ease freq + color to white\n"
         "A 20000 200 -100 60 0 1\n"
         "A 20000 *208 100 60 0 2\n"
         "\n"
         "# t = 30 s — end: LEDs off, audio fades out linearly\n"
-        "30000 0 0 0 0 0 0 0 15               # all 4 LED zones off (mask 15)\n"
+        "30000 0 0 0 0 0 0 15                 # all 4 LED zones off (mask 15)\n"
         "A 30000 200 -100 >0 0 1              # ch1 fade volume to 0\n"
         "A 30000 208 100 >0 0 2               # ch2 fade volume to 0\n";
 
@@ -771,11 +774,11 @@ static uint8_t clamp_u8_field(float v, const char *field_name)
 
 static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config_led_entry_t *led_entry)
 {
-    // Old format: time freq duty bright mask           (5 tokens)
-    // New format: time freq duty bright R G B W mask  (9 tokens)
-    // Anything else is rejected.
-    if (token_count != 5 && token_count != 9) {
-        ESP_LOGW(TAG, "LED line has %zu tokens; expected 5 (old) or 9 (new) — skipping", token_count);
+    // Legacy format:   time freq duty bright channel_mask          (5 tokens)
+    // Canonical format: time freq duty bright R G B channel_mask   (8 tokens)
+    // 9-token (old RGBW) format is no longer accepted — re-save as 8-field.
+    if (token_count != 5 && token_count != 8) {
+        ESP_LOGW(TAG, "LED line has %zu tokens; expected 5 (legacy) or 8 (canonical: time freq duty bright R G B mask) — skipping", token_count);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -791,27 +794,23 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
     led_entry->duty_cycle = (uint8_t)duty_f;
     led_entry->brightness = (uint8_t)bright_f;
 
-    if (token_count == 9) {
-        // New 9-token format: R G B W carry independent interp prefixes
+    if (token_count == 8) {
+        // Canonical 8-token format: R G B carry independent interp prefixes
         float r_f = parse_value_with_interpolation(tokens[4], &led_entry->r_interp);
         float g_f = parse_value_with_interpolation(tokens[5], &led_entry->g_interp);
         float b_f = parse_value_with_interpolation(tokens[6], &led_entry->b_interp);
-        float w_f = parse_value_with_interpolation(tokens[7], &led_entry->w_interp);
         led_entry->r = clamp_u8_field(r_f, "R");
         led_entry->g = clamp_u8_field(g_f, "G");
         led_entry->b = clamp_u8_field(b_f, "B");
-        led_entry->w = clamp_u8_field(w_f, "W");
-        led_entry->channel_mask = (uint8_t)atoi(tokens[8]);
+        led_entry->channel_mask = (uint8_t)atoi(tokens[7]);
     } else {
-        // Old 5-token format: default RGBW = full white, W off; no interp on colors
+        // Legacy 5-token format: default RGB = full white; no interp on colors
         led_entry->r = 255;
         led_entry->g = 255;
         led_entry->b = 255;
-        led_entry->w = 0;
         led_entry->r_interp = CONFIG_INTERP_NONE;
         led_entry->g_interp = CONFIG_INTERP_NONE;
         led_entry->b_interp = CONFIG_INTERP_NONE;
-        led_entry->w_interp = CONFIG_INTERP_NONE;
         led_entry->channel_mask = (uint8_t)atoi(tokens[4]);
     }
 
@@ -1591,7 +1590,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     // The lock is released a few lines below for the LED dispatch itself, but the
     // log line currently fires while the lock is still held.
     #define INTERP_GLYPH(x) ((x) == CONFIG_INTERP_LINEAR ? ">" : (x) == CONFIG_INTERP_QUADRATIC ? "*" : "")
-    ESP_LOGD(TAG, "Executing LED entry: t=%u  freq=%s%.1f  duty=%s%d%%  bright=%s%d%%  RGB=(%s%d,%s%d,%s%d)  W=%s%d  mask=0x%02x",
+    ESP_LOGD(TAG, "Executing LED entry: t=%u  freq=%s%.1f  duty=%s%d%%  bright=%s%d%%  RGB=(%s%d,%s%d,%s%d)  mask=0x%02x",
              led->time_ms,
              INTERP_GLYPH(led->freq_interp),       led->frequency,
              INTERP_GLYPH(led->duty_interp),       led->duty_cycle,
@@ -1599,7 +1598,6 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
              INTERP_GLYPH(led->r_interp), led->r,
              INTERP_GLYPH(led->g_interp), led->g,
              INTERP_GLYPH(led->b_interp), led->b,
-             INTERP_GLYPH(led->w_interp), led->w,
              led->channel_mask);
     #undef INTERP_GLYPH
 
@@ -1708,12 +1706,6 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 sweep_spec.b_curve  = interp_to_led_curve(next_bit->b_interp);
                 any_sweep = true;
             }
-            if (next_bit->w_interp != CONFIG_INTERP_NONE) {
-                sweep_spec.w_start  = led->w;
-                sweep_spec.w_target = next_bit->w;
-                sweep_spec.w_curve  = interp_to_led_curve(next_bit->w_interp);
-                any_sweep = true;
-            }
         }
     }
 
@@ -1743,10 +1735,6 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         if (sweep_spec.b_curve == LED_INTERP_NONE) {
             sweep_spec.b_start  = led->b;
             sweep_spec.b_target = led->b;
-        }
-        if (sweep_spec.w_curve == LED_INTERP_NONE) {
-            sweep_spec.w_start  = led->w;
-            sweep_spec.w_target = led->w;
         }
 
 #ifdef CONFIG_TIMELINE_DEBUG

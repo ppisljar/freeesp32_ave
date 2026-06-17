@@ -688,6 +688,13 @@ static esp_err_t led_pattern_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "LED pattern test requested");
 
+    if (!led_matrix_supports_pixel_addressing()) {
+        httpd_resp_set_status(req, "501 Not Implemented");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
+        return ESP_OK;
+    }
+
     esp_err_t ret = led_matrix_test_pattern();
     if (ret == ESP_OK) {
         httpd_resp_send(req, "LED pattern test started", HTTPD_RESP_USE_STRLEN);
@@ -701,6 +708,13 @@ static esp_err_t led_pattern_handler(httpd_req_t *req)
 static esp_err_t led_colors_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "LED color test requested");
+
+    if (!led_matrix_supports_pixel_addressing()) {
+        httpd_resp_set_status(req, "501 Not Implemented");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
+        return ESP_OK;
+    }
 
     // Test each color for 1 second each
     for (uint8_t x = 0; x < 12; x++) {
@@ -723,6 +737,13 @@ static esp_err_t led_colors_handler(httpd_req_t *req)
 static esp_err_t led_red_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "LED all red requested");
+
+    if (!led_matrix_supports_pixel_addressing()) {
+        httpd_resp_set_status(req, "501 Not Implemented");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
+        return ESP_OK;
+    }
 
     // Clear all LEDs first
     led_matrix_clear();
@@ -751,6 +772,13 @@ static esp_err_t led_green_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "LED all green requested");
 
+    if (!led_matrix_supports_pixel_addressing()) {
+        httpd_resp_set_status(req, "501 Not Implemented");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
+        return ESP_OK;
+    }
+
     for (uint8_t x = 0; x < 12; x++) {
         for (uint8_t y = 0; y < 4; y++) {
             led_matrix_set_pixel(x, y, 0, 255, 0);
@@ -766,6 +794,13 @@ static esp_err_t led_blue_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "LED all blue requested");
 
+    if (!led_matrix_supports_pixel_addressing()) {
+        httpd_resp_set_status(req, "501 Not Implemented");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
+        return ESP_OK;
+    }
+
     for (uint8_t x = 0; x < 12; x++) {
         for (uint8_t y = 0; y < 4; y++) {
             led_matrix_set_pixel(x, y, 0, 0, 255);
@@ -780,6 +815,13 @@ static esp_err_t led_blue_handler(httpd_req_t *req)
 static esp_err_t led_white_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "LED all white requested");
+
+    if (!led_matrix_supports_pixel_addressing()) {
+        httpd_resp_set_status(req, "501 Not Implemented");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
+        return ESP_OK;
+    }
 
     for (uint8_t x = 0; x < 12; x++) {
         for (uint8_t y = 0; y < 4; y++) {
