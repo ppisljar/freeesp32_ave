@@ -17,13 +17,29 @@ extern "C" {
 #include "esp_err.h"
 
 /**
+ * @brief Number of logical LED channels supported by the DIRECT backend.
+ *
+ * The ESP32 (classic) LEDC peripheral has exactly 8 low-speed channels
+ * (LEDC_CHANNEL_0 through LEDC_CHANNEL_7), so 8 is the hardware ceiling for
+ * DIRECT mode on this chip.
+ *
+ * This macro is defined here (at the strip layer, the lower-level component)
+ * rather than in led_matrix_example.h so that both led_strip.c and
+ * led_matrix_example.c can see it without a layering inversion.  Files that
+ * include led_strip.h (including led_matrix_example.h transitively) get it
+ * automatically.
+ */
+#define NUM_LED_CHANNELS 8
+
+/**
  * @brief LED Strip Control Component
  *
  * Provides a unified API for three physical LED backends:
  *
  *  - NEOPIXEL  — addressable single-wire strip (WS2812 / SK6812) driven via RMT.
  *  - DOTSTAR   — addressable two-wire strip (APA102) driven via hardware SPI (SPI3_HOST).
- *  - DIRECT    — 4 discrete LEDs driven by LEDC PWM, one GPIO per logical channel.
+ *  - DIRECT    — NUM_LED_CHANNELS (8) discrete LEDs driven by LEDC PWM, one GPIO per
+ *                logical channel.
  *
  * The backend is selected at compile time through menuconfig (CONFIG_LED_TYPE_*) and
  * cannot be changed at runtime.
@@ -31,7 +47,8 @@ extern "C" {
  * Per-pixel effects (set_pixel_rgb, set_pixel_color, get_pixel_color, set_all,
  * vu_meter, spectrum) return ESP_ERR_NOT_SUPPORTED when the handle was
  * initialised with LED_STRIP_BACKEND_DIRECT because direct mode has no concept
- * of individually addressable pixels — it exposes exactly 4 logical channels.
+ * of individually addressable pixels — it exposes exactly NUM_LED_CHANNELS logical
+ * channels.
  *
  * Use led_strip_set_channel() as the primary write API; it is portable across
  * all three backends.  In DIRECT mode the R/G/B arguments are silently ignored
@@ -44,7 +61,8 @@ extern "C" {
  *
  * LED_STRIP_BACKEND_NEOPIXEL (0) — single-wire addressable strip via RMT.
  * LED_STRIP_BACKEND_DOTSTAR  (1) — two-wire (CLK+DATA) APA102 strip via SPI3.
- * LED_STRIP_BACKEND_DIRECT   (2) — 4 discrete GPIOs driven by LEDC PWM.
+ * LED_STRIP_BACKEND_DIRECT   (2) — NUM_LED_CHANNELS (8) discrete GPIOs driven
+ *                                   by LEDC PWM.
  *
  * The value LED_STRIP_BACKEND_FROM_MENUCONFIG (-1 cast to the enum) is a
  * sentinel used internally by LED_STRIP_CONFIG_FROM_MENUCONFIG; callers must
@@ -105,9 +123,9 @@ typedef struct {
     size_t dma_buffer_size;           /**< Total byte size of dma_buffer */
 
     /* --- DIRECT (LEDC PWM) backend fields --- */
-    ledc_channel_t ledc_channels[4];             /**< LEDC channel numbers for ch 0..3 */
-    uint8_t direct_channel_brightness[4];        /**< Current brightness (0-100) per channel */
-    gpio_num_t direct_pins[4];                   /**< GPIO per logical channel */
+    ledc_channel_t ledc_channels[NUM_LED_CHANNELS];          /**< LEDC channel numbers for ch 0..7 */
+    uint8_t direct_channel_brightness[NUM_LED_CHANNELS];     /**< Current brightness (0-100) per channel */
+    gpio_num_t direct_pins[NUM_LED_CHANNELS];                /**< GPIO per logical channel */
 } led_strip_handle_t;
 
 /**
@@ -139,10 +157,10 @@ typedef struct {
     uint32_t spi_clock_hz;
 
     /**
-     * GPIO pins for logical channels 0-3 (DIRECT only).
+     * GPIO pins for logical channels 0-(NUM_LED_CHANNELS-1) (DIRECT only).
      * Ignored for NEOPIXEL and DOTSTAR.
      */
-    gpio_num_t direct_pins[4];
+    gpio_num_t direct_pins[NUM_LED_CHANNELS];
 
     /**
      * Per-pixel channel map string (comma-separated integers 0-3, length must
@@ -168,7 +186,10 @@ typedef struct {
         .gpio_pin      = GPIO_NUM_NC, \
         .clock_pin     = GPIO_NUM_NC, \
         .spi_clock_hz  = 0, \
-        .direct_pins   = { GPIO_NUM_NC, GPIO_NUM_NC, GPIO_NUM_NC, GPIO_NUM_NC }, \
+        .direct_pins   = { \
+            GPIO_NUM_NC, GPIO_NUM_NC, GPIO_NUM_NC, GPIO_NUM_NC, \
+            GPIO_NUM_NC, GPIO_NUM_NC, GPIO_NUM_NC, GPIO_NUM_NC  \
+        }, \
         .channel_map_str = NULL, \
     }
 
@@ -210,12 +231,12 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
  *       for addressable strips, irrelevant for discrete LEDs.
  *
  * @param handle       LED strip handle.
- * @param channel_idx  Logical channel index (0-3).
+ * @param channel_idx  Logical channel index (0 to NUM_LED_CHANNELS-1).
  * @param brightness   Channel brightness 0-100 percent.
  * @param red          Red component 0-255 (ignored in DIRECT mode).
  * @param green        Green component 0-255 (ignored in DIRECT mode).
  * @param blue         Blue component 0-255 (ignored in DIRECT mode).
- * @return ESP_OK on success, ESP_ERR_INVALID_ARG if channel_idx >= 4.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if channel_idx >= NUM_LED_CHANNELS.
  */
 esp_err_t led_strip_set_channel(led_strip_handle_t *handle,
                                 uint8_t channel_idx,
@@ -236,7 +257,8 @@ led_strip_backend_t led_strip_get_backend(const led_strip_handle_t *handle);
  * @brief Return the total pixel count for this strip.
  *
  * For NEOPIXEL and DOTSTAR this equals the CONFIG_LED_COUNT value passed at
- * init time.  For DIRECT mode this always returns 4 (one per logical channel).
+ * init time.  For DIRECT mode this always returns NUM_LED_CHANNELS (one per
+ * logical channel).
  *
  * @param handle  LED strip handle.
  * @return Pixel count.

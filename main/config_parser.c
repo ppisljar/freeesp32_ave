@@ -664,11 +664,16 @@ esp_err_t config_parser_create_example(char *buffer, size_t buffer_size)
         "# White (W) channel is not supported. Old 9-field files must be re-saved\n"
         "# as 8-field (drop the W column) or they will fail to parse.\n"
         "#\n"
-        "# Channel mask bits (LED): 1=r1 inner-left, 2=r2 outer-left frame,\n"
-        "#                          4=r3 outer-right frame, 8=r4 inner-right.\n"
-        "#                          Combine bits: 9 = r1+r4, 15 = all four zones.\n"
+        "# Channel mask bits (LED): bits 0-7 = channels 1-8 (uint8_t, 0x01-0xFF).\n"
+        "#   Bits 0-3 map the original four spec regions:\n"
+        "#     1=r1 inner-left, 2=r2 outer-left frame,\n"
+        "#     4=r3 outer-right frame, 8=r4 inner-right.\n"
+        "#   Bits 4-7 (channels 5-8, masks 0x10-0x80) are valid in the format;\n"
+        "#   they have no visible effect unless the channel-map (Kconfig) assigns\n"
+        "#   LED pixels to those channels.\n"
+        "#   Common values: 9=r1+r4, 15=all four legacy zones, 255=all 8 channels.\n"
         "#\n"
-        "# Audio line:  A time freq pan volume mod channel  (channel index 1-8; 0 is rejected)\n"
+        "# Audio line:  A time freq pan volume mod channel  (channel index 1-16; 0 is rejected)\n"
         "#\n"
         "# Interpolation prefixes:  >value linear sweep,  *value quadratic ease,\n"
         "#                          (no prefix) immediate step\n"
@@ -1657,7 +1662,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         sweep_spec.duration_ms = window_ms;
 
         // Walk each bit in channel_mask and merge sweep params
-        for (int bit = 0; bit < 4; bit++) {
+        for (int bit = 0; bit < NUM_LED_CHANNELS; bit++) {
             uint8_t bitmask = (uint8_t)(1u << bit);
             if (!(led->channel_mask & bitmask)) {
                 continue;

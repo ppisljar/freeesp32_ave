@@ -139,6 +139,48 @@ config LED_DIRECT_PIN_CH4
     help
         GPIO pin driven by LEDC PWM for logical channel 3 (channel index 3).
 
+config LED_DIRECT_PIN_CH5
+    int "Direct mode — GPIO pin for channel 5"
+    range 0 39
+    default 2
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 4 (channel index 4).
+        Default GPIO 2 is the on-board LED on most ESP32 dev boards; adjust
+        if that conflicts with your hardware.  Must not conflict with I2S
+        audio pins (25, 26, 22), UART (1, 3), or channels 1-4 (12-15).
+
+config LED_DIRECT_PIN_CH6
+    int "Direct mode — GPIO pin for channel 6"
+    range 0 39
+    default 4
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 5 (channel index 5).
+        Default GPIO 4.  Must not conflict with I2S audio pins (25, 26, 22),
+        UART (1, 3), or other direct-mode channels.
+
+config LED_DIRECT_PIN_CH7
+    int "Direct mode — GPIO pin for channel 7"
+    range 0 39
+    default 16
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 6 (channel index 6).
+        Default GPIO 16.  Must not conflict with I2S audio pins (25, 26, 22),
+        UART (1, 3), PSRAM (if present, uses 16/17), or other channels.
+        If PSRAM is enabled on your board, choose a different GPIO.
+
+config LED_DIRECT_PIN_CH8
+    int "Direct mode — GPIO pin for channel 8"
+    range 0 39
+    default 17
+    depends on LED_TYPE_DIRECT
+    help
+        GPIO pin driven by LEDC PWM for logical channel 7 (channel index 7).
+        Default GPIO 17.  Same PSRAM caveat as CH7 above.  Adjust to an
+        unused GPIO if there is a conflict.
+
 config LED_DOTSTAR_SPI_CLOCK_HZ
     int "DotStar SPI bus clock frequency (Hz)"
     range 100000 40000000

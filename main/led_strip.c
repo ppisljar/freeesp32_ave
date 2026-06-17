@@ -82,7 +82,7 @@ static esp_err_t s_dotstar_set_all(led_strip_handle_t *handle,
 static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle);
 
 /* Direct (LEDC PWM) backend helpers — Step 6 */
-static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[4]);
+static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[NUM_LED_CHANNELS]);
 static esp_err_t s_direct_set_channel(led_strip_handle_t *handle,
                                        uint8_t ch, uint8_t brightness,
                                        uint8_t r, uint8_t g, uint8_t b);
@@ -96,9 +96,9 @@ static esp_err_t s_direct_deinit(led_strip_handle_t *handle);
 /* =========================================================================
  * 3.1  s_parse_channel_map
  *
- * Parses a comma-separated string of channel indices (0-3) into `out`.
- * Clamps values to 0-3; logs a WARN if any token is out of range.
- * Pads missing entries with 0; truncates extras.
+ * Parses a comma-separated string of channel indices (0-(NUM_LED_CHANNELS-1))
+ * into `out`.  Clamps out-of-range values to 0; logs a WARN if any token is
+ * out of range.  Pads missing entries with 0; truncates extras.
  * Does NOT fail -- a misconfigured strip is better than a brick.
  * ========================================================================= */
 static void s_parse_channel_map(const char *str, uint8_t *out, uint32_t expected_n)
@@ -121,8 +121,9 @@ static void s_parse_channel_map(const char *str, uint8_t *out, uint32_t expected
 
     while (tok && count < expected_n) {
         int val = atoi(tok);
-        if (val < 0 || val > 3) {
-            ESP_LOGW(TAG, "channel_map[%lu]: value %d out of range (0-3), clamping to 0", count, val);
+        if (val < 0 || val >= NUM_LED_CHANNELS) {
+            ESP_LOGW(TAG, "channel_map[%lu]: value %d out of range (0-%d), clamping to 0",
+                     count, val, NUM_LED_CHANNELS - 1);
             val = 0;
         }
         out[count] = (uint8_t)val;
@@ -166,7 +167,7 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
     gpio_num_t          clock_pin      = config->clock_pin;
     uint32_t            spi_clock_hz   = config->spi_clock_hz;
     const char         *channel_map_str = config->channel_map_str;
-    gpio_num_t          direct_pins[4];
+    gpio_num_t          direct_pins[NUM_LED_CHANNELS];
     memcpy(direct_pins, config->direct_pins, sizeof(direct_pins));
 
     if (backend == LED_STRIP_BACKEND_FROM_MENUCONFIG) {
@@ -188,7 +189,7 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
         channel_map_str = CONFIG_LED_CHANNEL_MAP;
 #elif defined(CONFIG_LED_TYPE_DIRECT)
         backend        = LED_STRIP_BACKEND_DIRECT;
-        length         = 4; /* logical channels only */
+        length         = NUM_LED_CHANNELS; /* logical channels only */
         gpio_pin       = GPIO_NUM_NC;
         clock_pin      = GPIO_NUM_NC;
         spi_clock_hz   = 0;
@@ -197,6 +198,10 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
         direct_pins[1] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH2;
         direct_pins[2] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH3;
         direct_pins[3] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH4;
+        direct_pins[4] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH5;
+        direct_pins[5] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH6;
+        direct_pins[6] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH7;
+        direct_pins[7] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH8;
 #else
         ESP_LOGE(TAG, "LED_STRIP_CONFIG_FROM_MENUCONFIG: no LED_TYPE selected in menuconfig");
         return ESP_ERR_INVALID_ARG;
@@ -324,11 +329,11 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
                  strip->length, gpio_pin, clock_pin, spi_clock_hz);
 
     } else { /* LED_STRIP_BACKEND_DIRECT */
-        /* Direct mode: 4 logical channels, no pixel buffers, no channel_map.
-         * We do NOT allocate working_buffer / display_buffer / symbol_buffer /
-         * channel_map — those are addressable-strip concepts irrelevant here.
-         * s_direct_init owns all LEDC resource allocation. */
-        strip->length      = 4;
+        /* Direct mode: NUM_LED_CHANNELS (8) logical channels, no pixel buffers,
+         * no channel_map.  We do NOT allocate working_buffer / display_buffer /
+         * symbol_buffer / channel_map — those are addressable-strip concepts
+         * irrelevant here.  s_direct_init owns all LEDC resource allocation. */
+        strip->length      = NUM_LED_CHANNELS;
         strip->channel_map = NULL;
 
         esp_err_t ret = s_direct_init(strip, direct_pins);
@@ -339,8 +344,9 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
             return ret;
         }
 
-        ESP_LOGI(TAG, "LED strip [DIRECT] initialised: pins=%d,%d,%d,%d",
-                 direct_pins[0], direct_pins[1], direct_pins[2], direct_pins[3]);
+        ESP_LOGI(TAG, "LED strip [DIRECT] initialised: pins=%d,%d,%d,%d,%d,%d,%d,%d",
+                 direct_pins[0], direct_pins[1], direct_pins[2], direct_pins[3],
+                 direct_pins[4], direct_pins[5], direct_pins[6], direct_pins[7]);
     }
 
     strip->initialized = true;
@@ -410,7 +416,7 @@ static esp_err_t s_addressable_set_channel(led_strip_handle_t *handle,
                                             uint8_t channel_idx, uint8_t brightness,
                                             uint8_t red, uint8_t green, uint8_t blue)
 {
-    if (channel_idx >= 4) {
+    if (channel_idx >= NUM_LED_CHANNELS) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -916,7 +922,7 @@ static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle)
  * pins.  Stores the channel IDs and pins in the handle; initialises
  * direct_channel_brightness[] to 0.
  */
-static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[4])
+static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[NUM_LED_CHANNELS])
 {
     /* Shared LEDC timer — low-speed mode, 8-bit resolution, 5 kHz */
     ledc_timer_config_t timer_cfg = {
@@ -928,8 +934,10 @@ static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_
     };
     ESP_ERROR_CHECK(ledc_timer_config(&timer_cfg));
 
-    /* Four LEDC channels, one per logical LED channel */
-    for (int i = 0; i < 4; i++) {
+    /* NUM_LED_CHANNELS (8) LEDC channels, one per logical LED channel.
+     * LEDC_CHANNEL_0 + 7 == LEDC_CHANNEL_7 is the hardware maximum for
+     * low-speed mode on ESP32 (classic). */
+    for (int i = 0; i < NUM_LED_CHANNELS; i++) {
         handle->ledc_channels[i] = (ledc_channel_t)(LEDC_CHANNEL_0 + i);
         handle->direct_pins[i]   = pin_ch[i];
 
@@ -966,7 +974,7 @@ static esp_err_t s_direct_set_channel(led_strip_handle_t *handle,
 {
     (void)r; (void)g; (void)b;  /* silently discard — documented contract */
 
-    if (ch >= 4 || brightness > 100) {
+    if (ch >= NUM_LED_CHANNELS || brightness > 100) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1002,13 +1010,13 @@ static esp_err_t s_direct_set_pixel_rgb(led_strip_handle_t *handle,
  */
 static esp_err_t s_direct_refresh(led_strip_handle_t *handle)
 {
-    uint8_t brightness[4];
+    uint8_t brightness[NUM_LED_CHANNELS];
 
     xSemaphoreTake(handle->access_mutex, portMAX_DELAY);
     memcpy(brightness, handle->direct_channel_brightness, sizeof(brightness));
     xSemaphoreGive(handle->access_mutex);
 
-    for (int ch = 0; ch < 4; ch++) {
+    for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         uint32_t duty = ((uint32_t)brightness[ch] * 255U) / 100U;
         ledc_set_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch], duty);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch]);
@@ -1040,7 +1048,7 @@ static esp_err_t s_direct_clear(led_strip_handle_t *handle)
  */
 static esp_err_t s_direct_deinit(led_strip_handle_t *handle)
 {
-    for (int ch = 0; ch < 4; ch++) {
+    for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         ledc_stop(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch], 0 /* idle_level */);
     }
     return ESP_OK;
@@ -1106,7 +1114,7 @@ esp_err_t led_strip_set_channel(led_strip_handle_t *handle,
     if (!handle || !handle->initialized) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (channel_idx >= 4) {
+    if (channel_idx >= NUM_LED_CHANNELS) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1294,9 +1302,9 @@ uint32_t led_strip_get_pixel_count(const led_strip_handle_t *handle)
     if (!handle) {
         return 0;
     }
-    /* DIRECT mode always exposes exactly 4 logical channels as pixel count */
+    /* DIRECT mode always exposes exactly NUM_LED_CHANNELS logical channels as pixel count */
     if (handle->backend == LED_STRIP_BACKEND_DIRECT) {
-        return 4;
+        return NUM_LED_CHANNELS;
     }
     return handle->length;
 }

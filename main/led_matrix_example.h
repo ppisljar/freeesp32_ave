@@ -1,6 +1,7 @@
 #ifndef LED_MATRIX_EXAMPLE_H
 #define LED_MATRIX_EXAMPLE_H
 
+#include "led_strip.h"   /* Provides NUM_LED_CHANNELS (= 8) from the strip layer */
 #include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -8,6 +9,29 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * NUM_LED_CHANNELS is defined in led_strip.h (= 8) and is available here
+ * transitively because led_strip.h is included above.  It is NOT redefined
+ * here to avoid a duplicate-definition warning and to keep the macro's
+ * ownership at the correct (lower) layer.
+ *
+ * Each channel maintains independent flicker frequency, duty cycle, brightness,
+ * RGB color, and sweep state. Channels are identified by index 0-(NUM_LED_CHANNELS-1)
+ * and addressed via channel_mask bits 0-(NUM_LED_CHANNELS-1).
+ *
+ * The channel_mask type is uint8_t; 8 bits = 8 channels exactly. Increasing
+ * NUM_LED_CHANNELS beyond 8 would require widening channel_mask to uint16_t
+ * and rebuilding both led_strip.c and led_matrix_example.c.
+ *
+ * Changing this value requires a full rebuild and reflash. It also requires
+ * updating the channel-map string in Kconfig so that new channel indices are
+ * assigned LED pixels.
+ *
+ * The .led timeline format accepts mask values 0x01-0xFF unchanged regardless
+ * of this setting; bits corresponding to channels >= NUM_LED_CHANNELS are
+ * silently ignored.
+ */
 
 /**
  * @brief Interpolation curve types for LED parameter sweeps
@@ -104,11 +128,15 @@ esp_err_t led_matrix_test_pattern(void);
 // ===========================================================================
 // MASKED (multi-channel) API  — primary interface for multi-zone LED control.
 //
-// channel_mask bits 0-3 correspond to channels 1-4 (spec region r1-r4).
-// Bit 0 = channel 1 = inner-left rectangle (r1).
-// Bit 1 = channel 2 = outer-left frame (r2).
-// Bit 2 = channel 3 = outer-right frame (r3).
-// Bit 3 = channel 4 = inner-right rectangle (r4).
+// channel_mask bits 0-7 correspond to channels 1-8.
+// Bits 0-3 map the original four spec regions r1-r4:
+//   Bit 0 = channel 1 = inner-left rectangle (r1).
+//   Bit 1 = channel 2 = outer-left frame (r2).
+//   Bit 2 = channel 3 = outer-right frame (r3).
+//   Bit 3 = channel 4 = inner-right rectangle (r4).
+// Bits 4-7 (channels 5-8) are reserved for future zone assignments; they are
+// present in the flicker_state[] array but are not rendered until a
+// channel-map entry assigns LED pixels to them (see Step 5 of plan 009).
 //
 // Operations are applied to ALL channels whose bit is set in the mask.
 // ===========================================================================
@@ -116,7 +144,7 @@ esp_err_t led_matrix_test_pattern(void);
 /**
  * @brief Start LED flicker on channels indicated by channel_mask.
  *
- * @param channel_mask  Bitmask 0x01-0x0F; bit 0 = channel 1, bit 3 = channel 4.
+ * @param channel_mask  Bitmask 0x01-0xFF; bit 0 = channel 1, bit 7 = channel 8.
  * @param frequency     Flicker frequency in Hz (0.1-100.0).
  * @param duty_cycle    Duty cycle percentage (0-100).
  * @param brightness    Maximum brightness (0-100).
@@ -135,7 +163,7 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
 /**
  * @brief Stop LED flicker on channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  * @return ESP_OK on success.
  */
 esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask);
@@ -143,7 +171,7 @@ esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask);
 /**
  * @brief Update flicker parameters on channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  * @param frequency    New flicker frequency in Hz.
  * @param duty_cycle   New duty cycle percentage (0-100).
  * @param brightness   New maximum brightness (0-100).
@@ -160,7 +188,7 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
  * Used by the audio->LED VU sync to modulate brightness in response to
  * audio amplitude without clobbering each channel's flicker frequency.
  *
- * @param channel_mask  Bitmask 0x01-0x0F.
+ * @param channel_mask  Bitmask 0x01-0xFF.
  * @param brightness    New brightness (0-100).
  * @return ESP_OK on success.
  */
@@ -169,7 +197,7 @@ esp_err_t led_matrix_update_brightness_masked(uint8_t channel_mask, uint8_t brig
 /**
  * @brief Set flicker color on channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  * @param red          Red component (0-255).
  * @param green        Green component (0-255).
  * @param blue         Blue component (0-255).
@@ -188,7 +216,7 @@ esp_err_t led_matrix_set_flicker_color_masked(uint8_t channel_mask,
  *
  * Thread-safe to call from task context.  Not callable from ISR.
  *
- * @param channel_mask  Bitmask 0x01-0x0F.
+ * @param channel_mask  Bitmask 0x01-0xFF.
  * @param spec          Pointer to sweep specification; contents are copied per channel.
  * @param cycle_hint_us Transport-clock anchor for sweep_start_us (µs, from
  *                      esp_timer_get_time() domain).  When non-zero, new channels
@@ -206,7 +234,7 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
  * Returns the frequency of the first (lowest-bit) active channel in the mask,
  * or 0.0 if the mask is 0 or no matching channel is active.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  * @return Current frequency in Hz, or 0.0.
  */
 float led_matrix_get_current_frequency_masked(uint8_t channel_mask);
@@ -267,7 +295,7 @@ esp_err_t led_matrix_set_flicker_color(uint8_t red, uint8_t green, uint8_t blue)
 esp_err_t led_matrix_start_sweep(const led_sweep_spec_t *spec);
 
 /**
- * @brief Check if LED flicker is currently active on ANY of the 4 channels.
+ * @brief Check if LED flicker is currently active on ANY of the 8 channels.
  *
  * @return bool true if any channel is flickering, false otherwise
  */
@@ -280,7 +308,7 @@ bool led_matrix_is_flickering(void);
  * Used by config_parser to decide whether to call start_flicker_masked (first
  * activation) or update_flicker_params_masked (rhythm-preserving update).
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  * @return bool true if all masked channels are flickering, false otherwise.
  */
 bool led_matrix_is_flickering_masked(uint8_t channel_mask);
@@ -298,7 +326,7 @@ float led_matrix_get_current_frequency(void);
  * Bit N is set iff flicker_state[N].active.  Used by the VU meter sync path to
  * broadcast brightness updates to every active channel, not just channel 0.
  *
- * @return uint8_t Bitmask 0x00-0x0F.
+ * @return uint8_t Bitmask 0x00-0xFF.
  */
 uint8_t led_matrix_get_active_mask(void);
 

@@ -57,9 +57,9 @@ typedef struct {
     volatile uint64_t sweep_duration_us;  // Total sweep duration in microseconds
 } led_flicker_state_t;
 
-// 4 independent channel states (bits 0-3 of channel_mask map to channels 1-4).
-static led_flicker_state_t flicker_state[4] = {
-    [0 ... 3] = {
+// NUM_LED_CHANNELS independent channel states (bits 0..N-1 of channel_mask map to channels 1..N).
+static led_flicker_state_t flicker_state[NUM_LED_CHANNELS] = {
+    [0 ... NUM_LED_CHANNELS - 1] = {
         .active               = false,
         .frequency_milliHz    = 0,
         .duty_cycle           = 50,
@@ -403,7 +403,7 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
     uint64_t now_us = esp_timer_get_time();
     bool any_dirty = false;
 
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         led_flicker_state_t *s = &flicker_state[ch];
 
         if (!s->active) {
@@ -512,7 +512,7 @@ static void led_flicker_task(void *arg) {
 
         // Check if ALL channels have gone inactive — if so, exit.
         bool any_active = false;
-        for (uint8_t ch = 0; ch < 4; ch++) {
+        for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
             if (flicker_state[ch].active) { any_active = true; break; }
         }
         if (!any_active) break;
@@ -526,9 +526,9 @@ static void led_flicker_task(void *arg) {
         // portENTER_CRITICAL_ISR; reading them unprotected produces torn
         // (mixed-epoch) color triples.  One critical section per channel
         // is adequate — the ISR's cycle-boundary block takes the same mux.
-        bool    ch_active[4], ch_led_state[4];
-        uint8_t ch_brightness[4], ch_red[4], ch_green[4], ch_blue[4];
-        for (uint8_t ch = 0; ch < 4; ch++) {
+        bool    ch_active[NUM_LED_CHANNELS], ch_led_state[NUM_LED_CHANNELS];
+        uint8_t ch_brightness[NUM_LED_CHANNELS], ch_red[NUM_LED_CHANNELS], ch_green[NUM_LED_CHANNELS], ch_blue[NUM_LED_CHANNELS];
+        for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
             led_flicker_state_t *s = &flicker_state[ch];
             portENTER_CRITICAL(&s_flicker_mux);
             ch_active[ch]     = s->active;
@@ -548,7 +548,7 @@ static void led_flicker_task(void *arg) {
         // we pass brightness=0 so the strip layer drives the output to black /
         // zero duty — semantically equivalent to the old "write RGB=0" path
         // but portable across all three backends.
-        for (uint8_t ch = 0; ch < 4; ch++) {
+        for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
             if (!ch_active[ch] || !ch_led_state[ch]) {
                 led_strip_set_channel(matrix_handle, ch, 0, 0, 0, 0);
             } else {
@@ -656,7 +656,7 @@ static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz)
 // ---------------------------------------------------------------------------
 static void s_maybe_teardown_timer_and_task(void)
 {
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (flicker_state[ch].active) return; // at least one channel still running
     }
 
@@ -684,7 +684,7 @@ static void s_maybe_teardown_timer_and_task(void)
 /**
  * @brief Start LED flicker on all channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F; bit 0 = channel 1, bit 3 = channel 4.
+ * @param channel_mask Bitmask 0x01-0xFF; bit 0 = channel 1, bit 7 = channel 8.
  * @param frequency    Flicker frequency in Hz (0.1-100.0).
  * @param duty_cycle   Duty cycle percentage (0-100).
  * @param brightness   Maximum brightness (0-100).
@@ -716,7 +716,7 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
     esp_err_t ret = s_ensure_timer_and_task(freq_milliHz);
     if (ret != ESP_OK) return ret;
 
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
 
         led_flicker_state_t *s = &flicker_state[ch];
@@ -754,7 +754,7 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
                 ref_start = cycle_hint_us;
             } else {
                 ref_start = now_us;
-                for (uint8_t peer = 0; peer < 4; peer++) {
+                for (uint8_t peer = 0; peer < NUM_LED_CHANNELS; peer++) {
                     if (peer == ch) continue;
                     if (flicker_state[peer].active &&
                         flicker_state[peer].frequency_milliHz == freq_milliHz) {
@@ -797,11 +797,11 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
 /**
  * @brief Stop LED flicker on all channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F; bit 0 = channel 1, bit 3 = channel 4.
+ * @param channel_mask Bitmask 0x01-0xFF; bit 0 = channel 1, bit 7 = channel 8.
  */
 esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask)
 {
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
         // Critical section: clear led_state BEFORE active so the task can never
         // observe (active=true && led_state=true) on a channel we're stopping —
@@ -841,7 +841,7 @@ esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask)
 /**
  * @brief Update flicker parameters on channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  * @param frequency    New flicker frequency in Hz.
  * @param duty_cycle   New duty cycle percentage (0-100).
  * @param brightness   New maximum brightness (0-100).
@@ -859,7 +859,7 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
 
     uint32_t new_freq_milliHz = (uint32_t)(frequency * 1000.0f);
 
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
         if (!flicker_state[ch].active) continue;
 
@@ -896,7 +896,7 @@ esp_err_t led_matrix_update_brightness_masked(uint8_t channel_mask, uint8_t brig
     if (brightness > 100) {
         return ESP_ERR_INVALID_ARG;
     }
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
         if (!flicker_state[ch].active) continue;
 
@@ -919,12 +919,12 @@ esp_err_t led_matrix_update_brightness_masked(uint8_t channel_mask, uint8_t brig
 /**
  * @brief Set flicker color on channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  */
 esp_err_t led_matrix_set_flicker_color_masked(uint8_t channel_mask,
                                                uint8_t red, uint8_t green, uint8_t blue)
 {
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
         led_flicker_state_t *s = &flicker_state[ch];
         portENTER_CRITICAL(&s_flicker_mux);
@@ -944,7 +944,7 @@ esp_err_t led_matrix_set_flicker_color_masked(uint8_t channel_mask,
 /**
  * @brief Start a parametric LED flicker sweep on channels indicated by channel_mask.
  *
- * @param channel_mask Bitmask 0x01-0x0F.
+ * @param channel_mask Bitmask 0x01-0xFF.
  * @param spec         Pointer to sweep specification; contents are copied per channel.
  */
 esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_spec_t *spec,
@@ -980,7 +980,7 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
     // The anchor may be in the past; see late-anchor note in start_flicker_masked.
     uint64_t sweep_start_us = (cycle_hint_us != 0) ? cycle_hint_us : esp_timer_get_time();
 
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
 
         led_flicker_state_t *s = &flicker_state[ch];
@@ -1057,7 +1057,7 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
  */
 float led_matrix_get_current_frequency_masked(uint8_t channel_mask)
 {
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (channel_mask & (1u << ch)) {
             return flicker_state[ch].active
                    ? (float)flicker_state[ch].frequency_milliHz / 1000.0f
@@ -1098,7 +1098,7 @@ esp_err_t led_matrix_start_sweep(const led_sweep_spec_t *spec) {
 
 bool led_matrix_is_flickering(void) {
     // True if ANY of the 4 channels is active.
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (flicker_state[ch].active) return true;
     }
     return false;
@@ -1106,7 +1106,7 @@ bool led_matrix_is_flickering(void) {
 
 bool led_matrix_is_flickering_masked(uint8_t channel_mask) {
     // True if ALL channels set in the mask are currently active.
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if ((channel_mask & (1u << ch)) && !flicker_state[ch].active) return false;
     }
     return (channel_mask != 0);
@@ -1114,7 +1114,7 @@ bool led_matrix_is_flickering_masked(uint8_t channel_mask) {
 
 uint8_t led_matrix_get_active_mask(void) {
     uint8_t mask = 0;
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (flicker_state[ch].active) mask |= (uint8_t)(1u << ch);
     }
     return mask;
@@ -1122,7 +1122,7 @@ uint8_t led_matrix_get_active_mask(void) {
 
 float led_matrix_get_current_frequency(void) {
     // Return frequency of the lowest-numbered active channel, or 0.
-    for (uint8_t ch = 0; ch < 4; ch++) {
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (flicker_state[ch].active) {
             return (float)flicker_state[ch].frequency_milliHz / 1000.0f;
         }

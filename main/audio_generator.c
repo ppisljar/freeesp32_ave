@@ -43,7 +43,7 @@
 
 static const char* TAG = "audio_generator";
 
-#define MAX_AUDIO_CHANNELS      8
+/* NUM_AUDIO_CHANNELS is defined in audio_generator.h. */
 #define PI                      3.14159265359f
 
 // Sine lookup table.  4096 entries × 4 bytes = 16 KB DRAM.  With linear
@@ -70,7 +70,7 @@ static const char* TAG = "audio_generator";
 static float sine_lut[SINE_LUT_SIZE];
 
 // Global audio generator state
-static audio_gen_channel_t audio_channels[MAX_AUDIO_CHANNELS];
+static audio_gen_channel_t audio_channels[NUM_AUDIO_CHANNELS];
 static bool generator_initialized = false;
 static SemaphoreHandle_t audio_gen_mutex = NULL;
 
@@ -126,7 +126,7 @@ esp_err_t audio_generator_init(void) {
     // Initialize all channels
     memset(audio_channels, 0, sizeof(audio_channels));
 
-    for (int i = 0; i < MAX_AUDIO_CHANNELS; i++) {
+    for (int i = 0; i < NUM_AUDIO_CHANNELS; i++) {
         audio_channels[i].active = false;
         audio_channels[i].phase_l_q32 = 0;
         audio_channels[i].phase_r_q32 = 0;
@@ -138,7 +138,7 @@ esp_err_t audio_generator_init(void) {
 
     generator_initialized = true;
 
-    ESP_LOGI(TAG, "Audio generator initialized with %d channels", MAX_AUDIO_CHANNELS);
+    ESP_LOGI(TAG, "Audio generator initialized with %d channels", NUM_AUDIO_CHANNELS);
     return ESP_OK;
 }
 
@@ -288,7 +288,7 @@ esp_err_t audio_generator_update_params_locked(int channel, const audio_gen_para
 }
 
 bool audio_generator_is_active_locked(int channel) {
-    if (channel < 0 || channel >= MAX_AUDIO_CHANNELS) {
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) {
         return false;
     }
     return audio_channels[channel].active;
@@ -312,7 +312,7 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (channel < 0 || channel >= MAX_AUDIO_CHANNELS || !params) {
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS || !params) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -348,7 +348,7 @@ esp_err_t audio_generator_stop_channel(int channel) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (channel < 0 || channel >= MAX_AUDIO_CHANNELS) {
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -386,7 +386,7 @@ bool audio_generator_any_stopping(void) {
     if (!generator_initialized) return false;
     xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
     bool any = false;
-    for (int i = 0; i < MAX_AUDIO_CHANNELS; i++) {
+    for (int i = 0; i < NUM_AUDIO_CHANNELS; i++) {
         if (audio_channels[i].active && audio_channels[i].stopping) {
             any = true;
             break;
@@ -422,7 +422,7 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     // 1/N before mixing.  Without this, N same-panned channels at vol=100 sum
     // to N×1.0 and saturate the ±1.0 output ceiling.
     int n_active = 0;
-    for (int ch = 0; ch < MAX_AUDIO_CHANNELS; ch++) {
+    for (int ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
         if (audio_channels[ch].active) n_active++;
     }
     float new_target = (n_active > 0) ? (1.0f / (float)n_active) : 1.0f;
@@ -453,7 +453,7 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     }
 
     // Mix all active channels
-    for (int ch = 0; ch < MAX_AUDIO_CHANNELS; ch++) {
+    for (int ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
         audio_gen_channel_t* channel = &audio_channels[ch];
 
         if (!channel->active) {
@@ -977,7 +977,7 @@ esp_err_t audio_generator_update_sweep(int channel, float new_target, audio_gen_
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (channel < 0 || channel >= MAX_AUDIO_CHANNELS) {
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1008,7 +1008,7 @@ esp_err_t audio_generator_update_sweep(int channel, float new_target, audio_gen_
 }
 
 bool audio_generator_is_active(int channel) {
-    if (!generator_initialized || channel < 0 || channel >= MAX_AUDIO_CHANNELS) {
+    if (!generator_initialized || channel < 0 || channel >= NUM_AUDIO_CHANNELS) {
         return false;
     }
 
@@ -1021,7 +1021,7 @@ bool audio_generator_is_active(int channel) {
 }
 
 esp_err_t audio_generator_get_current_freq(int channel, float *out) {
-    if (!generator_initialized || channel < 0 || channel >= MAX_AUDIO_CHANNELS || !out) {
+    if (!generator_initialized || channel < 0 || channel >= NUM_AUDIO_CHANNELS || !out) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1033,7 +1033,7 @@ esp_err_t audio_generator_get_current_freq(int channel, float *out) {
 }
 
 esp_err_t audio_generator_get_current_amp(int channel, float *out) {
-    if (!generator_initialized || channel < 0 || channel >= MAX_AUDIO_CHANNELS || !out) {
+    if (!generator_initialized || channel < 0 || channel >= NUM_AUDIO_CHANNELS || !out) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1049,7 +1049,7 @@ esp_err_t audio_generator_start_sweep(int channel, audio_param_t param,
                                       uint64_t duration_samples,
                                       audio_gen_sweep_type_t curve) {
     if (!generator_initialized
-        || channel < 0 || channel >= MAX_AUDIO_CHANNELS
+        || channel < 0 || channel >= NUM_AUDIO_CHANNELS
         || (unsigned)param >= AUDIO_PARAM_COUNT
         || duration_samples == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -1064,7 +1064,7 @@ esp_err_t audio_generator_start_sweep(int channel, audio_param_t param,
 
 esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *new_params) {
     if (!generator_initialized
-        || channel < 0 || channel >= MAX_AUDIO_CHANNELS
+        || channel < 0 || channel >= NUM_AUDIO_CHANNELS
         || !new_params) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1076,7 +1076,7 @@ esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *n
 }
 
 esp_err_t audio_generator_get_current_freq_r(int channel, float *out) {
-    if (!generator_initialized || channel < 0 || channel >= MAX_AUDIO_CHANNELS || !out) {
+    if (!generator_initialized || channel < 0 || channel >= NUM_AUDIO_CHANNELS || !out) {
         return ESP_ERR_INVALID_ARG;
     }
 

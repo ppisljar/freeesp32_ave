@@ -14,8 +14,27 @@
  * - Frequency sweeps (linear and quadratic)
  * - Amplitude modulation
  * - Stereo panning
- * - Multiple channel support
+ * - Up to NUM_AUDIO_CHANNELS (default 16, see below) simultaneous synthesis channels
  */
+
+/**
+ * @brief Number of simultaneous audio synthesis channels (default 16).
+ *
+ * Each channel maintains independent frequency, amplitude, pan, modulation,
+ * waveform type, sweep state, and noise LFSR/IIR state. Channels are identified
+ * by index 0-(NUM_AUDIO_CHANNELS-1); the .led timeline format uses 1-based indices
+ * (1-16), with index 0 rejected.
+ *
+ * Changing this value requires a full rebuild and reflash. Before increasing the
+ * count, profile CPU load at the current setting — each additional channel adds
+ * approximately 3-4% CPU load at 44.1 kHz (see Plan 009 Step 4). At 16 channels
+ * the system has been validated to remain within the <6% total CPU budget.
+ *
+ * All channel-indexed arrays and loop bounds derive from this macro; no literals
+ * need updating when the value changes.
+ */
+#define NUM_AUDIO_CHANNELS 16
+
 
 #define AUDIO_GEN_SAMPLE_RATE       44100
 #define AUDIO_GEN_CHANNELS          2

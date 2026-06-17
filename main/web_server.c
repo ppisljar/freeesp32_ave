@@ -658,8 +658,8 @@ static esp_err_t stop_handler(httpd_req_t *req)
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 
-    // Stop LED flicker on all 4 channels (mask 0x0F).
-    led_matrix_stop_flicker_masked(0x0F);
+    // Stop LED flicker on all 8 channels (mask 0xFF).
+    led_matrix_stop_flicker_masked(0xFF);
 
     httpd_resp_send(req, "All audio + LED stopped", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
