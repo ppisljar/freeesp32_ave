@@ -412,7 +412,12 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
 
         // cycle_duration_us = 1,000,000,000 / frequency_milliHz  (all integer, no FPU)
         uint64_t cycle_duration_us = (1000000ULL * 1000ULL) / s->frequency_milliHz;
-        uint64_t elapsed_us = now_us - s->cycle_start_time_us;
+        // Guard against unsigned underflow: cycle_start_time_us may be in the future
+        // (set from logical_anchor_us = T0 + entry_time_ms + AUDIO_DMA_PIPELINE_LAG_US).
+        // Treat "anchor in future" as not-yet-started (elapsed=0), not as wrap-around.
+        uint64_t elapsed_us = (now_us >= s->cycle_start_time_us)
+                              ? (now_us - s->cycle_start_time_us)
+                              : 0;
 
         // --- Cycle boundary: advance cycle and recompute all swept params ---
         // Critical section: snapshot sw_* and write red/green/blue
@@ -428,7 +433,13 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             if (sweep_dur == 0) {
                 progress_q16 = 65536u; // Snap to target immediately if no duration.
             } else {
-                uint64_t elapsed_sweep = now_us - s->sweep_start_us;
+                // Guard against unsigned underflow: sweep_start_us may be in the future
+                // (logical_anchor_us is offset forward by AUDIO_DMA_PIPELINE_LAG_US so the
+                // LED cycle-origin aligns with DAC sample emission). Treat "anchor in
+                // future" as progress=0, not as wrap-around → 65536 (snap-to-target).
+                uint64_t elapsed_sweep = (now_us >= s->sweep_start_us)
+                                         ? (now_us - s->sweep_start_us)
+                                         : 0;
                 uint64_t prog64 = (elapsed_sweep * 65536ULL) / sweep_dur;
                 progress_q16 = (prog64 > 65536ULL) ? 65536u : (uint32_t)prog64;
             }

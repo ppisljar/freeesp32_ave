@@ -172,12 +172,13 @@ esp_err_t config_parser_validate_syntax(const char *content, size_t content_leng
                                         char **errors, size_t max_errors);
 
 /**
- * @brief Create example config content
+ * @brief Get a pointer to the static example .led config string.
  *
- * @param buffer Output buffer for example content
- * @param buffer_size Size of output buffer
- * @return esp_err_t ESP_OK on success
+ * The returned pointer is to a string literal in flash (.rodata); never NULL,
+ * never freed by the caller. Returning the literal directly avoids copying
+ * ~3 KB onto a caller's stack — important for HTTPD handlers whose task stack
+ * defaults to 4 KB and otherwise overflows when responding.
  */
-esp_err_t config_parser_create_example(char *buffer, size_t buffer_size);
+const char *config_parser_get_example(void);
 
 #endif // CONFIG_PARSER_H

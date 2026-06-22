@@ -648,13 +648,9 @@ void config_parser_free_timeline(config_timeline_t *timeline)
     }
 }
 
-esp_err_t config_parser_create_example(char *buffer, size_t buffer_size)
+const char *config_parser_get_example(void)
 {
-    if (!buffer || buffer_size == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    const char *example_content =
+    static const char example_content[] =
         "# 30-second demo: LED zones + binaural beat sweep\n"
         "#\n"
         "# LED line formats:\n"
@@ -700,13 +696,7 @@ esp_err_t config_parser_create_example(char *buffer, size_t buffer_size)
         "A 30000 200 -100 >0 0 1              # ch1 fade volume to 0\n"
         "A 30000 208 100 >0 0 2               # ch2 fade volume to 0\n";
 
-    size_t example_len = strlen(example_content);
-    if (example_len >= buffer_size) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    strcpy(buffer, example_content);
-    return ESP_OK;
+    return example_content;
 }
 
 // Internal helper functions

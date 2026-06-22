@@ -1,7 +1,6 @@
 #include "web_server.h"
 #include "config_parser.h"
 #include "audio_manager.h"
-#include "audio_test.h"
 #include "led_matrix_example.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -45,22 +44,8 @@ static const char* index_html =
 "<body>\n"
 "    <div class=\"container\">\n"
 "        <h1>ESP32 Audio Player Control Panel</h1>\n"
-"        \n"
-"        <div class=\"section\">\n"
-"            <h2>System Status</h2>\n"
-"            <div id=\"status\" class=\"status info\">System Ready</div>\n"
-"            <button onclick=\"updateStatus()\">Refresh Status</button>\n"
-"        </div>\n"
 "\n"
-"        <div class=\"section\">\n"
-"            <h2>Audio Tests</h2>\n"
-"            <div class=\"controls\">\n"
-"                <button onclick=\"testTone()\">Test 440Hz Tone</button>\n"
-"                <button onclick=\"testBinaural()\">Test Binaural Beats</button>\n"
-"                <button onclick=\"testSweep()\">Test Frequency Sweep</button>\n"
-"                <button onclick=\"stopAudio()\" class=\"stop-btn\">Stop All Audio</button>\n"
-"            </div>\n"
-"        </div>\n"
+"        <div id=\"status\" class=\"status info\" style=\"display:none\"></div>\n"
 "\n"
 "        <div class=\"section\">\n"
 "            <h2>Config File Upload</h2>\n"
@@ -69,19 +54,6 @@ static const char* index_html =
 "                <br>\n"
 "                <button type=\"submit\">Upload & Execute Config</button>\n"
 "            </form>\n"
-"        </div>\n"
-"\n"
-"        <div class=\"section\">\n"
-"            <h2>LED Matrix Tests</h2>\n"
-"            <div class=\"controls\">\n"
-"                <button onclick=\"testLedPattern()\">Test Pattern</button>\n"
-"                <button onclick=\"testLedColors()\">Test Colors</button>\n"
-"                <button onclick=\"testLedRed()\">All Red</button>\n"
-"                <button onclick=\"testLedGreen()\">All Green</button>\n"
-"                <button onclick=\"testLedBlue()\">All Blue</button>\n"
-"                <button onclick=\"testLedWhite()\">All White</button>\n"
-"                <button onclick=\"clearLeds()\">Clear LEDs</button>\n"
-"            </div>\n"
 "        </div>\n"
 "\n"
 "        <div class=\"section\">\n"
@@ -97,97 +69,6 @@ static const char* index_html =
 "    </div>\n"
 "\n"
 "    <script>\n"
-"        function updateStatus() {\n"
-"            fetch('/api/status')\n"
-"                .then(response => response.json())\n"
-"                .then(data => {\n"
-"                    const statusDiv = document.getElementById('status');\n"
-"                    statusDiv.textContent = `Audio: ${data.audio_state}, Source: ${data.audio_source}, Volume: ${data.volume}%`;\n"
-"                    statusDiv.className = 'status info';\n"
-"                })\n"
-"                .catch(error => {\n"
-"                    document.getElementById('status').textContent = 'Error: ' + error;\n"
-"                    document.getElementById('status').className = 'status error';\n"
-"                });\n"
-"        }\n"
-"\n"
-"        function testTone() {\n"
-"            fetch('/api/test/tone', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testBinaural() {\n"
-"            fetch('/api/test/binaural', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testSweep() {\n"
-"            fetch('/api/test/sweep', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function stopAudio() {\n"
-"            fetch('/api/stop', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testLedPattern() {\n"
-"            fetch('/api/led/pattern', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('LED Pattern Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testLedColors() {\n"
-"            fetch('/api/led/colors', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('LED Colors Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testLedRed() {\n"
-"            fetch('/api/led/red', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('LED Red Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testLedGreen() {\n"
-"            fetch('/api/led/green', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('LED Green Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testLedBlue() {\n"
-"            fetch('/api/led/blue', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('LED Blue Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function testLedWhite() {\n"
-"            fetch('/api/led/white', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('LED White Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function clearLeds() {\n"
-"            fetch('/api/led/clear', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
-"                .catch(error => showMessage('LED Clear Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
 "        function loadExample() {\n"
 "            fetch('/api/example')\n"
 "                .then(response => response.text())\n"
@@ -232,6 +113,7 @@ static const char* index_html =
 "            const statusDiv = document.getElementById('status');\n"
 "            statusDiv.textContent = message;\n"
 "            statusDiv.className = 'status ' + type;\n"
+"            statusDiv.style.display = 'block';\n"
 "        }\n"
 "\n"
 "        document.getElementById('uploadForm').addEventListener('submit', function(e) {\n"
@@ -249,9 +131,6 @@ static const char* index_html =
 "            .catch(error => showMessage('Upload error: ' + error, 'error'));\n"
 "        });\n"
 "\n"
-"        // Auto-update status every 5 seconds\n"
-"        setInterval(updateStatus, 5000);\n"
-"        updateStatus(); // Initial load\n"
 "        loadExample(); // Load example config on page load\n"
 "    </script>\n"
 "</body>\n"
@@ -259,20 +138,9 @@ static const char* index_html =
 
 // HTTP Handler functions
 static esp_err_t index_handler(httpd_req_t *req);
-static esp_err_t status_handler(httpd_req_t *req);
 static esp_err_t upload_handler(httpd_req_t *req);
-static esp_err_t test_tone_handler(httpd_req_t *req);
-static esp_err_t test_binaural_handler(httpd_req_t *req);
-static esp_err_t test_sweep_handler(httpd_req_t *req);
 static esp_err_t stop_handler(httpd_req_t *req);
 static esp_err_t example_handler(httpd_req_t *req);
-static esp_err_t led_pattern_handler(httpd_req_t *req);
-static esp_err_t led_colors_handler(httpd_req_t *req);
-static esp_err_t led_red_handler(httpd_req_t *req);
-static esp_err_t led_green_handler(httpd_req_t *req);
-static esp_err_t led_blue_handler(httpd_req_t *req);
-static esp_err_t led_white_handler(httpd_req_t *req);
-static esp_err_t led_clear_handler(httpd_req_t *req);
 static esp_err_t play_config_handler(httpd_req_t *req);
 
 esp_err_t web_server_init(void)
@@ -308,14 +176,6 @@ esp_err_t web_server_init(void)
     };
     httpd_register_uri_handler(g_server_state.server, &index_uri);
 
-    httpd_uri_t status_uri = {
-        .uri = "/api/status",
-        .method = HTTP_GET,
-        .handler = status_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &status_uri);
-
     httpd_uri_t upload_uri = {
         .uri = "/api/upload",
         .method = HTTP_POST,
@@ -323,30 +183,6 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &upload_uri);
-
-    httpd_uri_t test_tone_uri = {
-        .uri = "/api/test/tone",
-        .method = HTTP_POST,
-        .handler = test_tone_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &test_tone_uri);
-
-    httpd_uri_t test_binaural_uri = {
-        .uri = "/api/test/binaural",
-        .method = HTTP_POST,
-        .handler = test_binaural_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &test_binaural_uri);
-
-    httpd_uri_t test_sweep_uri = {
-        .uri = "/api/test/sweep",
-        .method = HTTP_POST,
-        .handler = test_sweep_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &test_sweep_uri);
 
     httpd_uri_t stop_uri = {
         .uri = "/api/stop",
@@ -363,63 +199,6 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &example_uri);
-
-    // LED Matrix handlers
-    httpd_uri_t led_pattern_uri = {
-        .uri = "/api/led/pattern",
-        .method = HTTP_POST,
-        .handler = led_pattern_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &led_pattern_uri);
-
-    httpd_uri_t led_colors_uri = {
-        .uri = "/api/led/colors",
-        .method = HTTP_POST,
-        .handler = led_colors_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &led_colors_uri);
-
-    httpd_uri_t led_red_uri = {
-        .uri = "/api/led/red",
-        .method = HTTP_POST,
-        .handler = led_red_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &led_red_uri);
-
-    httpd_uri_t led_green_uri = {
-        .uri = "/api/led/green",
-        .method = HTTP_POST,
-        .handler = led_green_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &led_green_uri);
-
-    httpd_uri_t led_blue_uri = {
-        .uri = "/api/led/blue",
-        .method = HTTP_POST,
-        .handler = led_blue_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &led_blue_uri);
-
-    httpd_uri_t led_white_uri = {
-        .uri = "/api/led/white",
-        .method = HTTP_POST,
-        .handler = led_white_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &led_white_uri);
-
-    httpd_uri_t led_clear_uri = {
-        .uri = "/api/led/clear",
-        .method = HTTP_POST,
-        .handler = led_clear_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &led_clear_uri);
 
     httpd_uri_t play_config_uri = {
         .uri = "/api/play-config",
@@ -502,31 +281,6 @@ static esp_err_t index_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t status_handler(httpd_req_t *req)
-{
-    // Status API is polled by the web UI every ~1 s — demoted from I to D to keep UART quiet.
-    ESP_LOGD(TAG, "Serving status API");
-
-    audio_manager_state_t *state = audio_manager_get_state();
-
-    char json_response[256];
-    snprintf(json_response, sizeof(json_response),
-             "{\n"
-             "  \"audio_state\": %d,\n"
-             "  \"audio_source\": %d,\n"
-             "  \"volume\": %.0f,\n"
-             "  \"muted\": %s\n"
-             "}",
-             state->state,
-             state->current_source,
-             state->volume * 100,
-             state->muted ? "true" : "false");
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
 static esp_err_t upload_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Handling config file upload");
@@ -585,48 +339,6 @@ static esp_err_t upload_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t test_tone_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "Starting tone test");
-
-    esp_err_t ret = audio_test_basic_generation();
-    if (ret == ESP_OK) {
-        httpd_resp_send(req, "440Hz tone test started", HTTPD_RESP_USE_STRLEN);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start tone test");
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t test_binaural_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "Starting binaural beats test");
-
-    esp_err_t ret = audio_test_binaural_beats(440.0f, 10.0f, 5000);
-    if (ret == ESP_OK) {
-        httpd_resp_send(req, "Binaural beats test started (440Hz + 10Hz)", HTTPD_RESP_USE_STRLEN);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start binaural test");
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t test_sweep_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "Starting frequency sweep test");
-
-    esp_err_t ret = audio_test_frequency_sweep(200.0f, 800.0f, 4000, AUDIO_GEN_SWEEP_LINEAR);
-    if (ret == ESP_OK) {
-        httpd_resp_send(req, "Frequency sweep test started (200-800Hz)", HTTPD_RESP_USE_STRLEN);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start sweep test");
-    }
-
-    return ESP_OK;
-}
-
 static esp_err_t stop_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Stopping all audio + LED flicker + timeline");
@@ -669,182 +381,8 @@ static esp_err_t example_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Serving example config");
 
-    char example_buffer[2048];
-    esp_err_t ret = config_parser_create_example(example_buffer, sizeof(example_buffer));
-
-    if (ret == ESP_OK) {
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, example_buffer, HTTPD_RESP_USE_STRLEN);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create example");
-    }
-
-    return ESP_OK;
-}
-
-// LED Matrix Handler Functions
-
-static esp_err_t led_pattern_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "LED pattern test requested");
-
-    if (!led_matrix_supports_pixel_addressing()) {
-        httpd_resp_set_status(req, "501 Not Implemented");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
-        return ESP_OK;
-    }
-
-    esp_err_t ret = led_matrix_test_pattern();
-    if (ret == ESP_OK) {
-        httpd_resp_send(req, "LED pattern test started", HTTPD_RESP_USE_STRLEN);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start LED pattern test");
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t led_colors_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "LED color test requested");
-
-    if (!led_matrix_supports_pixel_addressing()) {
-        httpd_resp_set_status(req, "501 Not Implemented");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
-        return ESP_OK;
-    }
-
-    // Test each color for 1 second each
-    for (uint8_t x = 0; x < 12; x++) {
-        for (uint8_t y = 0; y < 4; y++) {
-            if (x < 4) {
-                led_matrix_set_pixel(x, y, 255, 0, 0); // Red
-            } else if (x < 8) {
-                led_matrix_set_pixel(x, y, 0, 255, 0); // Green
-            } else {
-                led_matrix_set_pixel(x, y, 0, 0, 255); // Blue
-            }
-        }
-    }
-    led_matrix_refresh();
-
-    httpd_resp_send(req, "LED color test completed (Red/Green/Blue columns)", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static esp_err_t led_red_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "LED all red requested");
-
-    if (!led_matrix_supports_pixel_addressing()) {
-        httpd_resp_set_status(req, "501 Not Implemented");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
-        return ESP_OK;
-    }
-
-    // Clear all LEDs first
-    led_matrix_clear();
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // Set all LEDs to red with logging
-    ESP_LOGI(TAG, "Setting %d LEDs to RED (255,0,0)", 12*4);
-    for (uint8_t x = 0; x < 12; x++) {
-        for (uint8_t y = 0; y < 4; y++) {
-            esp_err_t ret = led_matrix_set_pixel(x, y, 255, 0, 0);
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to set LED[%d,%d]: %s", x, y, esp_err_to_name(ret));
-            }
-        }
-    }
-
-    ESP_LOGI(TAG, "Calling led_matrix_refresh()");
-    esp_err_t refresh_ret = led_matrix_refresh();
-    ESP_LOGI(TAG, "Refresh result: %s", esp_err_to_name(refresh_ret));
-
-    httpd_resp_send(req, "All LEDs set to red", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static esp_err_t led_green_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "LED all green requested");
-
-    if (!led_matrix_supports_pixel_addressing()) {
-        httpd_resp_set_status(req, "501 Not Implemented");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
-        return ESP_OK;
-    }
-
-    for (uint8_t x = 0; x < 12; x++) {
-        for (uint8_t y = 0; y < 4; y++) {
-            led_matrix_set_pixel(x, y, 0, 255, 0);
-        }
-    }
-    led_matrix_refresh();
-
-    httpd_resp_send(req, "All LEDs set to green", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static esp_err_t led_blue_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "LED all blue requested");
-
-    if (!led_matrix_supports_pixel_addressing()) {
-        httpd_resp_set_status(req, "501 Not Implemented");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
-        return ESP_OK;
-    }
-
-    for (uint8_t x = 0; x < 12; x++) {
-        for (uint8_t y = 0; y < 4; y++) {
-            led_matrix_set_pixel(x, y, 0, 0, 255);
-        }
-    }
-    led_matrix_refresh();
-
-    httpd_resp_send(req, "All LEDs set to blue", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static esp_err_t led_white_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "LED all white requested");
-
-    if (!led_matrix_supports_pixel_addressing()) {
-        httpd_resp_set_status(req, "501 Not Implemented");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "LED test patterns are not supported in direct mode (no addressable pixels).");
-        return ESP_OK;
-    }
-
-    for (uint8_t x = 0; x < 12; x++) {
-        for (uint8_t y = 0; y < 4; y++) {
-            led_matrix_set_pixel(x, y, 255, 255, 255);
-        }
-    }
-    led_matrix_refresh();
-
-    httpd_resp_send(req, "All LEDs set to white", HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-static esp_err_t led_clear_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "LED clear requested");
-
-    esp_err_t ret = led_matrix_clear();
-    if (ret == ESP_OK) {
-        httpd_resp_send(req, "All LEDs cleared", HTTPD_RESP_USE_STRLEN);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to clear LEDs");
-    }
-
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, config_parser_get_example());
     return ESP_OK;
 }
 
