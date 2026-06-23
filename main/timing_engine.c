@@ -470,11 +470,11 @@ size_t timing_engine_get_queue_utilization(void) {
 static bool IRAM_ATTR timing_engine_alarm_callback(gptimer_handle_t timer,
                                                     const gptimer_alarm_event_data_t *edata,
                                                     void *user_data) {
-    ISR_PROFILE_BEGIN(1);
+    ISR_PROFILE_BEGIN(0);
 
     timing_engine_t *engine = (timing_engine_t *)user_data;
     if (!engine || !engine->running) {
-        ISR_PROFILE_END(1);
+        ISR_PROFILE_END(0);
         return false;
     }
 
@@ -490,7 +490,7 @@ static bool IRAM_ATTR timing_engine_alarm_callback(gptimer_handle_t timer,
         vTaskNotifyGiveFromISR(engine->dispatch_task, &higher_woken);
     }
 
-    ISR_PROFILE_END(1);
+    ISR_PROFILE_END(0);
     return (higher_woken == pdTRUE);
 }
 

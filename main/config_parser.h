@@ -181,4 +181,23 @@ esp_err_t config_parser_validate_syntax(const char *content, size_t content_leng
  */
 const char *config_parser_get_example(void);
 
+/**
+ * @brief Return the raw text of the currently-loaded timeline (the .led
+ *        source as last parsed by config_parser_parse_content or _parse_file),
+ *        or NULL if no timeline is loaded.
+ *
+ * Owned by the parser; do not free. Pointer stays valid until the next
+ * parse call replaces the timeline.
+ */
+const char *config_parser_get_loaded_source(void);
+
+/**
+ * @brief Return the canonical transport-clock origin (esp_timer_get_time at
+ *        timeline start), or 0 if no timeline is currently running.
+ *
+ * Used by diagnostic endpoints to convert absolute esp_timer timestamps
+ * (e.g. button-press times) into milliseconds relative to session start.
+ */
+uint64_t config_parser_get_session_origin_us(void);
+
 #endif // CONFIG_PARSER_H

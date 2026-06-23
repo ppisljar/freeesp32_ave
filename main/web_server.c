@@ -1,13 +1,21 @@
+#include "sdkconfig.h"           // for CONFIG_GENERATOR_SERVER_URL
 #include "web_server.h"
 #include "config_parser.h"
 #include "audio_manager.h"
+#include "audio_generator.h"     // for NUM_AUDIO_CHANNELS
 #include "led_matrix_example.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+
+// Defined in esp32_audioplayer.c — snapshot of the GPIO 5 button press log.
+// Returns up to `max` absolute esp_timer_get_time() values, chronological.
+extern size_t snapshot_button_get_presses(uint64_t *out, size_t max);
 
 static const char* TAG = "web_server";
 
@@ -64,11 +72,120 @@ static const char* index_html =
 "                <button onclick=\"stopConfig()\" style=\"background: #dc3545;\">■ STOP</button>\n"
 "                <button onclick=\"clearConfig()\">Clear</button>\n"
 "            </div>\n"
+"            <div style=\"margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;\">\n"
+"                <strong style=\"font-size:13px;\">Generator:</strong>\n"
+"                <select id=\"ledcDropdown\" style=\"min-width:220px;padding:4px;\"></select>\n"
+"                <button onclick=\"refreshLedcDropdown()\" title=\"Reload list from generator\">⟳</button>\n"
+"                <button onclick=\"loadFromGenerator()\">Load</button>\n"
+"                <button onclick=\"saveToGenerator()\">Save</button>\n"
+"                <button onclick=\"saveAsToGenerator()\">Save As…</button>\n"
+"                <span id=\"loadedFilename\" style=\"color:#666;font-style:italic;font-size:13px;margin-left:8px;\"></span>\n"
+"            </div>\n"
 "            <textarea id=\"exampleConfig\" placeholder=\"Enter .led config here...\"></textarea>\n"
+"            <div id=\"reportBox\" style=\"margin-top:15px;display:none;background:#f0f4f8;border:1px solid #c3d0e0;border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;\"></div>\n"
 "        </div>\n"
 "    </div>\n"
 "\n"
 "    <script>\n"
+"        // Generator base URL injected at flash time from CONFIG_GENERATOR_SERVER_URL.\n"
+"        // Override via `idf.py menuconfig` → ESP32 Audio Player Configuration.\n"
+"        const GENERATOR_URL = \"" CONFIG_GENERATOR_SERVER_URL "\";\n"
+"        let currentLedcName = null;\n"
+"\n"
+"        function refreshLedcDropdown() {\n"
+"            return fetch(GENERATOR_URL + '/ledc')\n"
+"                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })\n"
+"                .then(data => {\n"
+"                    const dd = document.getElementById('ledcDropdown');\n"
+"                    dd.innerHTML = '';\n"
+"                    const files = data.files || [];\n"
+"                    if (files.length === 0) {\n"
+"                        const opt = document.createElement('option');\n"
+"                        opt.textContent = '(no configs on generator)';\n"
+"                        opt.disabled = true;\n"
+"                        dd.appendChild(opt);\n"
+"                        return;\n"
+"                    }\n"
+"                    files.forEach(f => {\n"
+"                        const opt = document.createElement('option');\n"
+"                        opt.value = f; opt.textContent = f;\n"
+"                        if (f === currentLedcName) opt.selected = true;\n"
+"                        dd.appendChild(opt);\n"
+"                    });\n"
+"                })\n"
+"                .catch(err => {\n"
+"                    const dd = document.getElementById('ledcDropdown');\n"
+"                    dd.innerHTML = '';\n"
+"                    const opt = document.createElement('option');\n"
+"                    opt.textContent = '(generator unreachable @ ' + GENERATOR_URL + ')';\n"
+"                    opt.disabled = true;\n"
+"                    dd.appendChild(opt);\n"
+"                });\n"
+"        }\n"
+"\n"
+"        function loadFromGenerator() {\n"
+"            const name = document.getElementById('ledcDropdown').value;\n"
+"            if (!name) { showMessage('Pick a config first', 'error'); return; }\n"
+"            fetch(GENERATOR_URL + '/ledc/' + encodeURIComponent(name))\n"
+"                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })\n"
+"                .then(text => {\n"
+"                    document.getElementById('exampleConfig').value = text;\n"
+"                    currentLedcName = name;\n"
+"                    document.getElementById('loadedFilename').textContent = '(loaded: ' + name + ')';\n"
+"                    showMessage('Loaded ' + name + ' from generator', 'success');\n"
+"                })\n"
+"                .catch(err => showMessage('Load failed: ' + err, 'error'));\n"
+"        }\n"
+"\n"
+"        function putLedc(name, body) {\n"
+"            return fetch(GENERATOR_URL + '/ledc/' + encodeURIComponent(name), {\n"
+"                method: 'PUT',\n"
+"                headers: { 'Content-Type': 'text/plain' },\n"
+"                body: body,\n"
+"            })\n"
+"            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })\n"
+"            .then(result => {\n"
+"                const verb = result.overwritten ? 'Overwrote' : 'Created';\n"
+"                showMessage(verb + ' ' + result.saved + ' on generator (' + result.bytes + ' bytes)', 'success');\n"
+"                currentLedcName = result.saved;\n"
+"                document.getElementById('loadedFilename').textContent = '(loaded: ' + result.saved + ')';\n"
+"                return refreshLedcDropdown();\n"
+"            })\n"
+"            .catch(err => showMessage('Save failed: ' + err, 'error'));\n"
+"        }\n"
+"\n"
+"        function saveToGenerator() {\n"
+"            const body = document.getElementById('exampleConfig').value;\n"
+"            if (!body.trim()) { showMessage('Config is empty', 'error'); return; }\n"
+"            if (!currentLedcName) {\n"
+"                // No file loaded — fall through to Save As so user names it.\n"
+"                return saveAsToGenerator();\n"
+"            }\n"
+"            return putLedc(currentLedcName, body);\n"
+"        }\n"
+"\n"
+"        function saveAsToGenerator() {\n"
+"            const body = document.getElementById('exampleConfig').value;\n"
+"            if (!body.trim()) { showMessage('Config is empty', 'error'); return; }\n"
+"            const suggested = currentLedcName || 'untitled.ledc';\n"
+"            let name = prompt('Save as (must end in .ledc):', suggested);\n"
+"            if (!name) return;\n"
+"            name = name.trim();\n"
+"            if (!/^[A-Za-z0-9._-]+\\.ledc$/.test(name)) {\n"
+"                showMessage('Invalid filename. Allowed: [A-Za-z0-9._-]+.ledc', 'error');\n"
+"                return;\n"
+"            }\n"
+"            // If filename exists in the dropdown AND it's not the currently-loaded one,\n"
+"            // confirm overwrite. (Saving back to the current file is the normal Save\n"
+"            // path; explicit Save-As to a different existing name should warn.)\n"
+"            const existing = Array.from(document.getElementById('ledcDropdown').options)\n"
+"                                   .map(o => o.value).filter(Boolean);\n"
+"            if (existing.includes(name) && name !== currentLedcName) {\n"
+"                if (!confirm('\"' + name + '\" exists on the generator. Overwrite?')) return;\n"
+"            }\n"
+"            return putLedc(name, body);\n"
+"        }\n"
+"\n"
 "        function loadExample() {\n"
 "            fetch('/api/example')\n"
 "                .then(response => response.text())\n"
@@ -81,8 +198,223 @@ static const char* index_html =
 "        function stopConfig() {\n"
 "            fetch('/api/stop', { method: 'POST' })\n"
 "                .then(response => response.text())\n"
-"                .then(result => showMessage(result, 'success'))\n"
+"                .then(result => {\n"
+"                    showMessage(result + ' — report in 5 s', 'success');\n"
+"                    // Replace any pending end-of-session timer with a short\n"
+"                    // post-stop one so the report reflects the truncated run.\n"
+"                    if (reportTimer) { clearTimeout(reportTimer); reportTimer = null; }\n"
+"                    document.getElementById('reportBox').style.display = 'none';\n"
+"                    reportTimer = setTimeout(fetchReport, 5000);\n"
+"                })\n"
 "                .catch(error => showMessage('Error: ' + error, 'error'));\n"
+"        }\n"
+"\n"
+"        let reportTimer = null;\n"
+"\n"
+"        // Parse the .led config text and return the highest entry timestamp in ms.\n"
+"        // Format: LED entries start with a number (time), audio entries start with 'A'.\n"
+"        // Lines starting with '#' are comments and skipped. Returns 0 if none.\n"
+"        function parseConfigDurationMs(text) {\n"
+"            let maxMs = 0;\n"
+"            for (const raw of text.split('\\n')) {\n"
+"                const line = raw.replace(/#.*$/, '').trim();\n"
+"                if (!line) continue;\n"
+"                const tok = line.split(/\\s+/);\n"
+"                let t = NaN;\n"
+"                if (tok[0] === 'A' && tok.length > 1) t = parseInt(tok[1], 10);\n"
+"                else if (tok[0] === 'BG') continue; // BG has no time field\n"
+"                else t = parseInt(tok[0], 10);\n"
+"                if (!isNaN(t) && t > maxMs) maxMs = t;\n"
+"            }\n"
+"            return maxMs;\n"
+"        }\n"
+"\n"
+"        // ---- Config parsing + per-press state resolution -----------------\n"
+"        // Mirrors the device-side interpolation: for each parameter on each\n"
+"        // entry, find the active entry at time T and (if the next entry has\n"
+"        // a '>' or '*' marker on that parameter) interpolate live value.\n"
+"        function parseValueInterp(s) {\n"
+"            let interp = 'none';\n"
+"            if (s[0] === '>') { interp = 'linear'; s = s.slice(1); }\n"
+"            else if (s[0] === '*') { interp = 'quadratic'; s = s.slice(1); }\n"
+"            return { v: parseFloat(s), interp: interp };\n"
+"        }\n"
+"        function lerp(a, b, t) { return a + (b - a) * t; }\n"
+"        function quad(a, b, t) {\n"
+"            const tt = t < 0.5 ? 2*t*t : 1 - 2*(1-t)*(1-t);\n"
+"            return a + (b - a) * tt;\n"
+"        }\n"
+"        function interpField(active, next, tMs, fname) {\n"
+"            if (!active[fname]) return null;\n"
+"            if (next && next[fname] && next[fname].interp !== 'none') {\n"
+"                const win = next.time - active.time;\n"
+"                if (win <= 0) return active[fname].v;\n"
+"                const p = Math.max(0, Math.min(1, (tMs - active.time) / win));\n"
+"                const fn = next[fname].interp === 'linear' ? lerp : quad;\n"
+"                return fn(active[fname].v, next[fname].v, p);\n"
+"            }\n"
+"            return active[fname].v;\n"
+"        }\n"
+"        function parseConfigStructured(text) {\n"
+"            const led = [], audio = [];\n"
+"            for (const raw of text.split('\\n')) {\n"
+"                const line = raw.replace(/#.*$/, '').trim();\n"
+"                if (!line) continue;\n"
+"                const t = line.split(/\\s+/);\n"
+"                if (t[0] === 'A') {\n"
+"                    if (t.length < 7) continue;\n"
+"                    audio.push({\n"
+"                        time: parseInt(t[1], 10),\n"
+"                        freq: parseValueInterp(t[2]),\n"
+"                        pan:  parseValueInterp(t[3]),\n"
+"                        vol:  parseValueInterp(t[4]),\n"
+"                        mod:  parseValueInterp(t[5]),\n"
+"                        channel: parseInt(t[6], 10),\n"
+"                    });\n"
+"                } else if (t[0] === 'BG') {\n"
+"                    continue;\n"
+"                } else if (t.length === 8) {\n"
+"                    // 8-field LED (canonical): time freq duty bright R G B mask\n"
+"                    led.push({\n"
+"                        time: parseInt(t[0], 10),\n"
+"                        freq: parseValueInterp(t[1]),\n"
+"                        duty: parseValueInterp(t[2]),\n"
+"                        brightness: parseValueInterp(t[3]),\n"
+"                        r:    parseValueInterp(t[4]),\n"
+"                        g:    parseValueInterp(t[5]),\n"
+"                        b:    parseValueInterp(t[6]),\n"
+"                        mask: parseInt(t[7], 10),\n"
+"                    });\n"
+"                } else if (t.length === 5) {\n"
+"                    // 5-field legacy: time freq duty brightness channel\n"
+"                    const ch = parseInt(t[4], 10);\n"
+"                    led.push({\n"
+"                        time: parseInt(t[0], 10),\n"
+"                        mask: ch === 0 ? 0xFF : (1 << (ch - 1)),\n"
+"                        freq: parseValueInterp(t[1]),\n"
+"                        duty: parseValueInterp(t[2]),\n"
+"                        brightness: parseValueInterp(t[3]),\n"
+"                        r: { v: 255, interp: 'none' },\n"
+"                        g: { v: 255, interp: 'none' },\n"
+"                        b: { v: 255, interp: 'none' },\n"
+"                    });\n"
+"                }\n"
+"            }\n"
+"            return { led: led, audio: audio };\n"
+"        }\n"
+"        function audioStateAtTime(audioEntries, tMs, channel) {\n"
+"            const seq = audioEntries.filter(e => e.channel === channel)\n"
+"                                    .sort((a,b) => a.time - b.time);\n"
+"            let active = null, next = null;\n"
+"            for (let i = 0; i < seq.length; i++) {\n"
+"                if (seq[i].time <= tMs) { active = seq[i]; next = seq[i+1] || null; }\n"
+"                else break;\n"
+"            }\n"
+"            if (!active) return null;\n"
+"            return {\n"
+"                freq: interpField(active, next, tMs, 'freq'),\n"
+"                pan:  interpField(active, next, tMs, 'pan'),\n"
+"                vol:  interpField(active, next, tMs, 'vol'),\n"
+"                mod:  interpField(active, next, tMs, 'mod'),\n"
+"            };\n"
+"        }\n"
+"        function ledStateAtTime(ledEntries, tMs, ledCh) {\n"
+"            const bit = 1 << ledCh;\n"
+"            const seq = ledEntries.filter(e => e.mask & bit)\n"
+"                                  .sort((a,b) => a.time - b.time);\n"
+"            let active = null, next = null;\n"
+"            for (let i = 0; i < seq.length; i++) {\n"
+"                if (seq[i].time <= tMs) { active = seq[i]; next = seq[i+1] || null; }\n"
+"                else break;\n"
+"            }\n"
+"            if (!active) return null;\n"
+"            return {\n"
+"                freq: interpField(active, next, tMs, 'freq'),\n"
+"                duty: interpField(active, next, tMs, 'duty'),\n"
+"                bri:  interpField(active, next, tMs, 'brightness'),\n"
+"                r:    interpField(active, next, tMs, 'r'),\n"
+"                g:    interpField(active, next, tMs, 'g'),\n"
+"                b:    interpField(active, next, tMs, 'b'),\n"
+"            };\n"
+"        }\n"
+"        function formatPressSnapshot(parsed, tMs) {\n"
+"            const lines = [];\n"
+"            for (let ch = 1; ch <= 16; ch++) {\n"
+"                const s = audioStateAtTime(parsed.audio, tMs, ch);\n"
+"                if (!s) continue;\n"
+"                lines.push('  AUDIO[ch=' + ch + '] freq=' + s.freq.toFixed(2) +\n"
+"                           'Hz pan=' + s.pan.toFixed(0) +\n"
+"                           ' vol=' + s.vol.toFixed(0) +\n"
+"                           ' mod=' + s.mod.toFixed(1));\n"
+"            }\n"
+"            for (let ch = 0; ch < 8; ch++) {\n"
+"                const s = ledStateAtTime(parsed.led, tMs, ch);\n"
+"                if (!s) continue;\n"
+"                lines.push('  LED[ch=' + ch + '] freq=' + s.freq.toFixed(2) +\n"
+"                           'Hz duty=' + s.duty.toFixed(0) +\n"
+"                           '% bri=' + s.bri.toFixed(0) +\n"
+"                           '% RGB=(' + s.r.toFixed(0) + ',' + s.g.toFixed(0) + ',' + s.b.toFixed(0) + ')');\n"
+"            }\n"
+"            return lines.length ? lines.join('\\n') : '  (no active channels at this time)';\n"
+"        }\n"
+"\n"
+"        function fetchReport() {\n"
+"            fetch('/api/report')\n"
+"                .then(r => r.json())\n"
+"                .then(rep => {\n"
+"                    const sessSec = rep.session_origin_us > 0\n"
+"                        ? ((rep.now_us - rep.session_origin_us) / 1e6).toFixed(1)\n"
+"                        : '—';\n"
+"                    const presses = rep.button_presses_ms || [];\n"
+"                    const cfg = rep.config || '';\n"
+"                    const parsed = cfg ? parseConfigStructured(cfg) : null;\n"
+"\n"
+"                    let out = '=== SESSION REPORT ===\\n';\n"
+"                    out += 'Session length so far: ' + sessSec + ' s\\n\\n';\n"
+"                    out += '--- Button press snapshots ---\\n';\n"
+"                    if (!presses.length) {\n"
+"                        out += '(no button presses recorded)\\n';\n"
+"                    } else if (!parsed) {\n"
+"                        out += '(' + presses.length + ' press(es), but no config to resolve params): ' +\n"
+"                               presses.join(', ') + '\\n';\n"
+"                    } else {\n"
+"                        for (let i = 0; i < presses.length; i++) {\n"
+"                            out += '\\n@ +' + presses[i] + 'ms (press ' + (i+1) + '):\\n';\n"
+"                            out += formatPressSnapshot(parsed, presses[i]) + '\\n';\n"
+"                        }\n"
+"                    }\n"
+"                    out += '\\n--- Last loaded config ---\\n';\n"
+"                    out += cfg || '(no config in memory)';\n"
+"                    const box = document.getElementById('reportBox');\n"
+"                    box.textContent = out;\n"
+"                    box.style.display = 'block';\n"
+"\n"
+"                    // Best-effort upload to the generator. Failure is\n"
+"                    // non-fatal — the local display always succeeds first.\n"
+"                    const upload = {\n"
+"                        config_name: currentLedcName,\n"
+"                        session_origin_us: rep.session_origin_us,\n"
+"                        session_length_s: rep.session_origin_us > 0\n"
+"                            ? (rep.now_us - rep.session_origin_us) / 1e6 : null,\n"
+"                        button_presses_ms: presses,\n"
+"                        config: cfg,\n"
+"                    };\n"
+"                    fetch(GENERATOR_URL + '/reports', {\n"
+"                        method: 'POST',\n"
+"                        headers: { 'Content-Type': 'application/json' },\n"
+"                        body: JSON.stringify(upload),\n"
+"                    })\n"
+"                    .then(r => r.ok ? r.json() : null)\n"
+"                    .then(result => {\n"
+"                        if (result && result.saved) {\n"
+"                            box.textContent += '\\n\\n[uploaded to generator as ' + result.saved + ']';\n"
+"                        }\n"
+"                    })\n"
+"                    .catch(err => {\n"
+"                        box.textContent += '\\n\\n[generator upload failed: ' + err + ']';\n"
+"                    });\n"
+"                })\n"
+"                .catch(err => showMessage('Report fetch failed: ' + err, 'error'));\n"
 "        }\n"
 "\n"
 "        function playConfig() {\n"
@@ -100,7 +432,17 @@ static const char* index_html =
 "                body: config\n"
 "            })\n"
 "            .then(response => response.text())\n"
-"            .then(result => showMessage(result, 'success'))\n"
+"            .then(result => {\n"
+"                showMessage(result, 'success');\n"
+"                // Schedule auto-fetch of /api/report 5 s after the parsed\n"
+"                // session end. Cancels any previously-armed timer.\n"
+"                if (reportTimer) { clearTimeout(reportTimer); reportTimer = null; }\n"
+"                document.getElementById('reportBox').style.display = 'none';\n"
+"                const durMs = parseConfigDurationMs(config);\n"
+"                const waitMs = durMs + 5000;\n"
+"                showMessage('Playing — report due in ' + Math.round(waitMs/1000) + ' s', 'info');\n"
+"                reportTimer = setTimeout(fetchReport, waitMs);\n"
+"            })\n"
 "            .catch(error => showMessage('Play error: ' + error, 'error'));\n"
 "        }\n"
 "\n"
@@ -132,6 +474,7 @@ static const char* index_html =
 "        });\n"
 "\n"
 "        loadExample(); // Load example config on page load\n"
+"        refreshLedcDropdown(); // Fetch the generator's config list on page load\n"
 "    </script>\n"
 "</body>\n"
 "</html>\n";
@@ -142,6 +485,7 @@ static esp_err_t upload_handler(httpd_req_t *req);
 static esp_err_t stop_handler(httpd_req_t *req);
 static esp_err_t example_handler(httpd_req_t *req);
 static esp_err_t play_config_handler(httpd_req_t *req);
+static esp_err_t report_handler(httpd_req_t *req);
 
 esp_err_t web_server_init(void)
 {
@@ -207,6 +551,14 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &play_config_uri);
+
+    httpd_uri_t report_uri = {
+        .uri = "/api/report",
+        .method = HTTP_GET,
+        .handler = report_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &report_uri);
 
     ESP_LOGI(TAG, "Web server started on port %d", WEB_SERVER_PORT);
     return ESP_OK;
@@ -351,7 +703,7 @@ static esp_err_t stop_handler(httpd_req_t *req)
     // would keep playing for those 2 s — producing a delayed second click.
     // By arming all fades first, BG and generators fade together over ~5 ms.
     // Reference: bug_stop_click_bg_i2s_state_2026-06-17.md (Inv 17 #3).
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < NUM_AUDIO_CHANNELS; i++) {
         audio_manager_stop_generation(i);
     }
 
@@ -448,5 +800,93 @@ static esp_err_t play_config_handler(httpd_req_t *req)
     }
 
     httpd_resp_send(req, "Config started successfully! ▶", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// /api/report
+// ---------------------------------------------------------------------------
+// JSON snapshot of the live session:
+//   {
+//     "config":            "<raw .led source>",
+//     "session_origin_us": <esp_timer at timeline start, or 0 if no session>,
+//     "now_us":            <esp_timer right now>,
+//     "button_presses_ms": [ <ms since session_origin>, ... ]
+//   }
+// button_presses_ms is filtered to presses within the current session
+// (session_origin_us > 0 → only presses >= session_origin_us are returned).
+// Used by the web UI to display end-of-session diagnostics 5 s after the
+// expected session end.
+
+// JSON-escape one character into the output buffer. Returns bytes written
+// (0 if the character would overflow the remaining buffer space).
+static size_t json_escape_char(char c, char *out, size_t out_remaining)
+{
+    if (out_remaining < 2) return 0;
+    switch (c) {
+        case '"':  if (out_remaining < 3) return 0; out[0]='\\'; out[1]='"';  return 2;
+        case '\\': if (out_remaining < 3) return 0; out[0]='\\'; out[1]='\\'; return 2;
+        case '\n': if (out_remaining < 3) return 0; out[0]='\\'; out[1]='n';  return 2;
+        case '\r': if (out_remaining < 3) return 0; out[0]='\\'; out[1]='r';  return 2;
+        case '\t': if (out_remaining < 3) return 0; out[0]='\\'; out[1]='t';  return 2;
+        default:
+            // Control characters get \uXXXX, everything else passes through.
+            if ((unsigned char)c < 0x20) {
+                if (out_remaining < 7) return 0;
+                snprintf(out, out_remaining, "\\u%04x", (unsigned)c);
+                return 6;
+            }
+            out[0] = c;
+            return 1;
+    }
+}
+
+static esp_err_t report_handler(httpd_req_t *req)
+{
+    const char *source = config_parser_get_loaded_source();
+    uint64_t origin_us = config_parser_get_session_origin_us();
+    uint64_t now_us    = (uint64_t)esp_timer_get_time();
+
+    // Snapshot button presses then filter to the current session.
+    uint64_t presses[64];
+    size_t n_presses = snapshot_button_get_presses(presses, 64);
+    size_t n_in_session = 0;
+    uint32_t rel_ms[64];
+    for (size_t i = 0; i < n_presses; i++) {
+        if (origin_us == 0 || presses[i] < origin_us) continue;
+        rel_ms[n_in_session++] = (uint32_t)((presses[i] - origin_us) / 1000ULL);
+    }
+
+    // Build JSON response. Allocate a generous buffer — config can be up to
+    // a few KB, plus JSON overhead. Stack allocation avoids fragmenting
+    // heap for short-lived requests.
+    const size_t resp_cap = 8192;
+    char *resp = malloc(resp_cap);
+    if (!resp) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+    size_t off = 0;
+
+    off += snprintf(resp + off, resp_cap - off,
+                    "{\"session_origin_us\":%llu,\"now_us\":%llu,\"config\":\"",
+                    (unsigned long long)origin_us, (unsigned long long)now_us);
+
+    if (source) {
+        for (const char *p = source; *p && off < resp_cap - 8; p++) {
+            off += json_escape_char(*p, resp + off, resp_cap - off);
+        }
+    }
+
+    off += snprintf(resp + off, resp_cap - off, "\",\"button_presses_ms\":[");
+    for (size_t i = 0; i < n_in_session && off < resp_cap - 16; i++) {
+        off += snprintf(resp + off, resp_cap - off, "%s%u",
+                        i == 0 ? "" : ",", (unsigned)rel_ms[i]);
+    }
+    off += snprintf(resp + off, resp_cap - off, "]}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, off);
+    free(resp);
     return ESP_OK;
 }

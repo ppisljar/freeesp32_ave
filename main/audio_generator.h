@@ -292,6 +292,20 @@ esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *n
  */
 esp_err_t audio_generator_get_current_freq_r(int channel, float *out);
 
+/** Log one line per active sweep across all channels (current value,
+ *  start->target window, % done, seconds remaining). Snapshots state under
+ *  audio_gen_mutex briefly, then releases the lock before any ESP_LOGI call
+ *  — UART writes are slow enough that logging under the mutex would block
+ *  fill_buffer and cause I2S underrun.
+ *  @return Number of active sweeps logged. */
+int audio_generator_log_sweep_progress(void);
+
+/** Log full state of every active audio channel — all current parameter
+ *  values plus any sweep details. Designed for one-shot snapshots ("what is
+ *  the system actually doing right now?"), e.g. on a debug button press.
+ *  Same snapshot-then-release pattern as audio_generator_log_sweep_progress. */
+void audio_generator_log_full_state(void);
+
 /** Task-context only — DO NOT call from ISR. Pair every lock() with unlock().
  *  Used by the timeline executor to commit same-timestamp batches atomically:
  *  hold the lock for the entire batch so fill_buffer sees all channels activate

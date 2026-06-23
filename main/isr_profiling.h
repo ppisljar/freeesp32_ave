@@ -16,8 +16,10 @@ typedef struct {
     volatile uint32_t count;
 } isr_profile_t;
 
-// One slot per ISR: 0=audio_led_sync, 1=timing_engine_alarm, 2=led_flicker
-#define ISR_PROFILE_SLOT_COUNT 3
+// One slot per ISR: 0=timing_engine_alarm, 1=led_flicker
+// (slot for the former audio_led_sync I2S callback was removed with the
+// VU pipeline; downstream slots shifted down by one.)
+#define ISR_PROFILE_SLOT_COUNT 2
 extern isr_profile_t g_isr_profiles[ISR_PROFILE_SLOT_COUNT];
 
 #define ISR_PROFILE_BEGIN(slot) \
@@ -38,7 +40,6 @@ extern isr_profile_t g_isr_profiles[ISR_PROFILE_SLOT_COUNT];
 static inline void isr_profiling_report(void) {
     static const char *TAG = "isr_profile";
     static const char *names[ISR_PROFILE_SLOT_COUNT] = {
-        "audio_led_sync_i2s_callback",
         "timing_engine_alarm_callback",
         "led_flicker_timer_callback",
     };

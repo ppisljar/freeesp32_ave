@@ -331,6 +331,24 @@ float led_matrix_get_current_frequency(void);
 uint8_t led_matrix_get_active_mask(void);
 
 /**
+ * @brief Log one line per active LED sweep (current interpolated value,
+ *        start->target window, % done, ms remaining). Snapshots state under
+ *        s_flicker_mux briefly then releases it before any ESP_LOGI — UART
+ *        writes while holding the spinlock would prevent the flicker ISR
+ *        from firing on time.
+ * @return Number of active sweeps logged.
+ */
+int led_matrix_log_sweep_progress(void);
+
+/**
+ * @brief Log full state of every active LED channel — current freq/duty/
+ *        brightness/RGB plus any sweep details. One-shot snapshot for
+ *        debug-button workflows. Same snapshot-then-release pattern as
+ *        led_matrix_log_sweep_progress.
+ */
+void led_matrix_log_full_state(void);
+
+/**
  * @brief Return true if the underlying LED strip supports per-pixel addressing.
  *
  * Returns false when the backend is LED_STRIP_BACKEND_DIRECT (4 discrete GPIOs,

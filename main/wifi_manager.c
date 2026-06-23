@@ -33,6 +33,18 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ip_info = event->ip_info;
         current_state = WIFI_STATE_CONNECTED;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+
+        /* Re-apply WIFI_PS_NONE on every (re)connect. ESP-IDF restores
+         * WIFI_PS_MIN_MODEM on silent reconnect (WIFI_EVENT_STA_DISCONNECTED
+         * → esp_wifi_connect()), and MIN_MODEM adds ~100 ms latency per
+         * TCP segment which degrades streaming. The one-shot call in
+         * wifi_manager_connect() only fires for the *initial* connect;
+         * this handler covers every subsequent reconnect. */
+        esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
+        if (ps_err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_set_ps(NONE) on got-IP failed: %s",
+                     esp_err_to_name(ps_err));
+        }
     }
 }
 

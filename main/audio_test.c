@@ -3,7 +3,6 @@
 #include "audio_generator.h"
 #include "audio_config.h"
 #include "led_matrix_example.h"
-#include "audio_led_sync.h"
 #include "isr_profiling.h"
 #include "bg_player.h"
 #include "esp_log.h"
@@ -518,22 +517,13 @@ esp_err_t audio_test_isr_baseline_soak(void)
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    // Phase 3: VU-meter sync (15 s)
-    ESP_LOGI(TAG, "SOAK phase 3/4: VU-meter sync mode (15 s)");
-    led_matrix_stop_flicker_masked(0x06);  // stop phase 2's channels
-    audio_led_sync_start(SYNC_MODE_VU_METER);
-    phase_start = xTaskGetTickCount();
-    while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
-        if (xTaskGetTickCount() >= report_deadline) {
-            isr_profiling_report();
-            report_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(SOAK_REPORT_INTERVAL_MS);
-        }
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    audio_led_sync_stop();
+    // (Former phase 3 — VU-meter sync — was removed along with the VU
+    // brightness pipeline. The phase numbering below is preserved for log
+    // continuity with prior soak runs.)
 
     // Phase 4: 8 Hz again + final stats
     ESP_LOGI(TAG, "SOAK phase 4/4: 8 Hz LED flicker @ 10%% brightness (15 s) + final report");
+    led_matrix_stop_flicker_masked(0x06);  // stop phase 2's channels
     led_matrix_start_flicker(8.0f, 50, 10);
     phase_start = xTaskGetTickCount();
     while ((xTaskGetTickCount() - phase_start) < pdMS_TO_TICKS(SOAK_PHASE_DURATION_MS)) {
@@ -573,8 +563,6 @@ esp_err_t audio_test_isr_baseline_soak(void)
 esp_err_t audio_test_multichannel_soak(void)
 {
     ESP_LOGI(TAG, "=== MULTICHANNEL SOAK START (8 ch, 2 × 30 s) ===");
-
-    uint32_t errors_before = audio_led_sync_get_queue_errors();
 
     // Phase 1: start all 8 channels
     for (int ch = 0; ch < SOAK8_CHANNELS; ch++) {
@@ -629,15 +617,10 @@ esp_err_t audio_test_multichannel_soak(void)
     ESP_LOGI(TAG, "=== MULTICHANNEL SOAK COMPLETE ===");
     isr_profiling_report();
 
-    uint32_t errors_after = audio_led_sync_get_queue_errors();
-    uint32_t new_errors = errors_after - errors_before;
-
-    if (new_errors > 0) {
-        ESP_LOGE(TAG, "soak8: FAIL — %u queue drops detected during soak", new_errors);
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "soak8: PASS — zero queue drops over 60 s with 8 active channels");
+    // The former queue-drop check measured drops in the VU pipeline's audio
+    // sample queue (now removed). DMA-interval anomalies are still surfaced
+    // by audio_led_sync_get_sync_errors() if needed.
+    ESP_LOGI(TAG, "soak8: PASS — 60 s with 8 active channels");
     return ESP_OK;
 }
 

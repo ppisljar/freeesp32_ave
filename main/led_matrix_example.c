@@ -393,10 +393,10 @@ static inline uint32_t IRAM_ATTR led_interp_param(const led_sweep_param_t *sw, u
  * Four channels × ~250 cycles/channel ≈ 1000 cycles baseline — well within cap.
  */
 static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
-    ISR_PROFILE_BEGIN(2);
+    ISR_PROFILE_BEGIN(1);
 
     if (!matrix_handle) {
-        ISR_PROFILE_END(2);
+        ISR_PROFILE_END(1);
         return false;
     }
 
@@ -410,14 +410,29 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             continue;
         }
 
+        // Pre-anchor wait: cycle_start_time_us is the transport-clock anchor,
+        // which on FRESH activation equals logical_anchor_us = T0 + entry_time
+        // + AUDIO_DMA_PIPELINE_LAG_US. That places it up to ~46 ms in the
+        // FUTURE relative to dispatch time. Skip ALL processing for this tick
+        // until the anchor arrives — the channel was initialised with
+        // led_state=false in start_sweep_masked/start_flicker_masked, so the
+        // LED stays OFF during the wait. As soon as now_us catches up, normal
+        // cycle processing resumes with the first on-pulse at its correct
+        // duration (latched_on_time_us), giving true audio-LED sync at the
+        // first cycle origin (Plan 007 design intent).
+        //
+        // Without this check, the earlier underflow guard on elapsed_us would
+        // clamp to 0 → should_be_on=(0 < latched_on_time_us)=true → LED stays
+        // ON for the entire ~46 ms anchor wait, producing one very long first
+        // pulse that visually reads as "first blink at full power".
+        if (now_us < s->cycle_start_time_us) {
+            continue;
+        }
+
         // cycle_duration_us = 1,000,000,000 / frequency_milliHz  (all integer, no FPU)
         uint64_t cycle_duration_us = (1000000ULL * 1000ULL) / s->frequency_milliHz;
-        // Guard against unsigned underflow: cycle_start_time_us may be in the future
-        // (set from logical_anchor_us = T0 + entry_time_ms + AUDIO_DMA_PIPELINE_LAG_US).
-        // Treat "anchor in future" as not-yet-started (elapsed=0), not as wrap-around.
-        uint64_t elapsed_us = (now_us >= s->cycle_start_time_us)
-                              ? (now_us - s->cycle_start_time_us)
-                              : 0;
+        // now_us >= cycle_start_time_us is guaranteed by the pre-anchor check above.
+        uint64_t elapsed_us = now_us - s->cycle_start_time_us;
 
         // --- Cycle boundary: advance cycle and recompute all swept params ---
         // Critical section: snapshot sw_* and write red/green/blue
@@ -489,11 +504,11 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
         BaseType_t higher_priority_task_woken = pdFALSE;
         vTaskNotifyGiveFromISR(led_flicker_task_handle, &higher_priority_task_woken);
 
-        ISR_PROFILE_END(2);
+        ISR_PROFILE_END(1);
         return higher_priority_task_woken == pdTRUE;
     }
 
-    ISR_PROFILE_END(2);
+    ISR_PROFILE_END(1);
     return false;
 }
 
@@ -591,9 +606,20 @@ static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz)
             "led_flicker",
             2048,
             NULL,
-            23,                // Priority 23 — one ABOVE timing_dispatch_task (22) so
-                               // round-robin scheduling doesn't add 0–10 ms wake jitter
-                               // to LED transitions.  See bug_led_drift_driver_2026-06-15.md.
+            24,                // Priority 24 — one ABOVE audio_output_task (23) so the
+                               // LED render task ALWAYS preempts mid-fill_buffer when
+                               // notified by the 1 kHz LED ISR. Without this, both
+                               // tasks at priority 23 on core 1 round-robin every
+                               // tick, delaying LED writes by 3–5 ms during a
+                               // fill_buffer slice. With many active audio channels
+                               // that delay exceeds one LED cycle, producing visibly
+                               // "doubled" or "halved" pulses — observable on a
+                               // photodiode recording. The render task does ~100 µs
+                               // of work per transition (snapshot under spinlock +
+                               // one led_strip_refresh), so preempting audio costs
+                               // ~0.24% CPU at 12 Hz × 24 transitions/sec — well
+                               // absorbed by the I2S DMA's 23 ms back-pressure
+                               // buffer. See empirical photodiode measurement notes.
             &led_flicker_task_handle,
             1                  // Core 1 — symmetric with timing_dispatch_task
         );
@@ -995,14 +1021,37 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
         if (!(channel_mask & (1u << ch))) continue;
 
         led_flicker_state_t *s = &flicker_state[ch];
+        // Critical section: all per-channel writes happen atomically vs the ISR's
+        // cycle-boundary read of sw_*/sweep_start_us/sweep_duration_us. Mirrors
+        // the pattern in start_flicker_masked. Without this, the ISR could
+        // snapshot a half-installed sweep (e.g. new sw_r.start_q but stale
+        // sweep_duration_us=0) and snap pixels to a target color for one cycle.
+        portENTER_CRITICAL(&s_flicker_mux);
 
-        // Set initial live values for params that are not being swept.
-        s->frequency_milliHz   = init_freq_milliHz;
-        s->duty_cycle          = (spec->duty_curve   != LED_INTERP_NONE) ? spec->duty_start   : spec->duty_target;
-        s->brightness          = (spec->bright_curve != LED_INTERP_NONE) ? spec->bright_start : spec->bright_target;
-        s->red                 = (spec->r_curve      != LED_INTERP_NONE) ? spec->r_start      : spec->r_target;
-        s->green               = (spec->g_curve      != LED_INTERP_NONE) ? spec->g_start      : spec->g_target;
-        s->blue                = (spec->b_curve      != LED_INTERP_NONE) ? spec->b_start      : spec->b_target;
+        // For each swept parameter on an already-running channel, the sweep
+        // must continue smoothly from the LIVE current value (s->X), not from
+        // the parsed entry's literal (spec->X_start). The literal is correct
+        // only if the previous sweep completed exactly at the boundary; if it
+        // was interrupted (scheduling jitter, manual override), starting from
+        // the literal produces a visible "snap". For non-swept params or fresh
+        // channels, the entry's literal IS the correct start.
+        bool already_active = s->active;
+        uint32_t eff_freq_start   = (spec->freq_curve   != LED_INTERP_NONE && already_active) ? s->frequency_milliHz : spec->freq_milliHz_start;
+        uint8_t  eff_duty_start   = (spec->duty_curve   != LED_INTERP_NONE && already_active) ? s->duty_cycle        : spec->duty_start;
+        uint8_t  eff_bright_start = (spec->bright_curve != LED_INTERP_NONE && already_active) ? s->brightness        : spec->bright_start;
+        uint8_t  eff_r_start      = (spec->r_curve      != LED_INTERP_NONE && already_active) ? s->red               : spec->r_start;
+        uint8_t  eff_g_start      = (spec->g_curve      != LED_INTERP_NONE && already_active) ? s->green             : spec->g_start;
+        uint8_t  eff_b_start      = (spec->b_curve      != LED_INTERP_NONE && already_active) ? s->blue              : spec->b_start;
+
+        // Set initial live values. For swept params the effective start is the
+        // live value when active (no-op assignment) or the spec start when fresh.
+        // For non-swept params, hold at the spec's literal (start==target).
+        s->frequency_milliHz   = (spec->freq_curve   != LED_INTERP_NONE) ? eff_freq_start   : init_freq_milliHz;
+        s->duty_cycle          = (spec->duty_curve   != LED_INTERP_NONE) ? eff_duty_start   : spec->duty_target;
+        s->brightness          = (spec->bright_curve != LED_INTERP_NONE) ? eff_bright_start : spec->bright_target;
+        s->red                 = (spec->r_curve      != LED_INTERP_NONE) ? eff_r_start      : spec->r_target;
+        s->green               = (spec->g_curve      != LED_INTERP_NONE) ? eff_g_start      : spec->g_target;
+        s->blue                = (spec->b_curve      != LED_INTERP_NONE) ? eff_b_start      : spec->b_target;
         // Only reset the cycle origin on FIRST activation of this channel.
         // When a sweep is dispatched on an already-running channel, preserve the
         // existing cycle_start_time_us so the rhythm continues uninterrupted.
@@ -1022,40 +1071,43 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
             s->led_state           = false;
         }
 
-        // Populate per-param sweep state.
+        // Populate per-param sweep state. Use eff_*_start (live value when the
+        // channel is mid-sweep on this param) so the interpolator ramps from
+        // where the LED actually is — not from the parsed literal.
         s->sw_freq = (led_sweep_param_t){
-            .start_q  = spec->freq_milliHz_start,
+            .start_q  = eff_freq_start,
             .target_q = spec->freq_milliHz_target,
             .curve    = (uint8_t)spec->freq_curve,
         };
         s->sw_duty = (led_sweep_param_t){
-            .start_q  = (uint32_t)spec->duty_start  * 256u,
+            .start_q  = (uint32_t)eff_duty_start    * 256u,
             .target_q = (uint32_t)spec->duty_target * 256u,
             .curve    = (uint8_t)spec->duty_curve,
         };
         s->sw_brightness = (led_sweep_param_t){
-            .start_q  = (uint32_t)spec->bright_start  * 256u,
+            .start_q  = (uint32_t)eff_bright_start    * 256u,
             .target_q = (uint32_t)spec->bright_target * 256u,
             .curve    = (uint8_t)spec->bright_curve,
         };
         s->sw_r = (led_sweep_param_t){
-            .start_q  = (uint32_t)spec->r_start * 256u,
+            .start_q  = (uint32_t)eff_r_start    * 256u,
             .target_q = (uint32_t)spec->r_target * 256u,
             .curve    = (uint8_t)spec->r_curve,
         };
         s->sw_g = (led_sweep_param_t){
-            .start_q  = (uint32_t)spec->g_start * 256u,
+            .start_q  = (uint32_t)eff_g_start    * 256u,
             .target_q = (uint32_t)spec->g_target * 256u,
             .curve    = (uint8_t)spec->g_curve,
         };
         s->sw_b = (led_sweep_param_t){
-            .start_q  = (uint32_t)spec->b_start * 256u,
+            .start_q  = (uint32_t)eff_b_start    * 256u,
             .target_q = (uint32_t)spec->b_target * 256u,
             .curve    = (uint8_t)spec->b_curve,
         };
         s->sweep_start_us    = sweep_start_us;
         s->sweep_duration_us = sweep_duration_us;
         s->active            = true;
+        portEXIT_CRITICAL(&s_flicker_mux);
     }
     return ESP_OK;
 }
@@ -1143,4 +1195,168 @@ float led_matrix_get_current_frequency(void) {
 
 bool led_matrix_supports_pixel_addressing(void) {
     return matrix_handle && led_strip_supports_pixel_addressing(matrix_handle);
+}
+
+// Log full state of every active LED channel — current params plus any
+// sweep details. Snapshot-then-release pattern; safe to call from any task
+// (not from ISR).
+void led_matrix_log_full_state(void)
+{
+    struct led_full_snap {
+        bool     active;
+        uint32_t frequency_milliHz;
+        uint8_t  duty_cycle, brightness, red, green, blue;
+        bool     has_sweep[6];
+        uint32_t start_q[6], target_q[6];
+        float    progress_pct;
+        uint32_t remaining_ms;
+    } snaps[NUM_LED_CHANNELS] = {0};
+
+    uint64_t now_us = esp_timer_get_time();
+
+    portENTER_CRITICAL(&s_flicker_mux);
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        led_flicker_state_t *s = &flicker_state[ch];
+        snaps[ch].active = s->active;
+        if (!s->active) continue;
+        snaps[ch].frequency_milliHz = s->frequency_milliHz;
+        snaps[ch].duty_cycle = s->duty_cycle;
+        snaps[ch].brightness = s->brightness;
+        snaps[ch].red = s->red; snaps[ch].green = s->green; snaps[ch].blue = s->blue;
+        snaps[ch].has_sweep[0] = (s->sw_freq.curve       != LED_INTERP_NONE);
+        snaps[ch].has_sweep[1] = (s->sw_duty.curve       != LED_INTERP_NONE);
+        snaps[ch].has_sweep[2] = (s->sw_brightness.curve != LED_INTERP_NONE);
+        snaps[ch].has_sweep[3] = (s->sw_r.curve          != LED_INTERP_NONE);
+        snaps[ch].has_sweep[4] = (s->sw_g.curve          != LED_INTERP_NONE);
+        snaps[ch].has_sweep[5] = (s->sw_b.curve          != LED_INTERP_NONE);
+        snaps[ch].start_q[0]  = s->sw_freq.start_q;       snaps[ch].target_q[0] = s->sw_freq.target_q;
+        snaps[ch].start_q[1]  = s->sw_duty.start_q;       snaps[ch].target_q[1] = s->sw_duty.target_q;
+        snaps[ch].start_q[2]  = s->sw_brightness.start_q; snaps[ch].target_q[2] = s->sw_brightness.target_q;
+        snaps[ch].start_q[3]  = s->sw_r.start_q;          snaps[ch].target_q[3] = s->sw_r.target_q;
+        snaps[ch].start_q[4]  = s->sw_g.start_q;          snaps[ch].target_q[4] = s->sw_g.target_q;
+        snaps[ch].start_q[5]  = s->sw_b.start_q;          snaps[ch].target_q[5] = s->sw_b.target_q;
+        if (s->sweep_duration_us > 0) {
+            uint64_t elapsed = (now_us > s->sweep_start_us) ? (now_us - s->sweep_start_us) : 0;
+            if (elapsed > s->sweep_duration_us) elapsed = s->sweep_duration_us;
+            snaps[ch].progress_pct = 100.0f * (float)elapsed / (float)s->sweep_duration_us;
+            snaps[ch].remaining_ms = (uint32_t)((s->sweep_duration_us - elapsed) / 1000ULL);
+        }
+    }
+    portEXIT_CRITICAL(&s_flicker_mux);
+
+    static const char *names[6] = { "freq", "duty", "bri", "R", "G", "B" };
+    int n_active = 0;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!snaps[ch].active) continue;
+        n_active++;
+        ESP_LOGI(TAG, "  LED[ch=%u] freq=%.2fHz duty=%u%% bri=%u%% RGB=(%u,%u,%u)",
+                 (unsigned)ch, snaps[ch].frequency_milliHz / 1000.0f,
+                 (unsigned)snaps[ch].duty_cycle, (unsigned)snaps[ch].brightness,
+                 (unsigned)snaps[ch].red, (unsigned)snaps[ch].green, (unsigned)snaps[ch].blue);
+        for (int p = 0; p < 6; p++) {
+            if (!snaps[ch].has_sweep[p]) continue;
+            if (p == 0) {
+                ESP_LOGI(TAG, "    sweep %s: %.2f->%.2fHz  %.0f%% done  %ums left",
+                         names[p], snaps[ch].start_q[p] / 1000.0f, snaps[ch].target_q[p] / 1000.0f,
+                         snaps[ch].progress_pct, (unsigned)snaps[ch].remaining_ms);
+            } else {
+                ESP_LOGI(TAG, "    sweep %s: %u->%u  %.0f%% done  %ums left",
+                         names[p], (unsigned)(snaps[ch].start_q[p] >> 8),
+                         (unsigned)(snaps[ch].target_q[p] >> 8),
+                         snaps[ch].progress_pct, (unsigned)snaps[ch].remaining_ms);
+            }
+        }
+    }
+    if (n_active == 0) {
+        ESP_LOGI(TAG, "  LED: no active channels");
+    }
+}
+
+// Log one line per active LED sweep across all channels (current interpolated
+// value, start->target window, % done, seconds remaining). Snapshots state
+// under s_flicker_mux briefly, then releases the spinlock before any
+// ESP_LOGI — UART writes under a spinlock would prevent the flicker ISR from
+// firing and cause visible LED stutter.
+// Returns the number of active sweeps logged.
+int led_matrix_log_sweep_progress(void)
+{
+    struct led_sweep_snap {
+        bool     active;
+        bool     has_sweep[6];   // 0=freq 1=duty 2=bri 3=R 4=G 5=B
+        uint32_t start_q[6];
+        uint32_t target_q[6];
+        uint32_t current_q[6];   // current interpolated, in same q-units as start/target
+        float    progress_pct;
+        uint32_t remaining_ms;
+    } snaps[NUM_LED_CHANNELS] = {0};
+
+    uint64_t now_us = esp_timer_get_time();
+
+    portENTER_CRITICAL(&s_flicker_mux);
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        led_flicker_state_t *s = &flicker_state[ch];
+        snaps[ch].active = s->active;
+        if (!s->active) continue;
+
+        // Per-param: sweep is active iff curve != LED_INTERP_NONE
+        snaps[ch].has_sweep[0] = (s->sw_freq.curve       != LED_INTERP_NONE);
+        snaps[ch].has_sweep[1] = (s->sw_duty.curve       != LED_INTERP_NONE);
+        snaps[ch].has_sweep[2] = (s->sw_brightness.curve != LED_INTERP_NONE);
+        snaps[ch].has_sweep[3] = (s->sw_r.curve          != LED_INTERP_NONE);
+        snaps[ch].has_sweep[4] = (s->sw_g.curve          != LED_INTERP_NONE);
+        snaps[ch].has_sweep[5] = (s->sw_b.curve          != LED_INTERP_NONE);
+
+        snaps[ch].start_q[0]   = s->sw_freq.start_q;       snaps[ch].target_q[0] = s->sw_freq.target_q;
+        snaps[ch].start_q[1]   = s->sw_duty.start_q;       snaps[ch].target_q[1] = s->sw_duty.target_q;
+        snaps[ch].start_q[2]   = s->sw_brightness.start_q; snaps[ch].target_q[2] = s->sw_brightness.target_q;
+        snaps[ch].start_q[3]   = s->sw_r.start_q;          snaps[ch].target_q[3] = s->sw_r.target_q;
+        snaps[ch].start_q[4]   = s->sw_g.start_q;          snaps[ch].target_q[4] = s->sw_g.target_q;
+        snaps[ch].start_q[5]   = s->sw_b.start_q;          snaps[ch].target_q[5] = s->sw_b.target_q;
+
+        // Live values that the ISR most recently computed (in display units).
+        snaps[ch].current_q[0] = s->frequency_milliHz;
+        snaps[ch].current_q[1] = (uint32_t)s->duty_cycle * 256u;   // mirror Q8.8 scale
+        snaps[ch].current_q[2] = (uint32_t)s->brightness  * 256u;
+        snaps[ch].current_q[3] = (uint32_t)s->red         * 256u;
+        snaps[ch].current_q[4] = (uint32_t)s->green       * 256u;
+        snaps[ch].current_q[5] = (uint32_t)s->blue        * 256u;
+
+        // Shared progress across all per-param sweeps (single sweep_start/duration per channel).
+        if (s->sweep_duration_us > 0) {
+            uint64_t elapsed = (now_us > s->sweep_start_us) ? (now_us - s->sweep_start_us) : 0;
+            if (elapsed > s->sweep_duration_us) elapsed = s->sweep_duration_us;
+            snaps[ch].progress_pct = 100.0f * (float)elapsed / (float)s->sweep_duration_us;
+            snaps[ch].remaining_ms = (uint32_t)((s->sweep_duration_us - elapsed) / 1000ULL);
+        }
+    }
+    portEXIT_CRITICAL(&s_flicker_mux);
+
+    static const char *names[6] = { "freq", "duty", "bri ", "R   ", "G   ", "B   " };
+    int n_logged = 0;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!snaps[ch].active) continue;
+        for (int p = 0; p < 6; p++) {
+            if (!snaps[ch].has_sweep[p]) continue;
+            // freq logs in Hz (milliHz / 1000); others log raw byte value (Q8.8 >> 8).
+            if (p == 0) {
+                ESP_LOGI(TAG, "  LED[ch=%u] %s: %.2fHz  [%.2f->%.2f  %.0f%%  %ums left]",
+                         (unsigned)ch, names[p],
+                         snaps[ch].current_q[p] / 1000.0f,
+                         snaps[ch].start_q[p]   / 1000.0f,
+                         snaps[ch].target_q[p]  / 1000.0f,
+                         snaps[ch].progress_pct,
+                         (unsigned)snaps[ch].remaining_ms);
+            } else {
+                ESP_LOGI(TAG, "  LED[ch=%u] %s: %u  [%u->%u  %.0f%%  %ums left]",
+                         (unsigned)ch, names[p],
+                         (unsigned)(snaps[ch].current_q[p] >> 8),
+                         (unsigned)(snaps[ch].start_q[p]   >> 8),
+                         (unsigned)(snaps[ch].target_q[p]  >> 8),
+                         snaps[ch].progress_pct,
+                         (unsigned)snaps[ch].remaining_ms);
+            }
+            n_logged++;
+        }
+    }
+    return n_logged;
 }

@@ -1,6 +1,7 @@
 #include "audio_manager.h"
 #include "audio_config.h"
-#include "audio_led_sync.h"
+#include "audio_generator.h"  // for NUM_AUDIO_CHANNELS
+#include "lock_free_comm.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "driver/i2s_std.h"
@@ -25,8 +26,22 @@ esp_err_t audio_manager_init(void)
 {
     ESP_LOGI(TAG, "Initializing Audio Manager");
 
-    // I2S configuration — back to committed/working baseline.
+    // I2S configuration. We override three fields of the default config:
+    //   1. dma_desc_num and dma_frame_num — the ESP-IDF defaults (6 × 240)
+    //      don't match AUDIO_DMA_BUFFER_COUNT × AUDIO_DMA_FRAMES_PER_BUF
+    //      (8 × 256). The mismatch made AUDIO_DMA_PIPELINE_SAMPLES (and
+    //      thus AUDIO_DMA_PIPELINE_LAG_US, which anchors LED-audio sync)
+    //      off by ~14 ms. Pinning the I2S ring to the constants is what
+    //      keeps the phase pre-advance and LED anchor honest.
+    //   2. auto_clear_after_cb — the default is false, meaning an underrun
+    //      replays the last DMA descriptor (audible as a brief stutter loop
+    //      of ~5 ms of recent audio). true makes the driver emit silence
+    //      instead, which is the only acceptable underrun behaviour for
+    //      a therapy device.
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num        = AUDIO_DMA_BUFFER_COUNT;
+    chan_cfg.dma_frame_num       = AUDIO_DMA_FRAMES_PER_BUF;
+    chan_cfg.auto_clear_after_cb = true;
 
     esp_err_t ret = i2s_new_channel(&chan_cfg, &tx_handle, NULL);
     if (ret != ESP_OK) {
@@ -58,23 +73,17 @@ esp_err_t audio_manager_init(void)
         return ret;
     }
 
-    // Initialize audio-LED synchronization BEFORE enabling I2S channel
-    ret = audio_led_sync_init();
+    // Initialise lock-free comm primitives — used by config_parser's
+    // timeline-event ring buffer. Previously bootstrapped from inside
+    // audio_led_sync_init(); that module is gone, so the init has moved
+    // up here to the next-natural owner.
+    ret = lock_free_comm_init();
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to initialize audio-LED sync: %s", esp_err_to_name(ret));
-        // Continue initialization - sync is optional
-    } else {
-        // Register I2S callback for sample-accurate synchronization
-        // MUST be done before i2s_channel_enable() in ESP-IDF v5.5.2
-        ret = audio_led_sync_register_i2s_callback(tx_handle);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to register I2S callback for LED sync: %s", esp_err_to_name(ret));
-        } else {
-            ESP_LOGI(TAG, "Audio-LED synchronization enabled with I2S DMA callbacks");
-        }
+        ESP_LOGW(TAG, "lock_free_comm_init failed: %s — timeline events disabled",
+                 esp_err_to_name(ret));
     }
 
-    // Enable I2S channel AFTER callback registration
+    // Enable I2S channel
     ret = i2s_channel_enable(tx_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to enable I2S channel: %s", esp_err_to_name(ret));
@@ -245,7 +254,7 @@ esp_err_t audio_manager_stop_generation(int channel)
 
     // Check if any generators are still active
     bool any_active = false;
-    for (int i = 0; i < 8; i++) { // Check up to 8 channels
+    for (int i = 0; i < NUM_AUDIO_CHANNELS; i++) {
         if (audio_generator_is_active(i)) {
             any_active = true;
             break;

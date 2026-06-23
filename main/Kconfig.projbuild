@@ -212,4 +212,14 @@ config LED_GRID_HEIGHT
         Only meaningful when LED_GRID_WIDTH * LED_GRID_HEIGHT == LED_COUNT.
         Ignored if direct mode is selected.  Set to 1 for a 1-D strip.
 
+config GENERATOR_SERVER_URL
+    string "Generator server base URL"
+    default "http://192.168.1.100:8000"
+    help
+        Base URL of the LAN host running freeesp32_ave_generator/serve.{mjs,py}.
+        Used by the web UI on the ESP32 to list/load/save .ledc configs from
+        the generator's /ledc directory. Change to match your generator host
+        and port (e.g. http://10.0.0.213:8000). Set at flash time via
+        `idf.py menuconfig` -> ESP32 Audio Player Configuration.
+
 endmenu

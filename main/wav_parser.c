@@ -48,8 +48,14 @@ static const char *TAG = "wav_parser";
 #define WAVE_FORMAT_IEEE_FLOAT  0x0003U
 #define WAVE_FORMAT_EXTENSIBLE  0xFFFEU
 
-/* Expected firmware parameters. */
-#define WAV_EXPECTED_SAMPLE_RATE    44100U
+/* Expected firmware parameters.
+ * Sample rate: 44100 is the native I2S output rate; 22050 is also accepted
+ * because the bg_player can sample-and-hold upsample 22 kHz BG content to
+ * 44 kHz on the fly. This halves the network bandwidth required for
+ * streamed BG audio — useful for long-running 1-hour ambient sounds where
+ * TCP throughput collapse on a single long connection has been observed. */
+#define WAV_EXPECTED_SAMPLE_RATE_HI 44100U
+#define WAV_EXPECTED_SAMPLE_RATE_LO 22050U
 #define WAV_EXPECTED_CHANNELS       2U
 #define WAV_EXPECTED_BITS           16U
 
@@ -216,10 +222,13 @@ esp_err_t wav_parse_header(const uint8_t *buf, size_t buf_len,
             }
 
             /* Validate sample rate. ------------------------------------- */
-            if (sample_rate != WAV_EXPECTED_SAMPLE_RATE) {
+            if (sample_rate != WAV_EXPECTED_SAMPLE_RATE_HI &&
+                sample_rate != WAV_EXPECTED_SAMPLE_RATE_LO) {
                 ESP_LOGE(TAG, "WAV: sample rate %"PRIu32" Hz is not supported "
-                         "— expected %u Hz",
-                         sample_rate, WAV_EXPECTED_SAMPLE_RATE);
+                         "— expected %u or %u Hz",
+                         sample_rate,
+                         WAV_EXPECTED_SAMPLE_RATE_HI,
+                         WAV_EXPECTED_SAMPLE_RATE_LO);
                 return ESP_ERR_NOT_SUPPORTED;
             }
 

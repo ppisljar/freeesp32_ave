@@ -304,38 +304,48 @@ static esp_err_t bg_dispatch_url(const char *url)
  *
  * Called by bg_stream_from_http after the WAV header has been parsed.
  * Receives:
- *   client       — open esp_http_client handle positioned just past the WAV
- *                  header (i.e. next read will return PCM bytes).
- *   fmt          — parsed WAV format (channels, bits_per_sample verified by
- *                  wav_parse_header to be 2 / 16 respectively).
- *   leftover     — bytes already read from the header buffer that fall AFTER
- *                  the WAV data_offset (the first actual PCM bytes).
- *   leftover_len — byte count of leftover; may be 0.
+ *   client       — open esp_http_client handle positioned at PCM bytes.
+ *   fmt          — parsed WAV format.
+ *   leftover     — bytes already read past the WAV header (may be NULL).
+ *   leftover_len — count of leftover; may be 0.
  *
- * Converts each int16 sample to float via sample / 32768.0f, writes stereo
- * interleaved floats [L, R, L, R, …] into the ring buffer.
- *
- * Blocks on xStreamBufferSend when the ring is full, which throttles the
- * producer to the consumer's drain rate (~352 800 bytes/s at 44.1 kHz stereo
- * float) without busy-waiting.
- *
- * Returns when:
- *   a) esp_http_client_read returns 0 or negative (EOF / server-side close), or
- *   b) s_bg.streaming becomes false (bg_player_stop was called).
+ * Returns when esp_http_client_read returns 0 / negative, or when
+ * s_bg.streaming goes false.
  * --------------------------------------------------------------------------- */
 static void bg_stream_http_pcm(esp_http_client_handle_t client,
                                 const wav_format_t *fmt,
-                                const uint8_t *leftover, size_t leftover_len)
+                                const uint8_t *leftover,
+                                size_t leftover_len)
 {
     /* Scratch buffers explicitly in INTERNAL DRAM. At BG_HTTP_CHUNK_BYTES=16 KB
      * default malloc would route them to PSRAM (above ALWAYSINTERNAL threshold)
      * which slows the producer's per-byte conversion loop. */
+    /* raw_buf stays in INTERNAL DRAM — the int16→float convert loop reads
+     * it in a tight loop and PSRAM access there is measurably slower. */
     uint8_t *raw_buf = heap_caps_malloc(BG_HTTP_CHUNK_BYTES,
                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t frame_bytes  = (size_t)(fmt->channels) * (fmt->bits_per_sample / 8u);
     const size_t max_frames   = BG_HTTP_CHUNK_BYTES / frame_bytes;
-    float       *flt_buf      = heap_caps_malloc(max_frames * 2u * sizeof(float),
-                                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+    /* The output is always 44100 Hz stereo float. When the source is 22050
+     * Hz, each input frame becomes TWO output frames (sample-and-hold
+     * upsample), so the flt_buf must be sized for 2x max_frames to cover
+     * the worst case (64 KB at chunk 16 KB + 22 kHz upsample).
+     *
+     * flt_buf is allocated in PSRAM: internal DRAM is already squeezed by
+     * the WiFi/LWIP buffer config (WiFi RX 64, BA win 32, no SPIRAM
+     * routing). PSRAM write speed (~10 cy/word) is plenty for ~60 KB/s
+     * conversion throughput — only ~1 ms extra per chunk — but freeing
+     * 64 KB of internal DRAM is essential to keep network buffers fast. */
+    const bool   upsample_2x  = (fmt->sample_rate == 22050u);
+    const size_t out_frames_max = upsample_2x ? (max_frames * 2u) : max_frames;
+    float       *flt_buf      = heap_caps_malloc(out_frames_max * 2u * sizeof(float),
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!flt_buf) {
+        /* PSRAM exhausted (very rare); fall back to any available heap. */
+        flt_buf = heap_caps_malloc(out_frames_max * 2u * sizeof(float),
+                                   MALLOC_CAP_8BIT);
+    }
 
     if (!raw_buf || !flt_buf) {
         ESP_LOGE(TAG, "BG HTTP: PCM buffer malloc failed (raw=%p flt=%p)",
@@ -345,23 +355,37 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
         return;
     }
 
+    ESP_LOGI(TAG, "BG: PCM convert ready — input %u Hz %u ch, upsample=%s",
+             (unsigned)fmt->sample_rate, (unsigned)fmt->channels,
+             upsample_2x ? "yes (22→44 kHz sample-and-hold)" : "no");
+
     /* -----------------------------------------------------------------------
      * 1. Push leftover bytes from the header read (PCM data that was already
      *    fetched when we read the WAV header buffer).
      * ----------------------------------------------------------------------- */
-    if (leftover_len > 0u) {
+    if (leftover != NULL && leftover_len > 0u) {
         /* Align to frame boundary so we don't split a sample.                 */
         size_t aligned_len = (leftover_len / frame_bytes) * frame_bytes;
         size_t lo_frames   = aligned_len / frame_bytes;
 
+        size_t out_idx = 0u;
         for (size_t i = 0; i < lo_frames; i++) {
             const int16_t *p = (const int16_t *)(leftover + i * frame_bytes);
-            flt_buf[i * 2u]       = (float)p[0] / 32768.0f;
-            flt_buf[i * 2u + 1u]  = (fmt->channels == 2u) ? (float)p[1] / 32768.0f
-                                                            : flt_buf[i * 2u];
+            float L = (float)p[0] / 32768.0f;
+            float R = (fmt->channels == 2u) ? (float)p[1] / 32768.0f : L;
+            flt_buf[out_idx * 2u]      = L;
+            flt_buf[out_idx * 2u + 1u] = R;
+            out_idx++;
+            if (upsample_2x) {
+                /* Sample-and-hold: emit the same frame twice. Spectral
+                 * mirror lands above 11 kHz, inaudible for ambient BG. */
+                flt_buf[out_idx * 2u]      = L;
+                flt_buf[out_idx * 2u + 1u] = R;
+                out_idx++;
+            }
         }
 
-        size_t bytes_to_send = lo_frames * 2u * sizeof(float);
+        size_t bytes_to_send = out_idx * 2u * sizeof(float);
         if (bytes_to_send > 0u && s_bg.ring != NULL) {
             xStreamBufferSend(s_bg.ring, flt_buf, bytes_to_send, portMAX_DELAY);
             s_bg.bytes_streamed += (uint32_t)bytes_to_send;
@@ -380,6 +404,38 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
     while (s_bg.streaming) {
         if (s_bg.ring == NULL) {
             break;
+        }
+
+        /* ----- Producer pacing (high watermark) ----------------------------
+         * Critical for sustained streaming: NEVER let a full ring buffer
+         * block esp_http_client_read(). When we stop reading from the socket
+         * for >100 ms, LWIP's receive buffer fills, advertises a zero window,
+         * the server's RTO fires (~200-500 ms), and the server's cwnd resets
+         * to 1 MSS. The connection then operates in a permanently throttled
+         * state — exactly the "stable degraded after ~2 min" pattern we hit.
+         *
+         * Fix: stop calling recv() when the ring is over ~80% full and yield
+         * briefly so the consumer can drain. This paces the producer to
+         * consumer rate without ever blocking the socket-read path. LWIP's
+         * receive buffer stays small, TCP window stays healthy, no zero-
+         * window event ever happens.
+         *
+         * One chunk's float output at 22 kHz w/ 2x upsample =
+         *   (BG_HTTP_CHUNK_BYTES / 4) * 2 * 2 * sizeof(float) = 65,536 bytes.
+         * Earlier value (BG_HTTP_CHUNK_BYTES * 4u = 65,536) equalled exactly
+         * one chunk's output, so the watermark re-fired after every send,
+         * spinning vTaskDelay(10ms) ~17 times between chunks (~170ms). That
+         * dropped effective throughput to ~86 KB/s (below the 88.2 KB/s
+         * consumer demand at 22 kHz stereo) and intermittently stalled the
+         * TCP socket long enough to leak server-side cwnd via WiFi retransmit
+         * events — the documented "stable degraded after ~80 s" pattern.
+         * Reserve 4 chunk-outputs of headroom so the producer can read
+         * multiple back-to-back chunks before the watermark fires once. */
+        const size_t WATERMARK_FREE_BYTES = BG_HTTP_CHUNK_BYTES * 16u;  /* 256 KB = 4 chunk-outputs */
+        size_t free_space = xStreamBufferSpacesAvailable(s_bg.ring);
+        if (free_space < WATERMARK_FREE_BYTES) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
         }
 
         uint64_t t0 = esp_timer_get_time();
@@ -402,40 +458,51 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
             break;
         }
 
-        /* Convert raw bytes to stereo float frames.                          */
+        /* Convert raw bytes to stereo float frames; optionally upsample 2x
+         * by sample-and-hold when source is 22 kHz.                         */
         uint64_t t2 = esp_timer_get_time();
         size_t frames = (size_t)bytes_read / frame_bytes;
+        size_t out_idx = 0u;
         for (size_t i = 0; i < frames; i++) {
             const int16_t *p = (const int16_t *)(raw_buf + i * frame_bytes);
-            flt_buf[i * 2u]       = (float)p[0] / 32768.0f;
-            flt_buf[i * 2u + 1u]  = (fmt->channels == 2u) ? (float)p[1] / 32768.0f
-                                                            : flt_buf[i * 2u];
+            float L = (float)p[0] / 32768.0f;
+            float R = (fmt->channels == 2u) ? (float)p[1] / 32768.0f : L;
+            flt_buf[out_idx * 2u]      = L;
+            flt_buf[out_idx * 2u + 1u] = R;
+            out_idx++;
+            if (upsample_2x) {
+                flt_buf[out_idx * 2u]      = L;
+                flt_buf[out_idx * 2u + 1u] = R;
+                out_idx++;
+            }
         }
         uint64_t t3 = esp_timer_get_time();
         total_conv_us += (t3 - t2);
 
-        size_t bytes_to_send = frames * 2u * sizeof(float);
+        size_t bytes_to_send = out_idx * 2u * sizeof(float);
         if (bytes_to_send == 0u) {
             /* Partial frame at end of stream — discard and let read loop end. */
             continue;
         }
 
-        /* Block until the ring buffer has space.  This is the natural back-
-         * pressure mechanism: if the consumer (audio output task at priority 5)
-         * falls behind, this send blocks and the producer waits rather than
-         * over-filling the ring.                                              */
+        /* Send to ring buffer. We pre-checked watermark above, so there's
+         * room for at least 4 chunk-outputs — this send normally completes
+         * in microseconds. Use a bounded 100ms timeout instead of
+         * portMAX_DELAY: if the ring is unexpectedly full (e.g. consumer
+         * is briefly stalled by a higher-priority task), we'd rather log a
+         * short write and continue reading the socket than block the
+         * producer indefinitely. Blocking here for &gt;100ms would let the
+         * LWIP receive buffer fill up and re-introduce the zero-window
+         * cascade the watermark above is designed to prevent. */
         uint64_t t4 = esp_timer_get_time();
         size_t sent = xStreamBufferSend(s_bg.ring, flt_buf, bytes_to_send,
-                                        pdMS_TO_TICKS(500));
+                                        pdMS_TO_TICKS(100));
         uint64_t t5 = esp_timer_get_time();
         total_send_us += (t5 - t4);
         chunk_count++;
         if (sent < bytes_to_send) {
-            /* Timeout on send — ring should not stay full for 500 ms.
-             * This can happen if the consumer task was suspended.  Log once
-             * and continue; do not treat as a fatal error.                   */
             ESP_LOGW(TAG,
-                     "BG HTTP: ring send timeout (wanted %zu, sent %zu)",
+                     "BG HTTP: ring send short write (wanted %zu, sent %zu)",
                      bytes_to_send, sent);
         }
         s_bg.bytes_streamed += (uint32_t)sent;
@@ -508,9 +575,6 @@ static esp_err_t bg_stream_from_http(const char *url)
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* -----------------------------------------------------------------------
-     * 1. Initialise the HTTP client.
-     * ----------------------------------------------------------------------- */
     esp_http_client_config_t http_cfg = {
         .url                       = url,
         .method                    = HTTP_METHOD_GET,
@@ -518,9 +582,6 @@ static esp_err_t bg_stream_from_http(const char *url)
         .buffer_size               = BG_HTTP_RECV_BUF_BYTES,
         .buffer_size_tx            = BG_HTTP_TX_BUF_BYTES,
         .disable_auto_redirect     = false,
-        /* For production use with public HTTPS servers, enable
-         * CONFIG_MBEDTLS_CERTIFICATE_BUNDLE in sdkconfig and remove this flag.
-         * See ledc_spec.md Section 3 security note.                           */
         .skip_cert_common_name_check = true,
         .crt_bundle_attach           = NULL,
     };
@@ -531,10 +592,7 @@ static esp_err_t bg_stream_from_http(const char *url)
         return ESP_FAIL;
     }
 
-    /* -----------------------------------------------------------------------
-     * 2. Open the connection and issue the GET request.
-     * ----------------------------------------------------------------------- */
-    esp_err_t err = esp_http_client_open(client, 0 /* write_len = 0 for GET */);
+    esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "BG HTTP: esp_http_client_open failed: %s",
                  esp_err_to_name(err));
@@ -542,35 +600,25 @@ static esp_err_t bg_stream_from_http(const char *url)
         return ESP_FAIL;
     }
 
-    /* -----------------------------------------------------------------------
-     * 3. Fetch response headers and validate status code.
-     * ----------------------------------------------------------------------- */
     int64_t content_length = esp_http_client_fetch_headers(client);
     int     http_status    = esp_http_client_get_status_code(client);
 
-    ESP_LOGI(TAG,
-             "BG HTTP: '%s' → status=%d content_length=%lld",
+    ESP_LOGI(TAG, "BG HTTP: '%s' → status=%d content_length=%lld",
              url, http_status, content_length);
 
     if (http_status != 200) {
-        ESP_LOGE(TAG,
-                 "BG HTTP: unexpected HTTP status %d for '%s' (expected 200)",
-                 http_status, url);
+        ESP_LOGE(TAG, "BG HTTP: unexpected HTTP status %d (expected 200)",
+                 http_status);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
     }
 
-    /* -----------------------------------------------------------------------
-     * 4. Read the WAV header from the first bytes of the response body.
-     * ----------------------------------------------------------------------- */
     uint8_t hdr_buf[BG_HTTP_HDR_BUF_BYTES];
     int hdr_bytes = esp_http_client_read(client, (char *)hdr_buf,
                                          (int)sizeof(hdr_buf));
     if (hdr_bytes < 44) {
-        ESP_LOGE(TAG,
-                 "BG HTTP: response too short for WAV header "
-                 "(got %d bytes, need >= 44)",
+        ESP_LOGE(TAG, "BG HTTP: response too short for WAV header (%d)",
                  hdr_bytes);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
@@ -582,9 +630,8 @@ static esp_err_t bg_stream_from_http(const char *url)
     esp_err_t wav_err = wav_parse_header(hdr_buf, (size_t)hdr_bytes,
                                          &fmt, &consumed_bytes);
     if (wav_err != ESP_OK) {
-        ESP_LOGE(TAG,
-                 "BG HTTP: WAV header parse failed (err=%s) for '%s'",
-                 esp_err_to_name(wav_err), url);
+        ESP_LOGE(TAG, "BG HTTP: WAV header parse failed (err=%s)",
+                 esp_err_to_name(wav_err));
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
@@ -598,21 +645,13 @@ static esp_err_t bg_stream_from_http(const char *url)
              (unsigned)fmt.data_offset, (unsigned)fmt.data_size_bytes,
              consumed_bytes);
 
-    /* Any bytes we already read that are past the header are the first PCM
-     * bytes.  Pass them to bg_stream_http_pcm as "leftover".                 */
     const uint8_t *leftover     = hdr_buf + consumed_bytes;
     size_t         leftover_len = (size_t)hdr_bytes > consumed_bytes
                                   ? (size_t)hdr_bytes - consumed_bytes
                                   : 0u;
 
-    /* -----------------------------------------------------------------------
-     * 5. Stream PCM data into the ring buffer.
-     * ----------------------------------------------------------------------- */
     bg_stream_http_pcm(client, &fmt, leftover, leftover_len);
 
-    /* -----------------------------------------------------------------------
-     * 6. Clean up the HTTP connection.
-     * ----------------------------------------------------------------------- */
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
 
