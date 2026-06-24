@@ -3,8 +3,8 @@
 #
 # Usage:
 #   ./switch_board.sh glasses   # WS2812 strip + raw I2S (PCM5102A etc.)
-#   ./switch_board.sh ac101     # AC101 codec variant + single direct-drive LED on GPIO 22
-#   ./switch_board.sh es8388    # ES8388 codec variant + single direct-drive LED on GPIO 22
+#   ./switch_board.sh ac101     # A1S board (AC101 variant) + single LED on GPIO 22
+#   ./switch_board.sh es8388    # A1S board (ES8388 variant) + two LEDs on GPIO 22/23
 #
 # After switching, run `idf.py build` to compile for the new board.
 
