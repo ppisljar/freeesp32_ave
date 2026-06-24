@@ -859,8 +859,14 @@ esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask)
     if (matrix_handle) {
         if (led_flicker_task_handle == NULL) {
             // Render task is gone — safe to paint a final black frame ourselves.
-            // No concurrent refresh can race with this set_all (Bug F).
-            led_strip_set_all(matrix_handle, 0, 0, 0);
+            // No concurrent refresh can race with this clear (Bug F).
+            // Use led_strip_clear (not led_strip_set_all) because led_strip_set_all
+            // returns ESP_ERR_NOT_SUPPORTED for DIRECT mode, leaving stale
+            // brightness values in place and the LEDs stuck at whatever state
+            // they were in at the moment of stop. led_strip_clear works for
+            // all backends — for DIRECT it zeros the brightness array, and
+            // the refresh below pushes that to the hardware.
+            led_strip_clear(matrix_handle);
             led_strip_refresh(matrix_handle);
         } else {
             // Render task is still running.  Don't touch the strip directly —

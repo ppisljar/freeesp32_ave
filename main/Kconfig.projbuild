@@ -25,11 +25,46 @@ config BG_SDCARD_ENABLED
         When enabled, BG audio entries with sdcard:// URLs are streamed from
         an SD card via SDMMC/SDSPI.  Requires SD card hardware wired to the
         ESP32 GPIO pins (not currently present on the dev board), GPIO pin
-        configuration in sdkconfig (CONFIG_SDMMC_HOST_* or CONFIG_SDSPI_*),
-        and the appropriate host driver enabled in menuconfig.
+        configuration via the BG_SDCARD_*_GPIO options below, and the
+        appropriate host driver enabled in menuconfig.
         When disabled (default), BG entries with sdcard:// URLs are logged
         as an error and the BG entry is treated as a no-op for that session.
         See Plan 006 Section 2.4 for the SD bring-up checklist.
+
+config BG_SDCARD_CS_GPIO
+    int "SD card SPI CS (chip select) GPIO (-1 = disabled)"
+    range -1 39
+    default 5
+    depends on BG_SDCARD_ENABLED
+    help
+        SPI chip-select line for the SD card. Set to -1 if not wired.
+        Common ESP32 dev-board default is GPIO 5; some integrated audio
+        boards (e.g. AC101 / ESP32-A1S) use GPIO 5 for buttons — pick
+        a different pin in that case.
+
+config BG_SDCARD_MOSI_GPIO
+    int "SD card SPI MOSI GPIO (-1 = disabled)"
+    range -1 39
+    default 23
+    depends on BG_SDCARD_ENABLED
+    help
+        SPI master-out / slave-in. Set to -1 if not wired.
+
+config BG_SDCARD_MISO_GPIO
+    int "SD card SPI MISO GPIO (-1 = disabled)"
+    range -1 39
+    default 19
+    depends on BG_SDCARD_ENABLED
+    help
+        SPI master-in / slave-out. Set to -1 if not wired.
+
+config BG_SDCARD_CLK_GPIO
+    int "SD card SPI CLK GPIO (-1 = disabled)"
+    range -1 39
+    default 18
+    depends on BG_SDCARD_ENABLED
+    help
+        SPI clock line for the SD card. Set to -1 if not wired.
 
 
 # ---------------------------------------------------------------------------
@@ -107,79 +142,106 @@ config LED_CHANNEL_MAP
           channel 3 (r4 inner-right rectangle) — 8 LEDs
 
 config LED_DIRECT_PIN_CH1
-    int "Direct mode — GPIO pin for channel 1"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 1 (-1 = disabled)"
+    range -1 39
     default 12
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 0 (channel index 0).
         Brightness from the .led timeline controls PWM duty; R/G/B are ignored.
+        Set to -1 to disable this channel (no LEDC allocation, no pin claim).
 
 config LED_DIRECT_PIN_CH2
-    int "Direct mode — GPIO pin for channel 2"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 2 (-1 = disabled)"
+    range -1 39
     default 13
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 1 (channel index 1).
+        Set to -1 to disable this channel.
 
 config LED_DIRECT_PIN_CH3
-    int "Direct mode — GPIO pin for channel 3"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 3 (-1 = disabled)"
+    range -1 39
     default 14
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 2 (channel index 2).
+        Set to -1 to disable this channel.
 
 config LED_DIRECT_PIN_CH4
-    int "Direct mode — GPIO pin for channel 4"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 4 (-1 = disabled)"
+    range -1 39
     default 15
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 3 (channel index 3).
+        Set to -1 to disable this channel.
 
 config LED_DIRECT_PIN_CH5
-    int "Direct mode — GPIO pin for channel 5"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 5 (-1 = disabled)"
+    range -1 39
     default 2
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 4 (channel index 4).
         Default GPIO 2 is the on-board LED on most ESP32 dev boards; adjust
-        if that conflicts with your hardware.  Must not conflict with I2S
-        audio pins (25, 26, 22), UART (1, 3), or channels 1-4 (12-15).
+        if that conflicts with your hardware.  Must not conflict with the
+        configured I2S pins, UART (1, 3), or other direct-mode channels.
+        Set to -1 to disable this channel.
 
 config LED_DIRECT_PIN_CH6
-    int "Direct mode — GPIO pin for channel 6"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 6 (-1 = disabled)"
+    range -1 39
     default 4
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 5 (channel index 5).
-        Default GPIO 4.  Must not conflict with I2S audio pins (25, 26, 22),
+        Default GPIO 4. Must not conflict with the configured I2S pins,
         UART (1, 3), or other direct-mode channels.
+        Set to -1 to disable this channel.
 
 config LED_DIRECT_PIN_CH7
-    int "Direct mode — GPIO pin for channel 7"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 7 (-1 = disabled)"
+    range -1 39
     default 16
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 6 (channel index 6).
-        Default GPIO 16.  Must not conflict with I2S audio pins (25, 26, 22),
+        Default GPIO 16. Must not conflict with the configured I2S pins,
         UART (1, 3), PSRAM (if present, uses 16/17), or other channels.
         If PSRAM is enabled on your board, choose a different GPIO.
+        Set to -1 to disable this channel.
 
 config LED_DIRECT_PIN_CH8
-    int "Direct mode — GPIO pin for channel 8"
-    range 0 39
+    int "Direct mode — GPIO pin for channel 8 (-1 = disabled)"
+    range -1 39
     default 17
     depends on LED_TYPE_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 7 (channel index 7).
-        Default GPIO 17.  Same PSRAM caveat as CH7 above.  Adjust to an
+        Default GPIO 17. Same PSRAM caveat as CH7 above. Adjust to an
         unused GPIO if there is a conflict.
+        Set to -1 to disable this channel.
+
+config LED_DIRECT_ACTIVE_LOW_MASK
+    int "Direct mode — active-low channel bitmask (0-255)"
+    range 0 255
+    default 0
+    depends on LED_TYPE_DIRECT
+    help
+        Bit N set means logical channel N drives an active-low LED — i.e.
+        the LED's anode is on Vcc and its cathode goes to the GPIO via a
+        current-limiting resistor. Driving the pin LOW lights the LED;
+        driving it HIGH turns it off. Many integrated audio dev boards
+        (AI-Thinker ESP32-A1S, LyraT-class) wire their status LEDs this way.
+        For active-low channels, the firmware inverts the PWM duty so that
+        brightness=0 produces an essentially-constant HIGH (LED off) and
+        brightness=100 produces a constant LOW (LED fully on).
+        Examples:
+          0    = all channels active-high (most standalone LEDs)
+          3    = CH1 (bit 0) + CH2 (bit 1) are active-low (A1S board)
+          255  = all 8 channels active-low
 
 config LED_DOTSTAR_SPI_CLOCK_HZ
     int "DotStar SPI bus clock frequency (Hz)"
@@ -221,5 +283,135 @@ config GENERATOR_SERVER_URL
         the generator's /ledc directory. Change to match your generator host
         and port (e.g. http://10.0.0.213:8000). Set at flash time via
         `idf.py menuconfig` -> ESP32 Audio Player Configuration.
+
+
+# ---------------------------------------------------------------------------
+# I2S Audio Output — pin configuration
+# ---------------------------------------------------------------------------
+# These pins drive the I2S audio output peripheral. Defaults match the
+# original "glasses" board layout. For boards with on-board codecs (e.g.
+# AI-Thinker ESP32-Audio-Kit / AC101), override these to match the codec's
+# wiring — typically BCK=27, WS=26, DOUT=25, MCLK=0.
+
+config AUDIO_I2S_BCK_GPIO
+    int "I2S BCK (bit clock) GPIO"
+    range 0 39
+    default 26
+    help
+        GPIO driving the I2S bit clock (BCLK). Output only.
+        Must not conflict with other I2S pins, LED pins, or input-only GPIOs
+        (34-39).
+
+config AUDIO_I2S_WS_GPIO
+    int "I2S WS (word select / LRCK) GPIO"
+    range 0 39
+    default 25
+    help
+        GPIO driving the I2S word select (LRCK). Output only.
+
+config AUDIO_I2S_DATA_GPIO
+    int "I2S DATA OUT GPIO (ESP32 -> DAC)"
+    range 0 39
+    default 22
+    help
+        GPIO driving the I2S serial data line from the ESP32 to the DAC.
+        Output only. WARNING: on boards where this pin doubles as a status
+        LED or other peripheral, choose a different pin.
+
+config AUDIO_I2S_MCLK_GPIO
+    int "I2S MCLK GPIO (-1 = disabled)"
+    range -1 39
+    default -1
+    help
+        GPIO driving the I2S master clock (MCLK). Some codecs (AC101, ES8388)
+        require an MCLK derived from the ESP32; others (PCM5102A) generate
+        their own clock from BCK. On the original ESP32, MCLK can only be
+        routed via GPIO 0, 1, or 3 due to peripheral pinmuxing constraints.
+        Set to -1 to leave MCLK unused.
+
+config AUDIO_I2S_DIN_GPIO
+    int "I2S DATA IN GPIO (DAC -> ESP32, -1 = disabled)"
+    range -1 39
+    default -1
+    help
+        GPIO receiving I2S serial data from the codec's ADC (microphone or
+        line-in). Set to -1 if you only need playback. Input-only GPIOs
+        (34-39) are valid here.
+
+config AUDIO_AMP_ENABLE_GPIO
+    int "Amplifier enable GPIO (-1 = none)"
+    range -1 39
+    default -1
+    help
+        GPIO that must be driven HIGH at boot to enable an external amplifier
+        IC (e.g. PAM8403 SD pin, TPA3110 STBY pin). Common on integrated
+        audio boards. Set to -1 if there is no amplifier enable line.
+
+# ---------------------------------------------------------------------------
+# Audio Codec Driver
+# ---------------------------------------------------------------------------
+# Most ESP32 dev boards use a passive I2S DAC (PCM5102A, MAX98357A) that
+# needs no software initialization — just configure I2S pins and play.
+# Other boards have an I2S codec IC (AC101, ES8388) that must be initialized
+# over I2C before audio output works. Select the matching driver here.
+
+choice AUDIO_DRIVER
+    prompt "Audio codec driver"
+    default AUDIO_DRIVER_NONE
+    help
+        NONE   — no codec initialization; suitable for passive DACs that work
+                 with just I2S signals (PCM5102A, MAX98357A, generic DAC modules).
+        AC101  — initialize an X-Powers AC101 codec over I2C. Used on
+                 AI-Thinker ESP32-Audio-Kit / ESP32-A1S (AC101 variant).
+                 I2C address 0x1A. PLL sourced from BCLK — no MCLK needed.
+        ES8388 — initialize an Everest Semi ES8388 codec over I2C. Used on
+                 AI-Thinker ESP32-A1S (ES8388 variant), LyraT boards, and
+                 many other ESP32 audio dev kits. I2C address 0x10. REQUIRES
+                 MCLK from the ESP32 — set CONFIG_AUDIO_I2S_MCLK_GPIO to 0
+                 (the only MCLK-capable pin on most classic ESP32 boards).
+
+    config AUDIO_DRIVER_NONE
+        bool "None (passive DAC / raw I2S)"
+
+    config AUDIO_DRIVER_AC101
+        bool "AC101 (X-Powers codec, I2C-controlled)"
+
+    config AUDIO_DRIVER_ES8388
+        bool "ES8388 (Everest Semi codec, I2C-controlled)"
+
+endchoice
+
+config AUDIO_CODEC_I2C_PORT
+    int "Audio codec I2C port (0 or 1)"
+    range 0 1
+    default 0
+    depends on !AUDIO_DRIVER_NONE
+    help
+        I2C peripheral number used to talk to the codec.
+
+config AUDIO_CODEC_I2C_SDA_GPIO
+    int "Audio codec I2C SDA GPIO"
+    range 0 39
+    default 33
+    depends on !AUDIO_DRIVER_NONE
+    help
+        SDA line for the codec I2C bus. On the AC101 boards this is GPIO 33.
+
+config AUDIO_CODEC_I2C_SCL_GPIO
+    int "Audio codec I2C SCL GPIO"
+    range 0 39
+    default 32
+    depends on !AUDIO_DRIVER_NONE
+    help
+        SCL line for the codec I2C bus. On the AC101 boards this is GPIO 32.
+
+config AUDIO_CODEC_I2C_FREQ_HZ
+    int "Audio codec I2C bus frequency (Hz)"
+    range 10000 1000000
+    default 100000
+    depends on !AUDIO_DRIVER_NONE
+    help
+        I2C clock speed for the codec bus. Standard mode (100kHz) is safe;
+        fast mode (400kHz) is usually fine but increases EMI risk on long lines.
 
 endmenu

@@ -10,10 +10,17 @@
  * Centralized configuration for the ESP32 Audio Player
  */
 
-// I2S Pin Configuration
-#define AUDIO_I2S_BCK_GPIO      GPIO_NUM_26  // Bit Clock
-#define AUDIO_I2S_WS_GPIO       GPIO_NUM_25  // Word Select (LRC)
-#define AUDIO_I2S_DATA_GPIO     GPIO_NUM_22  // Data Out
+// I2S Pin Configuration — driven by menuconfig (see Kconfig.projbuild).
+// Defaults reproduce the original glasses board layout (26/25/22).
+// For boards with on-board codecs (AC101 etc.) override via menuconfig.
+#define AUDIO_I2S_BCK_GPIO      ((gpio_num_t)CONFIG_AUDIO_I2S_BCK_GPIO)
+#define AUDIO_I2S_WS_GPIO       ((gpio_num_t)CONFIG_AUDIO_I2S_WS_GPIO)
+#define AUDIO_I2S_DATA_GPIO     ((gpio_num_t)CONFIG_AUDIO_I2S_DATA_GPIO)
+// MCLK / DIN may be -1 (unused); cast preserved for API symmetry. Code that
+// uses these pins must check for GPIO_NUM_NC before configuring the pin.
+#define AUDIO_I2S_MCLK_GPIO     ((gpio_num_t)CONFIG_AUDIO_I2S_MCLK_GPIO)
+#define AUDIO_I2S_DIN_GPIO      ((gpio_num_t)CONFIG_AUDIO_I2S_DIN_GPIO)
+#define AUDIO_AMP_ENABLE_GPIO   ((gpio_num_t)CONFIG_AUDIO_AMP_ENABLE_GPIO)
 
 // Audio Settings
 #define AUDIO_SAMPLE_RATE       44100        // 44.1kHz
@@ -85,12 +92,23 @@
 #define AUDIO_MAX_VOLUME        1.0f         // Maximum volume
 #define AUDIO_MIN_VOLUME        0.0f         // Minimum volume (mute)
 
-// SD Card Configuration (when implemented)
+// SD Card Configuration — driven by menuconfig (CONFIG_BG_SDCARD_*).
+// Macros expand to GPIO_NUM_NC (-1) when a pin is unset, so callers should
+// check for !=GPIO_NUM_NC before configuring the pin. Only meaningful when
+// CONFIG_BG_SDCARD_ENABLED=y; for builds without SD-card support the
+// CONFIG_BG_SDCARD_*_GPIO symbols don't exist (gated by Kconfig depends).
 #define SDCARD_SPI_HOST         SPI2_HOST
-#define SDCARD_CS_GPIO          GPIO_NUM_5
-#define SDCARD_MOSI_GPIO        GPIO_NUM_23
-#define SDCARD_MISO_GPIO        GPIO_NUM_19
-#define SDCARD_CLK_GPIO         GPIO_NUM_18
+#ifdef CONFIG_BG_SDCARD_ENABLED
+#define SDCARD_CS_GPIO          ((gpio_num_t)CONFIG_BG_SDCARD_CS_GPIO)
+#define SDCARD_MOSI_GPIO        ((gpio_num_t)CONFIG_BG_SDCARD_MOSI_GPIO)
+#define SDCARD_MISO_GPIO        ((gpio_num_t)CONFIG_BG_SDCARD_MISO_GPIO)
+#define SDCARD_CLK_GPIO         ((gpio_num_t)CONFIG_BG_SDCARD_CLK_GPIO)
+#else
+#define SDCARD_CS_GPIO          GPIO_NUM_NC
+#define SDCARD_MOSI_GPIO        GPIO_NUM_NC
+#define SDCARD_MISO_GPIO        GPIO_NUM_NC
+#define SDCARD_CLK_GPIO         GPIO_NUM_NC
+#endif
 
 // Network Configuration (when implemented)
 #define WIFI_SSID_MAX_LEN       32

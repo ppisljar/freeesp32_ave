@@ -924,22 +924,50 @@ static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle)
  */
 static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[NUM_LED_CHANNELS])
 {
-    /* Shared LEDC timer — low-speed mode, 8-bit resolution, 5 kHz */
+    /* Shared LEDC timer — low-speed mode, 8-bit resolution, 25 kHz.
+     * 5 kHz was clearly audible as a whine through nearby speaker wiring
+     * on the AI-Thinker A1S board; 25 kHz is comfortably above the human
+     * hearing limit (~20 kHz) and well within LEDC's range. Higher
+     * frequencies (40-80 kHz) work too but provide no additional benefit
+     * for visual smoothness — the eye can't perceive flicker above ~80 Hz
+     * to begin with. 25 kHz × 256 (8-bit) = 6.4 MHz LEDC clock, well within
+     * the APB clock range. */
     ledc_timer_config_t timer_cfg = {
         .speed_mode      = LEDC_LOW_SPEED_MODE,
         .duty_resolution = LEDC_TIMER_8_BIT,
         .timer_num       = LEDC_TIMER_0,
-        .freq_hz         = 5000,
+        .freq_hz         = 25000,
         .clk_cfg         = LEDC_AUTO_CLK,
     };
     ESP_ERROR_CHECK(ledc_timer_config(&timer_cfg));
 
     /* NUM_LED_CHANNELS (8) LEDC channels, one per logical LED channel.
      * LEDC_CHANNEL_0 + 7 == LEDC_CHANNEL_7 is the hardware maximum for
-     * low-speed mode on ESP32 (classic). */
+     * low-speed mode on ESP32 (classic). Channels with pin == GPIO_NUM_NC
+     * (set via CONFIG_LED_DIRECT_PIN_CHn = -1) are skipped — no LEDC slot
+     * allocated, no pin claimed, no PWM output. set_channel / refresh /
+     * deinit also short-circuit for those channels.
+     *
+     * LEDC duty scale: we use 0..LED_DIRECT_DUTY_MAX where MAX = 1<<resolution.
+     * For 8-bit that's 256, which the ESP-IDF LEDC treats as a special case
+     * meaning "constant HIGH with no LOW pulses at all". Using the more
+     * intuitive 0..255 range leaves a 1/256 LOW pulse every cycle at "max",
+     * which is enough to leak measurable current through an active-low LED
+     * and leave it visibly glowing in the off state. duty=256 → truly off
+     * for active-low; duty=0 → truly off for active-high.
+     *
+     * For active-low channels (bit set in CONFIG_LED_DIRECT_ACTIVE_LOW_MASK)
+     * the initial duty is LED_DIRECT_DUTY_MAX so the pin is constantly HIGH
+     * at boot (LED off), not blasting on until the first refresh. */
+    const uint8_t active_low_mask = (uint8_t)CONFIG_LED_DIRECT_ACTIVE_LOW_MASK;
     for (int i = 0; i < NUM_LED_CHANNELS; i++) {
         handle->ledc_channels[i] = (ledc_channel_t)(LEDC_CHANNEL_0 + i);
         handle->direct_pins[i]   = pin_ch[i];
+
+        if (pin_ch[i] == GPIO_NUM_NC) {
+            ESP_LOGI(TAG, "s_direct_init: channel %d disabled (pin -1)", i);
+            continue;
+        }
 
         ledc_channel_config_t ch_cfg = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -947,7 +975,7 @@ static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_
             .timer_sel  = LEDC_TIMER_0,
             .intr_type  = LEDC_INTR_DISABLE,
             .gpio_num   = pin_ch[i],
-            .duty       = 0,
+            .duty       = (active_low_mask & (1u << i)) ? 256 : 0,
             .hpoint     = 0,
         };
         esp_err_t ret = ledc_channel_config(&ch_cfg);
@@ -1016,8 +1044,20 @@ static esp_err_t s_direct_refresh(led_strip_handle_t *handle)
     memcpy(brightness, handle->direct_channel_brightness, sizeof(brightness));
     xSemaphoreGive(handle->access_mutex);
 
+    /* Active-low channels (boards where the LED's anode is on Vcc and the
+     * GPIO sinks current) need their PWM duty inverted so brightness=0
+     * actually turns the LED off. Bit N of CONFIG_LED_DIRECT_ACTIVE_LOW_MASK
+     * marks channel N as active-low.
+     *
+     * Duty scale: 0..256 (not 0..255). 256 is the ESP-IDF LEDC special value
+     * meaning "constant HIGH, no LOW pulse" for an 8-bit timer — required to
+     * fully extinguish active-low LEDs. Using 255 leaves a 1/256 LOW pulse
+     * per cycle that visibly lights active-low LEDs in the supposed off state. */
+    const uint8_t active_low_mask = (uint8_t)CONFIG_LED_DIRECT_ACTIVE_LOW_MASK;
     for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
-        uint32_t duty = ((uint32_t)brightness[ch] * 255U) / 100U;
+        if (handle->direct_pins[ch] == GPIO_NUM_NC) continue;
+        uint32_t duty = ((uint32_t)brightness[ch] * 256U) / 100U;
+        if (active_low_mask & (1u << ch)) duty = 256U - duty;
         ledc_set_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch], duty);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch]);
     }
@@ -1048,8 +1088,14 @@ static esp_err_t s_direct_clear(led_strip_handle_t *handle)
  */
 static esp_err_t s_direct_deinit(led_strip_handle_t *handle)
 {
+    /* idle_level on stop: 1 for active-low channels (HIGH = LED OFF),
+     * 0 for active-high (LOW = LED OFF). Either way, ensure the LED is
+     * dark after shutdown. */
+    const uint8_t active_low_mask = (uint8_t)CONFIG_LED_DIRECT_ACTIVE_LOW_MASK;
     for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
-        ledc_stop(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch], 0 /* idle_level */);
+        if (handle->direct_pins[ch] == GPIO_NUM_NC) continue;
+        uint32_t idle = (active_low_mask & (1u << ch)) ? 1 : 0;
+        ledc_stop(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch], idle);
     }
     return ESP_OK;
 }
