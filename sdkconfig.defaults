@@ -1,0 +1,6 @@
+# Project defaults — applied when sdkconfig is regenerated.
+# Custom partition table that adds a 1.5 MB SPIFFS "storage" partition
+# for the web UI assets (served by web_server.c from /spiffs).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"

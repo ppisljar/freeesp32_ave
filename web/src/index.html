@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 Audio/Video Entrainment</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>ESP32 Audio/Video Entrainment</h1>
+
+        <div id="status" class="status info" style="display:none"></div>
+
+        <div class="section" id="liveCtrl">
+            <h2>Live Control <span id="ctrl-status" style="font-size:12px;color:#666;margin-left:8px;font-weight:normal;"></span></h2>
+            <div style="font-size:12px;color:#888;margin-bottom:8px;">Sliders animate over 1 s. Pauses polling for a control while you're dragging it.</div>
+            <div id="ctrl-audio" class="ctrl-block"></div>
+            <div id="ctrl-noise" class="ctrl-block"></div>
+            <div id="ctrl-led" class="ctrl-block"></div>
+        </div>
+
+        <div class="section">
+            <h2>Test Config</h2>
+            <div class="controls">
+                <button id="btnLoadExample">Load Fresh Example</button>
+                <button id="btnUpload">📂 Upload File…</button>
+                <input type="file" id="configFile" accept=".led,.ledc,.txt" style="display:none">
+                <button id="btnPlay" style="background: #28a745;">▶ PLAY Config</button>
+                <button id="btnStop" style="background: #dc3545;">■ STOP</button>
+                <button id="btnClear">Clear</button>
+            </div>
+            <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
+                <strong style="font-size:13px;">Generator:</strong>
+                <select id="ledcDropdown" style="min-width:220px;padding:4px;"></select>
+                <button id="btnRefreshLedc" title="Reload list from generator">⟳</button>
+                <button id="btnLoadGen">Load</button>
+                <button id="btnSaveGen">Save</button>
+                <button id="btnSaveAsGen">Save As…</button>
+                <span id="loadedFilename" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
+            </div>
+            <textarea id="exampleConfig" placeholder="Enter .led config here..."></textarea>
+            <div id="reportBox" style="margin-top:15px;display:none;background:#f0f4f8;border:1px solid #c3d0e0;border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;"></div>
+        </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+</body>
+</html>

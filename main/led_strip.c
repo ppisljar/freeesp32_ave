@@ -8,6 +8,8 @@
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
+#include "esp_private/periph_ctrl.h"
+#include "soc/periph_defs.h"
 #include "sdkconfig.h"
 #include <stdlib.h>
 #include <string.h>
@@ -924,6 +926,18 @@ static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle)
  */
 static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[NUM_LED_CHANNELS])
 {
+    /* Force a clean reset of the LEDC peripheral. erase-flash + reflash does
+     * NOT reset peripheral registers — the chip undergoes only a soft reset
+     * between flashes, so LEDC can carry over half-configured state from the
+     * previous firmware (timers paused, channels bound to wrong pins, clock
+     * source de-selected, etc.). That stale state has manifested as
+     * `ledc_update_duty` hanging on the duty_start poll because the timer
+     * was never producing cycles to self-clear the bit. periph_module_reset
+     * cycles the LEDC clock gate via DPORT, guaranteeing every register
+     * starts at its hardware default. Cheap (single DPORT write) and only
+     * runs once at boot. */
+    periph_module_reset(PERIPH_LEDC_MODULE);
+
     /* Shared LEDC timer — low-speed mode, 8-bit resolution, 25 kHz.
      * 5 kHz was clearly audible as a whine through nearby speaker wiring
      * on the AI-Thinker A1S board; 25 kHz is comfortably above the human

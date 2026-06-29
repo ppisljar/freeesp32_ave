@@ -1,0 +1,13 @@
+{
+  "name": "esp32-ave-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vanilla-JS web UI for the ESP32 Audio/Video Entrainment device. Bundled + minified + gzipped into the SPIFFS 'storage' partition.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

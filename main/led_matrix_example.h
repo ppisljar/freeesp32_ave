@@ -203,6 +203,25 @@ esp_err_t led_matrix_update_color_r_masked  (uint8_t channel_mask, uint8_t red);
 esp_err_t led_matrix_update_color_g_masked  (uint8_t channel_mask, uint8_t green);
 esp_err_t led_matrix_update_color_b_masked  (uint8_t channel_mask, uint8_t blue);
 
+/* Modulation setters — the LED ISR evaluates the wave shape at cycle
+ * boundaries from these slots and overrides any active sweep. Wave is
+ * one of the mod_wave_t values (0=triangle, 1=sine, 2=saw-up,
+ * 3=saw-down, 4=square). Period is the full cycle time in ms.
+ * Each setter is per-field and idempotent: writing replaces any existing
+ * modulation on that field. */
+esp_err_t led_matrix_set_mod_freq_masked      (uint8_t channel_mask, uint8_t wave,
+                                                float start_hz, float end_hz, uint32_t period_ms);
+esp_err_t led_matrix_set_mod_duty_masked      (uint8_t channel_mask, uint8_t wave,
+                                                uint8_t start_pct, uint8_t end_pct, uint32_t period_ms);
+esp_err_t led_matrix_set_mod_brightness_masked(uint8_t channel_mask, uint8_t wave,
+                                                uint8_t start_pct, uint8_t end_pct, uint32_t period_ms);
+/* component is 'r', 'g', or 'b'. */
+esp_err_t led_matrix_set_mod_color_masked     (uint8_t channel_mask, uint8_t wave,
+                                                char component, uint8_t start_v, uint8_t end_v,
+                                                uint32_t period_ms);
+/* field: 0=freq, 1=duty, 2=bright, 3=R, 4=G, 5=B */
+esp_err_t led_matrix_clear_mod_masked         (uint8_t channel_mask, uint8_t field);
+
 /**
  * @brief Set flicker color on channels indicated by channel_mask.
  *
@@ -356,6 +375,26 @@ int led_matrix_log_sweep_progress(void);
  *        led_matrix_log_sweep_progress.
  */
 void led_matrix_log_full_state(void);
+
+/** UI-facing per-channel snapshot. Filled by led_matrix_get_snapshot() under
+ *  s_flicker_mux. Designed for the /api/state web endpoint. */
+typedef struct {
+    bool     active;            // channel currently flickering
+    float    freq;              // current (interpolated) flicker freq in Hz
+    uint8_t  duty;              // 0..100
+    uint8_t  brightness;        // 0..100
+    uint8_t  r, g, b;           // 0..255 (meaningful only for addressable backends)
+    bool     mod_freq_active;
+    bool     mod_duty_active;
+    bool     mod_bright_active;
+    bool     mod_r_active;
+    bool     mod_g_active;
+    bool     mod_b_active;
+} led_matrix_channel_snapshot_t;
+
+/** Fill `out[0..min(count, NUM_LED_CHANNELS)-1]` with current per-channel
+ *  state. Returns number of channels written. Takes s_flicker_mux briefly. */
+int led_matrix_get_snapshot(led_matrix_channel_snapshot_t *out, int count);
 
 /**
  * @brief Return true if the underlying LED strip supports per-pixel addressing.

@@ -61,16 +61,39 @@ esp_err_t bg_player_init(void);
 esp_err_t bg_player_start(const config_bg_entry_t *bg);
 
 /**
- * @brief Stop background audio playback.
+ * @brief Stop background audio playback (blocking, up to ~2.1 s).
  *
  * Arms a 220-sample (5 ms) fade-out ramp, signals the streamer task to exit,
- * waits up to 2 s for it to terminate, and frees the ring buffer.
+ * waits up to 2 s for it to terminate gracefully, force-deletes the task on
+ * timeout, and resets the ring buffer.
+ *
+ * Use this for explicit user-driven shutdown where you want maximum chance of
+ * the HTTP producer cleaning up its own socket before exit.
  *
  * Safe to call when BG is not active (returns ESP_OK immediately).
  *
  * @return ESP_OK on success.
  */
 esp_err_t bg_player_stop(void);
+
+/**
+ * @brief Stop background audio playback (fast, ~5–200 ms).
+ *
+ * Same fade-out + signal sequence as bg_player_stop(), but caps the producer-
+ * task join timeout at ~200 ms instead of ~2 s. If the producer is mid-recv
+ * on a slow HTTP connection, it gets force-deleted sooner — costing one
+ * potentially-leaked socket (closed lazily by the next esp_http_client
+ * teardown) in exchange for a snappy "PLAY replaces PLAY" UX where a new
+ * BG would start immediately after.
+ *
+ * Use this from the auto-stop path inside config_parser_stop_timeline()
+ * and any other latency-sensitive caller.
+ *
+ * Safe to call when BG is not active (returns ESP_OK immediately).
+ *
+ * @return ESP_OK on success.
+ */
+esp_err_t bg_player_stop_async(void);
 
 /**
  * @brief Query whether BG playback is currently active.

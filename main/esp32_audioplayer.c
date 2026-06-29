@@ -71,6 +71,8 @@ static void timing_precision_test_callback(uint64_t timestamp_us, void *user_dat
 #define SNAPSHOT_BTN_GPIO        GPIO_NUM_5
 #define SNAPSHOT_BTN_DEBOUNCE_US 200000ULL
 #define SNAPSHOT_BTN_LOG_SIZE    64   // ring buffer of recent press timestamps
+#define SNAPSHOT_BTN_LONG_PRESS_US  3000000ULL  // 3 s — long-press → stop everything
+#define SNAPSHOT_BTN_POLL_MS        50          // GPIO sample interval while held
 
 static TaskHandle_t s_snapshot_btn_task_handle = NULL;
 static volatile uint64_t s_snapshot_btn_last_us = 0;
@@ -130,6 +132,58 @@ static void snapshot_button_task(void *pv)
         audio_generator_log_full_state();
         led_matrix_log_full_state();
         ESP_LOGI(TAG, "=== end snapshot ===");
+
+        /* Long-press detection: poll the GPIO until the button is released.
+         * If the user holds it for >= SNAPSHOT_BTN_LONG_PRESS_US (3 s), fire
+         * the full stop sequence (same code path as the web UI's STOP
+         * button). The snapshot above always runs on the leading edge
+         * regardless — long-press just adds the stop action on top.
+         *
+         * The pin is active-low (internal pull-up, button shorts to GND),
+         * so `gpio_get_level() == 0` means still pressed. Polling at 50 ms
+         * keeps this loop near-zero CPU. We bail out as soon as the user
+         * releases the button — typical short presses cost one 50 ms wait
+         * and then return to ulTaskNotifyTake().
+         *
+         * NOTE: this is a direct mirror of stop_handler() in web_server.c.
+         * Keep the two in sync if either changes — they share the same
+         * fade-arming order to avoid the delayed-click pop documented in
+         * bug_stop_click_bg_i2s_state_2026-06-17.md. */
+        uint64_t press_start_us = esp_timer_get_time();
+        bool stop_fired = false;
+        while (gpio_get_level(SNAPSHOT_BTN_GPIO) == 0) {
+            vTaskDelay(pdMS_TO_TICKS(SNAPSHOT_BTN_POLL_MS));
+            if (!stop_fired &&
+                (esp_timer_get_time() - press_start_us) >= SNAPSHOT_BTN_LONG_PRESS_US) {
+                ESP_LOGI(TAG, "=== BUTTON: long press (>%llus) — STOP triggered ===",
+                         SNAPSHOT_BTN_LONG_PRESS_US / 1000000ULL);
+
+                /* Arm all audio fades FIRST (5 ms ramp) so audio silences
+                 * cleanly before the heavier teardown begins. */
+                for (int i = 0; i < NUM_AUDIO_CHANNELS; i++) {
+                    audio_manager_stop_generation(i);
+                }
+
+                /* Stop timeline + BG audio (the BG teardown may block up to
+                 * ~2 s waiting for the HTTP streamer task to exit). */
+                config_parser_stop_timeline();
+
+                /* Wait up to 50 ms for fades to complete before silencing LEDs. */
+                for (int waited = 0; waited < 50; waited += 2) {
+                    if (!audio_generator_any_stopping()) break;
+                    vTaskDelay(pdMS_TO_TICKS(2));
+                }
+
+                /* Stop LED flicker on all 8 channels. */
+                led_matrix_stop_flicker_masked(0xFF);
+
+                ESP_LOGI(TAG, "=== BUTTON: long-press stop complete ===");
+                stop_fired = true;
+                /* Keep polling so we leave this loop as soon as the user
+                 * releases the button — prevents accidental re-trigger from
+                 * a stray ISR notification while they keep holding it. */
+            }
+        }
     }
 }
 

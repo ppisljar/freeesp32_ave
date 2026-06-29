@@ -1007,7 +1007,10 @@ esp_err_t bg_player_start(const config_bg_entry_t *bg)
  * immediately; there is no TOCTOU risk since both paths are on the same CPU
  * and there is only one consumer task.
  */
-esp_err_t bg_player_stop(void)
+/* Shared implementation for bg_player_stop() and bg_player_stop_async() — the
+ * two differ only in how long they wait for the producer task to gracefully
+ * exit before force-deleting it (and potentially leaking its HTTP socket). */
+static esp_err_t bg_player_stop_impl(uint32_t producer_join_timeout_ms)
 {
     if (s_bg.state_mutex == NULL) {
         return ESP_OK;   /* Not initialised — nothing to stop. */
@@ -1066,16 +1069,25 @@ esp_err_t bg_player_stop(void)
     s_bg.active = false;
 
     /* Wait for producer task to exit (it sets producer_task = NULL on exit).
-     * Timeout: 200 × 10 ms = 2 s.                                            */
+     * Caller-controlled timeout — 2000 ms for the blocking variant
+     * (bg_player_stop), 200 ms for the async/fast variant
+     * (bg_player_stop_async). Poll at 10 ms steps. */
     if (s_bg.producer_task != NULL) {
-        for (int i = 0; i < 200 && s_bg.producer_task != NULL; i++) {
+        const uint32_t poll_step_ms = 10u;
+        uint32_t iters = (producer_join_timeout_ms + poll_step_ms - 1u) / poll_step_ms;
+        if (iters == 0u) iters = 1u;
+        for (uint32_t i = 0; i < iters && s_bg.producer_task != NULL; i++) {
             xSemaphoreGive(s_bg.state_mutex);
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(poll_step_ms));
             xSemaphoreTake(s_bg.state_mutex, portMAX_DELAY);
         }
         if (s_bg.producer_task != NULL) {
-            /* Force-delete if it did not exit cleanly within 2 s.             */
-            ESP_LOGW(TAG, "bg_player_stop: producer task did not exit in 2 s — force deleting");
+            /* Force-delete on timeout. This will leak the producer's HTTP
+             * client socket; esp_http_client doesn't get its cleanup path,
+             * so one socket descriptor stays open until reboot. Acceptable
+             * for the async variant (rare, only on slow networks). */
+            ESP_LOGW(TAG, "bg_player_stop: producer task did not exit in %u ms — force deleting",
+                     (unsigned)producer_join_timeout_ms);
             vTaskDelete(s_bg.producer_task);
             s_bg.producer_task = NULL;
         }
@@ -1094,6 +1106,25 @@ esp_err_t bg_player_stop(void)
 
     xSemaphoreGive(s_bg.state_mutex);
     return ESP_OK;
+}
+
+esp_err_t bg_player_stop(void)
+{
+    /* Blocking variant — give the producer task up to 2 s to exit gracefully
+     * so its HTTP client gets a clean teardown (no socket leak). Use this
+     * for explicit user-driven shutdown via the /api/stop endpoint. */
+    return bg_player_stop_impl(2000u);
+}
+
+esp_err_t bg_player_stop_async(void)
+{
+    /* Fast variant — cap the producer-join wait at 200 ms so the caller
+     * (typically play_config_handler doing an implicit auto-stop before
+     * starting a new config) returns quickly enough to feel responsive in
+     * the web UI. Force-deletes the producer on timeout, which leaks one
+     * HTTP socket descriptor; rare in practice and acceptable for the
+     * snappy "PLAY replaces PLAY" UX. */
+    return bg_player_stop_impl(200u);
 }
 
 /**

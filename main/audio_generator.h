@@ -139,6 +139,21 @@ typedef struct {
 
     audio_param_sweep_t sweeps[AUDIO_PARAM_COUNT];  // per-param sweep state
 
+    /* Periodic modulation slots (one per AUDIO_PARAM_*), driven by the
+     * mod_engine `.ledc` prefixes (^~/\_). Evaluated at the START of each
+     * fill_buffer call from task context — no IRAM constraint, full FP
+     * math available. When `active == true`, the wave's current value
+     * overrides current_X for that parameter, taking priority over any
+     * active sweep on the same parameter. */
+    struct {
+        bool     active;
+        uint8_t  wave;          // mod_wave_t value (0=tri, 1=sine, 2=saw_up, 3=saw_down, 4=square)
+        float    start;         // wave's start value (native units of the param)
+        float    end;           // wave's end value
+        uint32_t period_us;     // full cycle time in microseconds
+        uint64_t start_time_us; // when modulation began
+    } mods[AUDIO_PARAM_COUNT];
+
     // Lock-free pending-params slot (Step 5.2).
     // Writer: copy new_params → pending_params under mutex (serialise concurrent
     //         timeline writers), then atomic_fetch_add(&pending_version, 1).
@@ -287,6 +302,36 @@ esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *n
 esp_err_t audio_generator_set_param(int channel, audio_param_t param, float value);
 esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, float value);
 
+/* _locked one-field readers — caller must hold audio_gen_mutex via
+ * audio_generator_lock(). Used by patch dispatch (config_parser.c) to read
+ * the current value of each field so animated patches can sweep FROM the
+ * engine's actual current state, without the UI needing to know it.
+ *
+ * `value` units match the internal representation:
+ *   FREQUENCY  → Hz
+ *   AMPLITUDE  → 0.0..1.0 (NOT UI % — multiply by 100 for UI)
+ *   PAN        → -1.0..+1.0 (NOT UI scale — multiply by 100 for UI)
+ *   MOD_FREQ   → Hz */
+esp_err_t audio_generator_get_param_locked(int channel, audio_param_t param, float *out);
+
+/* Arm/clear a periodic modulation on one parameter of one channel. The
+ * modulator runs inside fill_buffer at each buffer entry (no polling
+ * task). Wave codes: 0=triangle, 1=sine, 2=saw-up, 3=saw-down, 4=square.
+ *
+ * The plain variants take audio_gen_mutex internally. The _locked variants
+ * assume the caller already holds it — use these from the timeline
+ * dispatch path in config_parser, which calls audio_generator_lock()
+ * across the whole batch. Calling the plain variant while the mutex is
+ * already held by the same task deadlocks (mutex is non-recursive). */
+esp_err_t audio_generator_set_mod(int channel, audio_param_t param,
+                                  uint8_t wave, float start, float end,
+                                  uint32_t period_ms);
+esp_err_t audio_generator_clear_mod(int channel, audio_param_t param);
+esp_err_t audio_generator_set_mod_locked(int channel, audio_param_t param,
+                                          uint8_t wave, float start, float end,
+                                          uint32_t period_ms);
+esp_err_t audio_generator_clear_mod_locked(int channel, audio_param_t param);
+
 /**
  * @brief Read the current interpolated right-channel frequency for a channel.
  *
@@ -312,6 +357,28 @@ int audio_generator_log_sweep_progress(void);
  *  the system actually doing right now?"), e.g. on a debug button press.
  *  Same snapshot-then-release pattern as audio_generator_log_sweep_progress. */
 void audio_generator_log_full_state(void);
+
+/** UI-facing per-channel snapshot. One struct per audio channel, written by
+ *  audio_generator_get_snapshot() under audio_gen_mutex (brief). Designed for
+ *  the /api/state web endpoint to serialise into JSON. */
+typedef struct {
+    bool     active;            // channel currently generating audio
+    float    freq;              // current (interpolated) frequency in Hz
+    float    freq_r;            // right-channel freq for binaural; 0 if mono
+    float    pan;               // -100..+100 (UI scale)
+    float    volume;            // 0..100 (% — UI scale)
+    float    modulation;        // beat/modulation freq in Hz
+    uint8_t  wave_type;         // 0=sine, 1=square, 2=triangle, 3=sawtooth, 4=white, 5=pink, 6=brown
+    bool     mod_freq_active;
+    bool     mod_pan_active;
+    bool     mod_vol_active;
+    bool     mod_mod_active;
+} audio_gen_channel_snapshot_t;
+
+/** Fill `out[0..min(count, NUM_AUDIO_CHANNELS)-1]` with current per-channel
+ *  state. Returns the number of channels actually written. Takes
+ *  audio_gen_mutex briefly. Safe to call from any task; not from ISR. */
+int audio_generator_get_snapshot(audio_gen_channel_snapshot_t *out, int count);
 
 /** Task-context only — DO NOT call from ISR. Pair every lock() with unlock().
  *  Used by the timeline executor to commit same-timestamp batches atomically:

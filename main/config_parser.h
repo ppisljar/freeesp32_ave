@@ -185,6 +185,33 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 esp_err_t config_parser_stop_timeline(void);
 
 /**
+ * @brief Apply a patch — additive update that does NOT stop the running
+ *        timeline or restart channels not mentioned in the patch.
+ *
+ * Use for live "direct control" UX where the user wants to tweak one or two
+ * channels (e.g. adjust audio channel 3's frequency) without disturbing
+ * everything else. Channels not mentioned in the patch keep playing exactly
+ * as they were.
+ *
+ * The patch content is parsed using the same .ledc grammar as the main
+ * configuration. Each entry is dispatched at time = its time_ms field
+ * RELATIVE TO NOW (not to the main timeline's t=0). Entries at t=0 fire
+ * immediately; entries at t>0 are scheduled via esp_timer.
+ *
+ * For animated changes, send two lines: line 1 at t=0 sets the start value
+ * (anchor), line 2 at t=Nms with the `>` interpolation prefix triggers the
+ * sweep from the channel's current value to the new value over N ms.
+ *
+ * BG audio (`BG ...` lines) is currently NOT supported in patches — silently
+ * ignored. Use /api/play-config for BG changes.
+ *
+ * @param content       .ledc-format text (1+ lines)
+ * @param content_length Length of content in bytes
+ * @return ESP_OK if parsed and dispatched successfully, error code otherwise
+ */
+esp_err_t config_parser_apply_patch(const char *content, size_t content_length);
+
+/**
  * @brief Get current timeline position
  *
  * @return uint32_t Current time in milliseconds

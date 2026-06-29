@@ -4,12 +4,15 @@
 #include "audio_manager.h"
 #include "audio_generator.h"     // for NUM_AUDIO_CHANNELS
 #include "led_matrix_example.h"
+#include "bg_player.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_timer.h"
+#include "esp_spiffs.h"          // web UI assets served from SPIFFS
 #include <string.h>
+#include <strings.h>           // strcasecmp
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -22,474 +25,58 @@ static const char* TAG = "web_server";
 // Global web server state
 static web_server_state_t g_server_state = {0};
 
+// Set true once the "storage" SPIFFS partition (web UI assets) is mounted.
+static bool s_spiffs_ok = false;
+#define WEB_SPIFFS_BASE "/spiffs"
+
 // HTML pages
-static const char* index_html =
-"<!DOCTYPE html>\n"
-"<html>\n"
-"<head>\n"
-"    <title>ESP32 Audio Player</title>\n"
-"    <meta charset=\"UTF-8\">\n"
-"    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-"    <style>\n"
-"        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }\n"
-"        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }\n"
-"        h1 { color: #333; text-align: center; }\n"
-"        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }\n"
-"        .section h2 { margin-top: 0; color: #555; }\n"
-"        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 5px; }\n"
-"        button:hover { background: #0056b3; }\n"
-"        .stop-btn { background: #dc3545; }\n"
-"        .stop-btn:hover { background: #c82333; }\n"
-"        input[type=\"file\"] { margin: 10px 0; }\n"
-"        .status { padding: 10px; margin: 10px 0; border-radius: 4px; }\n"
-"        .status.success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }\n"
-"        .status.error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }\n"
-"        .status.info { background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; }\n"
-"        textarea { width: 100%; height: 200px; font-family: monospace; }\n"
-"        .controls { display: flex; flex-wrap: wrap; gap: 10px; }\n"
-"    </style>\n"
-"</head>\n"
-"<body>\n"
-"    <div class=\"container\">\n"
-"        <h1>ESP32 Audio Player Control Panel</h1>\n"
-"\n"
-"        <div id=\"status\" class=\"status info\" style=\"display:none\"></div>\n"
-"\n"
-"        <div class=\"section\">\n"
-"            <h2>Config File Upload</h2>\n"
-"            <form id=\"uploadForm\" enctype=\"multipart/form-data\">\n"
-"                <input type=\"file\" id=\"configFile\" name=\"config\" accept=\".led,.txt\" required>\n"
-"                <br>\n"
-"                <button type=\"submit\">Upload & Execute Config</button>\n"
-"            </form>\n"
-"        </div>\n"
-"\n"
-"        <div class=\"section\">\n"
-"            <h2>Test Config</h2>\n"
-"            <div class=\"controls\">\n"
-"                <button onclick=\"loadExample()\">Load Fresh Example</button>\n"
-"                <button onclick=\"playConfig()\" style=\"background: #28a745;\">▶ PLAY Config</button>\n"
-"                <button onclick=\"stopConfig()\" style=\"background: #dc3545;\">■ STOP</button>\n"
-"                <button onclick=\"clearConfig()\">Clear</button>\n"
-"            </div>\n"
-"            <div style=\"margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;\">\n"
-"                <strong style=\"font-size:13px;\">Generator:</strong>\n"
-"                <select id=\"ledcDropdown\" style=\"min-width:220px;padding:4px;\"></select>\n"
-"                <button onclick=\"refreshLedcDropdown()\" title=\"Reload list from generator\">⟳</button>\n"
-"                <button onclick=\"loadFromGenerator()\">Load</button>\n"
-"                <button onclick=\"saveToGenerator()\">Save</button>\n"
-"                <button onclick=\"saveAsToGenerator()\">Save As…</button>\n"
-"                <span id=\"loadedFilename\" style=\"color:#666;font-style:italic;font-size:13px;margin-left:8px;\"></span>\n"
-"            </div>\n"
-"            <textarea id=\"exampleConfig\" placeholder=\"Enter .led config here...\"></textarea>\n"
-"            <div id=\"reportBox\" style=\"margin-top:15px;display:none;background:#f0f4f8;border:1px solid #c3d0e0;border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;\"></div>\n"
-"        </div>\n"
-"    </div>\n"
-"\n"
-"    <script>\n"
-"        // Generator base URL injected at flash time from CONFIG_GENERATOR_SERVER_URL.\n"
-"        // Override via `idf.py menuconfig` → ESP32 Audio Player Configuration.\n"
-"        const GENERATOR_URL = \"" CONFIG_GENERATOR_SERVER_URL "\";\n"
-"        let currentLedcName = null;\n"
-"\n"
-"        function refreshLedcDropdown() {\n"
-"            return fetch(GENERATOR_URL + '/ledc')\n"
-"                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })\n"
-"                .then(data => {\n"
-"                    const dd = document.getElementById('ledcDropdown');\n"
-"                    dd.innerHTML = '';\n"
-"                    const files = data.files || [];\n"
-"                    if (files.length === 0) {\n"
-"                        const opt = document.createElement('option');\n"
-"                        opt.textContent = '(no configs on generator)';\n"
-"                        opt.disabled = true;\n"
-"                        dd.appendChild(opt);\n"
-"                        return;\n"
-"                    }\n"
-"                    files.forEach(f => {\n"
-"                        const opt = document.createElement('option');\n"
-"                        opt.value = f; opt.textContent = f;\n"
-"                        if (f === currentLedcName) opt.selected = true;\n"
-"                        dd.appendChild(opt);\n"
-"                    });\n"
-"                })\n"
-"                .catch(err => {\n"
-"                    const dd = document.getElementById('ledcDropdown');\n"
-"                    dd.innerHTML = '';\n"
-"                    const opt = document.createElement('option');\n"
-"                    opt.textContent = '(generator unreachable @ ' + GENERATOR_URL + ')';\n"
-"                    opt.disabled = true;\n"
-"                    dd.appendChild(opt);\n"
-"                });\n"
-"        }\n"
-"\n"
-"        function loadFromGenerator() {\n"
-"            const name = document.getElementById('ledcDropdown').value;\n"
-"            if (!name) { showMessage('Pick a config first', 'error'); return; }\n"
-"            fetch(GENERATOR_URL + '/ledc/' + encodeURIComponent(name))\n"
-"                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })\n"
-"                .then(text => {\n"
-"                    document.getElementById('exampleConfig').value = text;\n"
-"                    currentLedcName = name;\n"
-"                    document.getElementById('loadedFilename').textContent = '(loaded: ' + name + ')';\n"
-"                    showMessage('Loaded ' + name + ' from generator', 'success');\n"
-"                })\n"
-"                .catch(err => showMessage('Load failed: ' + err, 'error'));\n"
-"        }\n"
-"\n"
-"        function putLedc(name, body) {\n"
-"            return fetch(GENERATOR_URL + '/ledc/' + encodeURIComponent(name), {\n"
-"                method: 'PUT',\n"
-"                headers: { 'Content-Type': 'text/plain' },\n"
-"                body: body,\n"
-"            })\n"
-"            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })\n"
-"            .then(result => {\n"
-"                const verb = result.overwritten ? 'Overwrote' : 'Created';\n"
-"                showMessage(verb + ' ' + result.saved + ' on generator (' + result.bytes + ' bytes)', 'success');\n"
-"                currentLedcName = result.saved;\n"
-"                document.getElementById('loadedFilename').textContent = '(loaded: ' + result.saved + ')';\n"
-"                return refreshLedcDropdown();\n"
-"            })\n"
-"            .catch(err => showMessage('Save failed: ' + err, 'error'));\n"
-"        }\n"
-"\n"
-"        function saveToGenerator() {\n"
-"            const body = document.getElementById('exampleConfig').value;\n"
-"            if (!body.trim()) { showMessage('Config is empty', 'error'); return; }\n"
-"            if (!currentLedcName) {\n"
-"                // No file loaded — fall through to Save As so user names it.\n"
-"                return saveAsToGenerator();\n"
-"            }\n"
-"            return putLedc(currentLedcName, body);\n"
-"        }\n"
-"\n"
-"        function saveAsToGenerator() {\n"
-"            const body = document.getElementById('exampleConfig').value;\n"
-"            if (!body.trim()) { showMessage('Config is empty', 'error'); return; }\n"
-"            const suggested = currentLedcName || 'untitled.ledc';\n"
-"            let name = prompt('Save as (must end in .ledc):', suggested);\n"
-"            if (!name) return;\n"
-"            name = name.trim();\n"
-"            if (!/^[A-Za-z0-9._-]+\\.ledc$/.test(name)) {\n"
-"                showMessage('Invalid filename. Allowed: [A-Za-z0-9._-]+.ledc', 'error');\n"
-"                return;\n"
-"            }\n"
-"            // If filename exists in the dropdown AND it's not the currently-loaded one,\n"
-"            // confirm overwrite. (Saving back to the current file is the normal Save\n"
-"            // path; explicit Save-As to a different existing name should warn.)\n"
-"            const existing = Array.from(document.getElementById('ledcDropdown').options)\n"
-"                                   .map(o => o.value).filter(Boolean);\n"
-"            if (existing.includes(name) && name !== currentLedcName) {\n"
-"                if (!confirm('\"' + name + '\" exists on the generator. Overwrite?')) return;\n"
-"            }\n"
-"            return putLedc(name, body);\n"
-"        }\n"
-"\n"
-"        function loadExample() {\n"
-"            fetch('/api/example')\n"
-"                .then(response => response.text())\n"
-"                .then(data => {\n"
-"                    document.getElementById('exampleConfig').value = data;\n"
-"                })\n"
-"                .catch(error => showMessage('Error loading example: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function stopConfig() {\n"
-"            fetch('/api/stop', { method: 'POST' })\n"
-"                .then(response => response.text())\n"
-"                .then(result => {\n"
-"                    showMessage(result + ' — report in 5 s', 'success');\n"
-"                    // Replace any pending end-of-session timer with a short\n"
-"                    // post-stop one so the report reflects the truncated run.\n"
-"                    if (reportTimer) { clearTimeout(reportTimer); reportTimer = null; }\n"
-"                    document.getElementById('reportBox').style.display = 'none';\n"
-"                    reportTimer = setTimeout(fetchReport, 5000);\n"
-"                })\n"
-"                .catch(error => showMessage('Error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        let reportTimer = null;\n"
-"\n"
-"        // Parse the .led config text and return the highest entry timestamp in ms.\n"
-"        // Format: LED entries start with a number (time), audio entries start with 'A'.\n"
-"        // Lines starting with '#' are comments and skipped. Returns 0 if none.\n"
-"        function parseConfigDurationMs(text) {\n"
-"            let maxMs = 0;\n"
-"            for (const raw of text.split('\\n')) {\n"
-"                const line = raw.replace(/#.*$/, '').trim();\n"
-"                if (!line) continue;\n"
-"                const tok = line.split(/\\s+/);\n"
-"                let t = NaN;\n"
-"                if (tok[0] === 'A' && tok.length > 1) t = parseInt(tok[1], 10);\n"
-"                else if (tok[0] === 'BG') continue; // BG has no time field\n"
-"                else t = parseInt(tok[0], 10);\n"
-"                if (!isNaN(t) && t > maxMs) maxMs = t;\n"
-"            }\n"
-"            return maxMs;\n"
-"        }\n"
-"\n"
-"        // ---- Config parsing + per-press state resolution -----------------\n"
-"        // Mirrors the device-side interpolation: for each parameter on each\n"
-"        // entry, find the active entry at time T and (if the next entry has\n"
-"        // a '>' or '*' marker on that parameter) interpolate live value.\n"
-"        function parseValueInterp(s) {\n"
-"            let interp = 'none';\n"
-"            if (s[0] === '>') { interp = 'linear'; s = s.slice(1); }\n"
-"            else if (s[0] === '*') { interp = 'quadratic'; s = s.slice(1); }\n"
-"            return { v: parseFloat(s), interp: interp };\n"
-"        }\n"
-"        function lerp(a, b, t) { return a + (b - a) * t; }\n"
-"        function quad(a, b, t) {\n"
-"            const tt = t < 0.5 ? 2*t*t : 1 - 2*(1-t)*(1-t);\n"
-"            return a + (b - a) * tt;\n"
-"        }\n"
-"        function interpField(active, next, tMs, fname) {\n"
-"            if (!active[fname]) return null;\n"
-"            if (next && next[fname] && next[fname].interp !== 'none') {\n"
-"                const win = next.time - active.time;\n"
-"                if (win <= 0) return active[fname].v;\n"
-"                const p = Math.max(0, Math.min(1, (tMs - active.time) / win));\n"
-"                const fn = next[fname].interp === 'linear' ? lerp : quad;\n"
-"                return fn(active[fname].v, next[fname].v, p);\n"
-"            }\n"
-"            return active[fname].v;\n"
-"        }\n"
-"        function parseConfigStructured(text) {\n"
-"            const led = [], audio = [];\n"
-"            for (const raw of text.split('\\n')) {\n"
-"                const line = raw.replace(/#.*$/, '').trim();\n"
-"                if (!line) continue;\n"
-"                const t = line.split(/\\s+/);\n"
-"                if (t[0] === 'A') {\n"
-"                    if (t.length < 7) continue;\n"
-"                    audio.push({\n"
-"                        time: parseInt(t[1], 10),\n"
-"                        freq: parseValueInterp(t[2]),\n"
-"                        pan:  parseValueInterp(t[3]),\n"
-"                        vol:  parseValueInterp(t[4]),\n"
-"                        mod:  parseValueInterp(t[5]),\n"
-"                        channel: parseInt(t[6], 10),\n"
-"                    });\n"
-"                } else if (t[0] === 'BG') {\n"
-"                    continue;\n"
-"                } else if (t.length === 8) {\n"
-"                    // 8-field LED (canonical): time freq duty bright R G B mask\n"
-"                    led.push({\n"
-"                        time: parseInt(t[0], 10),\n"
-"                        freq: parseValueInterp(t[1]),\n"
-"                        duty: parseValueInterp(t[2]),\n"
-"                        brightness: parseValueInterp(t[3]),\n"
-"                        r:    parseValueInterp(t[4]),\n"
-"                        g:    parseValueInterp(t[5]),\n"
-"                        b:    parseValueInterp(t[6]),\n"
-"                        mask: parseInt(t[7], 10),\n"
-"                    });\n"
-"                } else if (t.length === 5) {\n"
-"                    // 5-field legacy: time freq duty brightness channel\n"
-"                    const ch = parseInt(t[4], 10);\n"
-"                    led.push({\n"
-"                        time: parseInt(t[0], 10),\n"
-"                        mask: ch === 0 ? 0xFF : (1 << (ch - 1)),\n"
-"                        freq: parseValueInterp(t[1]),\n"
-"                        duty: parseValueInterp(t[2]),\n"
-"                        brightness: parseValueInterp(t[3]),\n"
-"                        r: { v: 255, interp: 'none' },\n"
-"                        g: { v: 255, interp: 'none' },\n"
-"                        b: { v: 255, interp: 'none' },\n"
-"                    });\n"
-"                }\n"
-"            }\n"
-"            return { led: led, audio: audio };\n"
-"        }\n"
-"        function audioStateAtTime(audioEntries, tMs, channel) {\n"
-"            const seq = audioEntries.filter(e => e.channel === channel)\n"
-"                                    .sort((a,b) => a.time - b.time);\n"
-"            let active = null, next = null;\n"
-"            for (let i = 0; i < seq.length; i++) {\n"
-"                if (seq[i].time <= tMs) { active = seq[i]; next = seq[i+1] || null; }\n"
-"                else break;\n"
-"            }\n"
-"            if (!active) return null;\n"
-"            return {\n"
-"                freq: interpField(active, next, tMs, 'freq'),\n"
-"                pan:  interpField(active, next, tMs, 'pan'),\n"
-"                vol:  interpField(active, next, tMs, 'vol'),\n"
-"                mod:  interpField(active, next, tMs, 'mod'),\n"
-"            };\n"
-"        }\n"
-"        function ledStateAtTime(ledEntries, tMs, ledCh) {\n"
-"            const bit = 1 << ledCh;\n"
-"            const seq = ledEntries.filter(e => e.mask & bit)\n"
-"                                  .sort((a,b) => a.time - b.time);\n"
-"            let active = null, next = null;\n"
-"            for (let i = 0; i < seq.length; i++) {\n"
-"                if (seq[i].time <= tMs) { active = seq[i]; next = seq[i+1] || null; }\n"
-"                else break;\n"
-"            }\n"
-"            if (!active) return null;\n"
-"            return {\n"
-"                freq: interpField(active, next, tMs, 'freq'),\n"
-"                duty: interpField(active, next, tMs, 'duty'),\n"
-"                bri:  interpField(active, next, tMs, 'brightness'),\n"
-"                r:    interpField(active, next, tMs, 'r'),\n"
-"                g:    interpField(active, next, tMs, 'g'),\n"
-"                b:    interpField(active, next, tMs, 'b'),\n"
-"            };\n"
-"        }\n"
-"        function formatPressSnapshot(parsed, tMs) {\n"
-"            const lines = [];\n"
-"            for (let ch = 1; ch <= 16; ch++) {\n"
-"                const s = audioStateAtTime(parsed.audio, tMs, ch);\n"
-"                if (!s) continue;\n"
-"                lines.push('  AUDIO[ch=' + ch + '] freq=' + s.freq.toFixed(2) +\n"
-"                           'Hz pan=' + s.pan.toFixed(0) +\n"
-"                           ' vol=' + s.vol.toFixed(0) +\n"
-"                           ' mod=' + s.mod.toFixed(1));\n"
-"            }\n"
-"            for (let ch = 0; ch < 8; ch++) {\n"
-"                const s = ledStateAtTime(parsed.led, tMs, ch);\n"
-"                if (!s) continue;\n"
-"                lines.push('  LED[ch=' + ch + '] freq=' + s.freq.toFixed(2) +\n"
-"                           'Hz duty=' + s.duty.toFixed(0) +\n"
-"                           '% bri=' + s.bri.toFixed(0) +\n"
-"                           '% RGB=(' + s.r.toFixed(0) + ',' + s.g.toFixed(0) + ',' + s.b.toFixed(0) + ')');\n"
-"            }\n"
-"            return lines.length ? lines.join('\\n') : '  (no active channels at this time)';\n"
-"        }\n"
-"\n"
-"        function fetchReport() {\n"
-"            fetch('/api/report')\n"
-"                .then(r => r.json())\n"
-"                .then(rep => {\n"
-"                    const sessSec = rep.session_origin_us > 0\n"
-"                        ? ((rep.now_us - rep.session_origin_us) / 1e6).toFixed(1)\n"
-"                        : '—';\n"
-"                    const presses = rep.button_presses_ms || [];\n"
-"                    const cfg = rep.config || '';\n"
-"                    const parsed = cfg ? parseConfigStructured(cfg) : null;\n"
-"\n"
-"                    let out = '=== SESSION REPORT ===\\n';\n"
-"                    out += 'Session length so far: ' + sessSec + ' s\\n\\n';\n"
-"                    out += '--- Button press snapshots ---\\n';\n"
-"                    if (!presses.length) {\n"
-"                        out += '(no button presses recorded)\\n';\n"
-"                    } else if (!parsed) {\n"
-"                        out += '(' + presses.length + ' press(es), but no config to resolve params): ' +\n"
-"                               presses.join(', ') + '\\n';\n"
-"                    } else {\n"
-"                        for (let i = 0; i < presses.length; i++) {\n"
-"                            out += '\\n@ +' + presses[i] + 'ms (press ' + (i+1) + '):\\n';\n"
-"                            out += formatPressSnapshot(parsed, presses[i]) + '\\n';\n"
-"                        }\n"
-"                    }\n"
-"                    out += '\\n--- Last loaded config ---\\n';\n"
-"                    out += cfg || '(no config in memory)';\n"
-"                    const box = document.getElementById('reportBox');\n"
-"                    box.textContent = out;\n"
-"                    box.style.display = 'block';\n"
-"\n"
-"                    // Best-effort upload to the generator. Failure is\n"
-"                    // non-fatal — the local display always succeeds first.\n"
-"                    const upload = {\n"
-"                        config_name: currentLedcName,\n"
-"                        session_origin_us: rep.session_origin_us,\n"
-"                        session_length_s: rep.session_origin_us > 0\n"
-"                            ? (rep.now_us - rep.session_origin_us) / 1e6 : null,\n"
-"                        button_presses_ms: presses,\n"
-"                        config: cfg,\n"
-"                    };\n"
-"                    fetch(GENERATOR_URL + '/reports', {\n"
-"                        method: 'POST',\n"
-"                        headers: { 'Content-Type': 'application/json' },\n"
-"                        body: JSON.stringify(upload),\n"
-"                    })\n"
-"                    .then(r => r.ok ? r.json() : null)\n"
-"                    .then(result => {\n"
-"                        if (result && result.saved) {\n"
-"                            box.textContent += '\\n\\n[uploaded to generator as ' + result.saved + ']';\n"
-"                        }\n"
-"                    })\n"
-"                    .catch(err => {\n"
-"                        box.textContent += '\\n\\n[generator upload failed: ' + err + ']';\n"
-"                    });\n"
-"                })\n"
-"                .catch(err => showMessage('Report fetch failed: ' + err, 'error'));\n"
-"        }\n"
-"\n"
-"        function playConfig() {\n"
-"            const config = document.getElementById('exampleConfig').value.trim();\n"
-"            if (!config) {\n"
-"                showMessage('Please enter a config to play', 'error');\n"
-"                return;\n"
-"            }\n"
-"\n"
-"            fetch('/api/play-config', {\n"
-"                method: 'POST',\n"
-"                headers: {\n"
-"                    'Content-Type': 'text/plain'\n"
-"                },\n"
-"                body: config\n"
-"            })\n"
-"            .then(response => response.text())\n"
-"            .then(result => {\n"
-"                showMessage(result, 'success');\n"
-"                // Schedule auto-fetch of /api/report 5 s after the parsed\n"
-"                // session end. Cancels any previously-armed timer.\n"
-"                if (reportTimer) { clearTimeout(reportTimer); reportTimer = null; }\n"
-"                document.getElementById('reportBox').style.display = 'none';\n"
-"                const durMs = parseConfigDurationMs(config);\n"
-"                const waitMs = durMs + 5000;\n"
-"                showMessage('Playing — report due in ' + Math.round(waitMs/1000) + ' s', 'info');\n"
-"                reportTimer = setTimeout(fetchReport, waitMs);\n"
-"            })\n"
-"            .catch(error => showMessage('Play error: ' + error, 'error'));\n"
-"        }\n"
-"\n"
-"        function clearConfig() {\n"
-"            document.getElementById('exampleConfig').value = '';\n"
-"            showMessage('Config cleared', 'info');\n"
-"        }\n"
-"\n"
-"        function showMessage(message, type) {\n"
-"            const statusDiv = document.getElementById('status');\n"
-"            statusDiv.textContent = message;\n"
-"            statusDiv.className = 'status ' + type;\n"
-"            statusDiv.style.display = 'block';\n"
-"        }\n"
-"\n"
-"        document.getElementById('uploadForm').addEventListener('submit', function(e) {\n"
-"            e.preventDefault();\n"
-"            const formData = new FormData();\n"
-"            const fileInput = document.getElementById('configFile');\n"
-"            formData.append('config', fileInput.files[0]);\n"
-"\n"
-"            fetch('/api/upload', {\n"
-"                method: 'POST',\n"
-"                body: formData\n"
-"            })\n"
-"            .then(response => response.text())\n"
-"            .then(result => showMessage(result, 'success'))\n"
-"            .catch(error => showMessage('Upload error: ' + error, 'error'));\n"
-"        });\n"
-"\n"
-"        loadExample(); // Load example config on page load\n"
-"        refreshLedcDropdown(); // Fetch the generator's config list on page load\n"
-"    </script>\n"
-"</body>\n"
-"</html>\n";
+// Minimal fallback page, served only if the SPIFFS web image failed to
+// mount. The real UI is built from ../web (esbuild → gzipped assets), flashed
+// to the "storage" SPIFFS partition and served by static_file_handler below.
+static const char* fallback_html =
+    "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>ESP32 Audio Player</title></head>"
+    "<body style=\"font-family:Arial;margin:40px\"><h1>Web UI not available</h1>"
+    "<p>The SPIFFS <code>storage</code> partition could not be mounted, so the UI "
+    "asset <code>/spiffs/index.html</code> is unavailable.</p>"
+    "<p>Re-flash including the SPIFFS image with <code>idf.py flash</code> "
+    "(the image is built from the <code>web/</code> directory).</p>"
+    "<p>The JSON control API under <code>/api/*</code> is still functional.</p>"
+    "</body></html>";
 
 // HTTP Handler functions
-static esp_err_t index_handler(httpd_req_t *req);
-static esp_err_t upload_handler(httpd_req_t *req);
+static esp_err_t static_file_handler(httpd_req_t *req);
+static esp_err_t appconfig_handler(httpd_req_t *req);
 static esp_err_t stop_handler(httpd_req_t *req);
 static esp_err_t example_handler(httpd_req_t *req);
 static esp_err_t play_config_handler(httpd_req_t *req);
+static esp_err_t patch_config_handler(httpd_req_t *req);
+static esp_err_t state_handler(httpd_req_t *req);
 static esp_err_t report_handler(httpd_req_t *req);
 
 esp_err_t web_server_init(void)
 {
     ESP_LOGI(TAG, "Initializing web server");
+
+    // Mount the SPIFFS "storage" partition that holds the web UI assets.
+    // Non-fatal: if it fails, static_file_handler serves a fallback page and
+    // the /api/* control endpoints still work.
+    esp_vfs_spiffs_conf_t spiffs_conf = {
+        .base_path = WEB_SPIFFS_BASE,
+        .partition_label = "storage",
+        .max_files = 5,
+        .format_if_mount_failed = false,
+    };
+    esp_err_t sret = esp_vfs_spiffs_register(&spiffs_conf);
+    if (sret == ESP_OK) {
+        size_t total = 0, used = 0;
+        if (esp_spiffs_info("storage", &total, &used) == ESP_OK) {
+            ESP_LOGI(TAG, "SPIFFS mounted: %u/%u bytes used", (unsigned)used, (unsigned)total);
+        }
+        s_spiffs_ok = true;
+    } else {
+        ESP_LOGE(TAG, "SPIFFS mount failed (%s) — serving fallback page", esp_err_to_name(sret));
+        s_spiffs_ok = false;
+    }
 
     // Allocate upload buffer
     g_server_state.upload_buffer = malloc(WEB_SERVER_MAX_UPLOAD_SIZE);
@@ -502,6 +89,9 @@ esp_err_t web_server_init(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
     config.max_uri_handlers = 16;
+    // Enable wildcard matching so "/*" can serve arbitrary static assets.
+    // Exact /api/... handlers are registered first and keep priority.
+    config.uri_match_fn = httpd_uri_match_wildcard;
 
     // Start HTTP server
     esp_err_t ret = httpd_start(&g_server_state.server, &config);
@@ -511,23 +101,9 @@ esp_err_t web_server_init(void)
         return ret;
     }
 
-    // Register URI handlers
-    httpd_uri_t index_uri = {
-        .uri = "/",
-        .method = HTTP_GET,
-        .handler = index_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &index_uri);
-
-    httpd_uri_t upload_uri = {
-        .uri = "/api/upload",
-        .method = HTTP_POST,
-        .handler = upload_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(g_server_state.server, &upload_uri);
-
+    // Register URI handlers. Exact /api/... routes are registered first; the
+    // wildcard static-asset handler ("/*") is registered LAST (below) so the
+    // server matches API routes before falling through to file serving.
     httpd_uri_t stop_uri = {
         .uri = "/api/stop",
         .method = HTTP_POST,
@@ -552,6 +128,22 @@ esp_err_t web_server_init(void)
     };
     httpd_register_uri_handler(g_server_state.server, &play_config_uri);
 
+    httpd_uri_t patch_config_uri = {
+        .uri = "/api/patch-config",
+        .method = HTTP_POST,
+        .handler = patch_config_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &patch_config_uri);
+
+    httpd_uri_t state_uri = {
+        .uri = "/api/state",
+        .method = HTTP_GET,
+        .handler = state_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &state_uri);
+
     httpd_uri_t report_uri = {
         .uri = "/api/report",
         .method = HTTP_GET,
@@ -559,6 +151,24 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &report_uri);
+
+    httpd_uri_t appconfig_uri = {
+        .uri = "/api/appconfig",
+        .method = HTTP_GET,
+        .handler = appconfig_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &appconfig_uri);
+
+    // Wildcard static-asset handler — MUST be registered last so the exact
+    // /api/... routes above take precedence over file serving.
+    httpd_uri_t static_uri = {
+        .uri = "/*",
+        .method = HTTP_GET,
+        .handler = static_file_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &static_uri);
 
     ESP_LOGI(TAG, "Web server started on port %d", WEB_SERVER_PORT);
     return ESP_OK;
@@ -624,70 +234,116 @@ esp_err_t web_server_set_wifi_status(bool connected)
 
 // HTTP Handler implementations
 
-static esp_err_t index_handler(httpd_req_t *req)
+// Map a file's extension to a Content-Type. A trailing ".gz" is ignored so
+// that "app.js.gz" is typed as application/javascript (Content-Encoding is set
+// separately). Defaults to text/plain.
+static const char *content_type_for(const char *path)
 {
-    ESP_LOGI(TAG, "Serving index page");
+    // Work on a copy with any trailing ".gz" stripped.
+    char name[64];
+    size_t len = strlen(path);
+    if (len > 3 && !strcasecmp(path + len - 3, ".gz")) len -= 3;
+    if (len >= sizeof(name)) len = sizeof(name) - 1;
+    memcpy(name, path, len);
+    name[len] = '\0';
 
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, index_html, HTTPD_RESP_USE_STRLEN);
+    const char *dot = strrchr(name, '.');
+    if (!dot) return "text/plain";
+    if (!strcasecmp(dot, ".html") || !strcasecmp(dot, ".htm")) return "text/html";
+    if (!strcasecmp(dot, ".js"))    return "application/javascript";
+    if (!strcasecmp(dot, ".css"))   return "text/css";
+    if (!strcasecmp(dot, ".json"))  return "application/json";
+    if (!strcasecmp(dot, ".png"))   return "image/png";
+    if (!strcasecmp(dot, ".jpg") || !strcasecmp(dot, ".jpeg")) return "image/jpeg";
+    if (!strcasecmp(dot, ".svg"))   return "image/svg+xml";
+    if (!strcasecmp(dot, ".ico"))   return "image/x-icon";
+    if (!strcasecmp(dot, ".woff2")) return "font/woff2";
+    return "text/plain";
+}
+
+// Generic static-asset handler: serves files from the SPIFFS "storage"
+// partition mounted at /spiffs. "/" maps to /spiffs/index.html. Registered as
+// the wildcard "/*" route LAST, so the exact /api/... handlers (matched first)
+// keep priority. If SPIFFS isn't mounted, serves the fallback page.
+//
+// Assets are stored gzipped (e.g. index.html.gz). The handler tries the exact
+// path first, then the ".gz" variant; when it serves a ".gz" file it sets
+// Content-Encoding: gzip and types it from the pre-".gz" extension. This lets
+// the static sources reference plain names (/app.js) while only .gz ships.
+static esp_err_t static_file_handler(httpd_req_t *req)
+{
+    if (!s_spiffs_ok) {
+        httpd_resp_set_type(req, "text/html");
+        httpd_resp_send(req, fallback_html, HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    // Copy the path, stopping at any query string.
+    char uri[256];
+    size_t ulen = 0;
+    for (const char *p = req->uri; *p && *p != '?' && ulen < sizeof(uri) - 1; ++p)
+        uri[ulen++] = *p;
+    uri[ulen] = '\0';
+
+    // Reject path traversal outright.
+    if (strstr(uri, "..")) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+        return ESP_FAIL;
+    }
+
+    const char *rel = (strcmp(uri, "/") == 0) ? "/index.html" : uri;
+    char path[320];
+    int wrote = snprintf(path, sizeof(path), WEB_SPIFFS_BASE "%s", rel);
+    if (wrote <= 0 || wrote >= (int)sizeof(path)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+        return ESP_FAIL;
+    }
+
+    // Try the exact path, then the gzipped variant.
+    bool is_gz = false;
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        char gzpath[324];
+        snprintf(gzpath, sizeof(gzpath), "%s.gz", path);
+        f = fopen(gzpath, "r");
+        if (f) is_gz = true;
+    } else {
+        // Direct hit; flag gzip if the stored file is itself compressed.
+        size_t plen = strlen(path);
+        if (plen > 3 && !strcasecmp(path + plen - 3, ".gz")) is_gz = true;
+    }
+    if (!f) {
+        ESP_LOGW(TAG, "static asset not found: %s", path);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, content_type_for(path));
+    if (is_gz) httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+
+    char chunk[1024];
+    size_t r;
+    while ((r = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+        if (httpd_resp_send_chunk(req, chunk, r) != ESP_OK) {
+            fclose(f);
+            return ESP_FAIL;  // client gone; connection will be closed
+        }
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);  // end of chunked response
     return ESP_OK;
 }
 
-static esp_err_t upload_handler(httpd_req_t *req)
+// GET /api/appconfig — device-specific runtime config for the web UI. Keeps
+// the static assets device-independent (they fetch this at boot instead of
+// having values baked in). Currently just the generator base URL.
+static esp_err_t appconfig_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "Handling config file upload");
-
-    // Read uploaded file content
-    size_t received = 0;
-    size_t remaining = req->content_len;
-
-    if (remaining > WEB_SERVER_MAX_UPLOAD_SIZE) {
-        httpd_resp_send_err(req, HTTPD_414_URI_TOO_LONG, "File too large");
-        return ESP_FAIL;
-    }
-
-    while (remaining > 0) {
-        size_t chunk_size = (remaining > 1024) ? 1024 : remaining;
-        int ret = httpd_req_recv(req, g_server_state.upload_buffer + received, chunk_size);
-
-        if (ret <= 0) {
-            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-                httpd_resp_send_408(req);
-            } else {
-                httpd_resp_send_500(req);
-            }
-            return ESP_FAIL;
-        }
-
-        received += ret;
-        remaining -= ret;
-    }
-
-    g_server_state.upload_size = received;
-    g_server_state.upload_buffer[received] = '\0';
-
-    ESP_LOGI(TAG, "Received %zu bytes of config data", received);
-
-    // Parse and execute config
-    config_timeline_t timeline = {0};
-
-    esp_err_t ret = config_parser_parse_content(g_server_state.upload_buffer, received, &timeline);
-
-    if (ret != ESP_OK) {
-        config_parser_free_timeline(&timeline);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid config file format");
-        return ESP_FAIL;
-    }
-
-    // Execute timeline (deep-copies entries into the pool-backed persistent slot)
-    ret = config_parser_execute_timeline(&timeline, false);
-    config_parser_free_timeline(&timeline);
-    if (ret != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to execute config");
-        return ESP_FAIL;
-    }
-
-    httpd_resp_send(req, "Config uploaded and executed successfully", HTTPD_RESP_USE_STRLEN);
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf),
+                     "{\"generator_url\":\"%s\"}", CONFIG_GENERATOR_SERVER_URL);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, (n > 0 && n < (int)sizeof(buf)) ? n : HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -778,7 +434,30 @@ static esp_err_t play_config_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "---- config content begin ----\n%s---- config content end ----",
              g_server_state.upload_buffer);
 
-    // Stop any currently running timeline
+    // Implicit stop-before-play sequence — lets the user click PLAY repeatedly
+    // without manually clicking STOP first. Mirrors stop_handler() to ensure
+    // a clean transition (no audio click, no LED bleed-through from old
+    // patterns). Keep these three lines in sync with stop_handler.
+    //
+    // 1) Arm audio fades (5 ms ramp). Without this, channels cut hard when
+    //    config_parser_stop_timeline runs → audible click.
+    for (int i = 0; i < NUM_AUDIO_CHANNELS; i++) {
+        audio_manager_stop_generation(i);
+    }
+    // 2) Stop LED flicker on all 8 channels. Without this, old flicker
+    //    patterns keep running through the transition and bleed visibly
+    //    onto the start of the new timeline.
+    led_matrix_stop_flicker_masked(0xFF);
+    // 3) Wait up to 50 ms for the audio fades to drain before starting the
+    //    new config — prevents overlap-click between old fade-out and new
+    //    fade-in. Polling at 2 ms keeps the loop cheap.
+    for (int waited = 0; waited < 50; waited += 2) {
+        if (!audio_generator_any_stopping()) break;
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+
+    // Stop the timeline (cancels pending events, tears down BG audio via
+    // the fast async variant — see config_parser_stop_timeline comment).
     config_parser_stop_timeline();
 
     // Parse and execute config
@@ -801,6 +480,168 @@ static esp_err_t play_config_handler(httpd_req_t *req)
 
     httpd_resp_send(req, "Config started successfully! ▶", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// /api/patch-config — additive live-update endpoint
+// ---------------------------------------------------------------------------
+// Receives a small .ledc snippet (typically 1–2 lines from a UI slider change)
+// and dispatches it as a patch on top of whatever is currently running. Unlike
+// /api/play-config, this does NOT stop the running timeline and does NOT
+// affect channels not mentioned in the patch. See plan 010 + the doc comment
+// on config_parser_apply_patch in config_parser.h.
+//
+// Body: .ledc text, up to WEB_SERVER_MAX_UPLOAD_SIZE bytes (but typically tiny).
+// Response: 200 "Patch applied" on success; 4xx with error message on parse failure.
+static esp_err_t patch_config_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "Patch config requested");
+
+    size_t received = 0;
+    size_t remaining = req->content_len;
+
+    if (remaining > WEB_SERVER_MAX_UPLOAD_SIZE) {
+        httpd_resp_send_err(req, HTTPD_414_URI_TOO_LONG, "Patch too large");
+        return ESP_FAIL;
+    }
+    if (remaining == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty patch");
+        return ESP_FAIL;
+    }
+
+    while (remaining > 0) {
+        size_t chunk_size = (remaining > 1024) ? 1024 : remaining;
+        int ret = httpd_req_recv(req, g_server_state.upload_buffer + received, chunk_size);
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+                httpd_resp_send_408(req);
+            } else {
+                httpd_resp_send_500(req);
+            }
+            return ESP_FAIL;
+        }
+        received += ret;
+        remaining -= ret;
+    }
+    g_server_state.upload_buffer[received] = '\0';
+
+    esp_err_t ret = config_parser_apply_patch(g_server_state.upload_buffer, received);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "patch_config_handler: apply_patch failed: %s", esp_err_to_name(ret));
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid patch");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_send(req, "Patch applied", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// /api/state — JSON snapshot of all current per-channel state
+// ---------------------------------------------------------------------------
+// Polled by the live-control UI (~1 Hz when no user interaction) to keep
+// slider positions in sync with what the engine is actually producing —
+// especially important so the UI reflects timeline progress (e.g. a sweep
+// from 12 Hz to 7.83 Hz over 10 min).
+//
+// Payload shape (see plan 010):
+//   {
+//     "caps":     { "led_color": bool, "num_led_ch": int, "num_audio_ch": int },
+//     "led":      [{...per-channel...}, ...],
+//     "audio":    [{...per-channel...}, ...],   // includes noise (index 8, ch9)
+//     "bg":       { "active": bool },
+//     "timeline": { "running": bool, "position_ms": uint }
+//   }
+//
+// JSON is hand-rolled with snprintf into a stack buffer (~4 KB suffices for
+// 8 LED + 16 audio channels). Avoids the cJSON heap-alloc overhead per
+// request. Numeric fields are written with low precision (%.1f, %.2f) to
+// keep payload small — the UI doesn't need 7-digit precision for sliders.
+static esp_err_t state_handler(httpd_req_t *req)
+{
+    /* Snapshot under each module's lock — short critical sections. */
+    led_matrix_channel_snapshot_t led_snap[NUM_LED_CHANNELS] = {0};
+    int n_led = led_matrix_get_snapshot(led_snap, NUM_LED_CHANNELS);
+
+    audio_gen_channel_snapshot_t aud_snap[NUM_AUDIO_CHANNELS] = {0};
+    int n_aud = audio_generator_get_snapshot(aud_snap, NUM_AUDIO_CHANNELS);
+
+    bool supports_color = led_matrix_supports_pixel_addressing();
+    bool bg_active      = bg_player_is_active();
+    bool tl_running     = (config_parser_get_timeline_position() > 0);
+    uint32_t tl_pos     = config_parser_get_timeline_position();
+
+    /* 4 KB buffer is plenty for 8 LED + 16 audio channels with the chosen
+     * precision. If channel counts grow much larger, switch to a streaming
+     * write via httpd_resp_send_chunk. */
+    char *buf = (char *)malloc(4096);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    char *p   = buf;
+    char *end = buf + 4096;
+
+    #define APPEND(...) do { \
+        int _n = snprintf(p, end - p, __VA_ARGS__); \
+        if (_n < 0 || _n >= end - p) goto truncated; \
+        p += _n; \
+    } while (0)
+
+    APPEND("{\"caps\":{\"led_color\":%s,\"num_led_ch\":%d,\"num_audio_ch\":%d},",
+           supports_color ? "true" : "false", NUM_LED_CHANNELS, NUM_AUDIO_CHANNELS);
+
+    APPEND("\"led\":[");
+    for (int i = 0; i < n_led; i++) {
+        APPEND("%s{\"ch\":%d,\"active\":%s,\"freq\":%.2f,\"duty\":%u,\"bright\":%u,"
+               "\"r\":%u,\"g\":%u,\"b\":%u,"
+               "\"mod\":{\"freq\":%s,\"duty\":%s,\"bright\":%s,\"r\":%s,\"g\":%s,\"b\":%s}}",
+               (i == 0) ? "" : ",", i + 1,
+               led_snap[i].active ? "true" : "false",
+               led_snap[i].freq, led_snap[i].duty, led_snap[i].brightness,
+               led_snap[i].r, led_snap[i].g, led_snap[i].b,
+               led_snap[i].mod_freq_active   ? "true" : "false",
+               led_snap[i].mod_duty_active   ? "true" : "false",
+               led_snap[i].mod_bright_active ? "true" : "false",
+               led_snap[i].mod_r_active      ? "true" : "false",
+               led_snap[i].mod_g_active      ? "true" : "false",
+               led_snap[i].mod_b_active      ? "true" : "false");
+    }
+    APPEND("],");
+
+    APPEND("\"audio\":[");
+    for (int i = 0; i < n_aud; i++) {
+        APPEND("%s{\"ch\":%d,\"active\":%s,\"freq\":%.2f,\"freq_r\":%.2f,"
+               "\"pan\":%.1f,\"vol\":%.1f,\"mod\":%.2f,\"wave\":%u,"
+               "\"modf\":{\"freq\":%s,\"pan\":%s,\"vol\":%s,\"mod\":%s}}",
+               (i == 0) ? "" : ",", i + 1,
+               aud_snap[i].active ? "true" : "false",
+               aud_snap[i].freq, aud_snap[i].freq_r,
+               aud_snap[i].pan, aud_snap[i].volume, aud_snap[i].modulation,
+               aud_snap[i].wave_type,
+               aud_snap[i].mod_freq_active ? "true" : "false",
+               aud_snap[i].mod_pan_active  ? "true" : "false",
+               aud_snap[i].mod_vol_active  ? "true" : "false",
+               aud_snap[i].mod_mod_active  ? "true" : "false");
+    }
+    APPEND("],");
+
+    APPEND("\"bg\":{\"active\":%s},", bg_active ? "true" : "false");
+    APPEND("\"timeline\":{\"running\":%s,\"position_ms\":%u}}",
+           tl_running ? "true" : "false", (unsigned)tl_pos);
+
+    #undef APPEND
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, p - buf);
+    free(buf);
+    return ESP_OK;
+
+truncated:
+    ESP_LOGW(TAG, "state_handler: JSON buffer truncated");
+    free(buf);
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "State payload too large");
+    return ESP_FAIL;
 }
 
 // ---------------------------------------------------------------------------

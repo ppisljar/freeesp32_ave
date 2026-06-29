@@ -691,12 +691,17 @@ esp_err_t config_parser_stop_timeline(void)
     xSemaphoreGive(timeline_mutex);
 
     // ---- BG shutdown (Plan 006 Step 7) ----------------------------------------
-    // Stop the background audio stream on timeline stop.  bg_player_stop() is
-    // safe to call when BG is not active (returns ESP_OK immediately), so we
+    // Stop the background audio stream on timeline stop.  bg_player_stop_async()
+    // is safe to call when BG is not active (returns ESP_OK immediately), so we
     // call it unconditionally here rather than guarding with bg_player_is_active().
     // Called AFTER releasing timeline_mutex to avoid holding the mutex during the
-    // fade-out + streamer-task join (which may block up to 2 s).
-    bg_player_stop();
+    // fade-out + streamer-task join.
+    //
+    // Async variant caps producer-task join at ~200 ms (vs 2 s for the blocking
+    // variant) so both the /api/stop endpoint and play_config_handler's implicit
+    // stop-before-play return quickly. Worst case: a slow HTTP connection forces
+    // a producer force-delete that leaks one socket — acceptable for snappy UX.
+    bg_player_stop_async();
 
     // Cancel any pending timeline events in timing engine
     timing_engine_cancel_events_by_type(TIMING_EVENT_TIMELINE);
@@ -710,6 +715,321 @@ esp_err_t config_parser_stop_timeline(void)
 
     return ESP_OK;
 }
+
+/* ============================================================================
+ *  config_parser_apply_patch — additive update (no full timeline restart)
+ * ============================================================================
+ *
+ * Patch semantics (different from main-timeline .ledc):
+ *
+ *   time_ms == 0:
+ *     Every field is set instantly via the corresponding per-field setter.
+ *     No animation, no sweep.
+ *
+ *   time_ms > 0, field has NO prefix:
+ *     Sweep from the engine's CURRENT value to the patch's value, over
+ *     time_ms (LINEAR curve). The UI does not need to know the current
+ *     value — the dispatcher reads it from the engine under the same lock
+ *     that fill_buffer / the LED ISR observe, so the sweep start is
+ *     guaranteed consistent with what the audio/LED stages will see next.
+ *
+ *   time_ms > 0, field has `>` or `*` prefix:
+ *     Same as above (animate current → value over time_ms), but use the
+ *     prefix's curve (LINEAR for `>`, QUADRATIC for `*`). Multi-line patches
+ *     with cross-entry `>` wiring are not supported yet — each line is
+ *     dispatched independently; `>` in a single-line patch behaves like
+ *     no-prefix with LINEAR curve.
+ *
+ *   field has modulation prefix (`^~/\_`):
+ *     Arm modulation via mod_engine_start_audio / mod_engine_start_led.
+ *     The field's value becomes the modulation start; the parser's per-
+ *     field `_mod_end` and `_mod_period_ms` carry the rest.
+ *
+ * Dispatch is synchronous — all entries fire immediately at patch-receive
+ * time. There is no future-scheduling (esp_timer) inside the patch; the UI
+ * sends one patch per slider event. Multi-line patches still parse and each
+ * line is processed in order against current state.
+ *
+ * Old comment kept below for completeness:
+ *
+ * Architecture: a patch is a tiny self-contained timeline that runs in
+ * parallel to the main timeline (if any). It owns its own heap-allocated
+ * config_timeline_t. Entries at t=0 dispatch synchronously inside the patch
+ * call itself; entries at t>0 schedule a one-shot esp_timer whose callback
+ * dispatches the entry and decrements the patch's refcount. When refcount
+ * reaches zero, the patch's memory is freed.
+ *
+ * Up to PATCH_MAX_PENDING patches can be live simultaneously (each may have
+ * multiple pending entries). Past that, the oldest patch is force-completed
+ * (its remaining entries dispatch immediately) to free a slot. This bound is
+ * a safety net; the UI sends one patch per slider change, so steady-state is
+ * 0–2 patches in flight.
+ */
+
+#define PATCH_MAX_ENTRIES_PER    32   /* per-call cap; safety net for malformed input */
+
+/* Resolve curve preference from a parsed interp value + the patch's time_ms.
+ *   - time_ms == 0  → always NONE (instant set, never sweep)
+ *   - QUADRATIC (*) → QUADRATIC sweep
+ *   - LINEAR (>)   → LINEAR sweep
+ *   - NONE + time>0 → LINEAR sweep (patch default; UI sliders animate
+ *                     smoothly from current value)
+ *   - modulation prefixes return NONE here (caller routes them separately
+ *     to mod_engine_start_*). */
+static led_interp_t patch_field_curve_led(config_interpolation_t interp, uint32_t time_ms)
+{
+    if (config_interp_is_modulation(interp)) return LED_INTERP_NONE;
+    if (time_ms == 0)                        return LED_INTERP_NONE;
+    if (interp == CONFIG_INTERP_QUADRATIC)   return LED_INTERP_QUADRATIC;
+    return LED_INTERP_LINEAR;
+}
+
+static audio_gen_sweep_type_t patch_field_curve_audio(config_interpolation_t interp, uint32_t time_ms)
+{
+    /* Same logic as patch_field_curve_led but for audio. NONE is encoded as
+     * AUDIO_GEN_SWEEP_NONE; caller checks for that and uses set_param_locked
+     * instead of start_sweep_locked. */
+    (void)interp; (void)time_ms;
+    return (time_ms == 0) ? AUDIO_GEN_SWEEP_NONE
+           : (interp == CONFIG_INTERP_QUADRATIC) ? AUDIO_GEN_SWEEP_QUADRATIC
+           : AUDIO_GEN_SWEEP_LINEAR;
+}
+
+/* Dispatch one audio patch entry. Caller holds audio_gen_mutex (via
+ * audio_generator_lock) so we can read current values + start sweeps under
+ * the same lock fill_buffer observes — guarantees the sweep start matches
+ * what the synth stage sees on its next sample. */
+static void apply_patch_audio_entry(const config_audio_entry_t *e)
+{
+    if (e->channel >= NUM_AUDIO_CHANNELS) {
+        ESP_LOGW(TAG, "patch: audio channel %d out of range", e->channel);
+        return;
+    }
+    if (!audio_generator_is_active_locked(e->channel)) {
+        /* Channel not currently playing — start it from scratch with the
+         * patch's values. No "animate from current" because there is no
+         * current value to read. */
+        audio_gen_params_t p = {0};
+        p.frequency   = e->frequency;
+        p.frequency_r = e->frequency_r;
+        p.pan           = e->pan       / 100.0f;
+        p.amplitude     = e->volume    / 100.0f;
+        p.mod_frequency = e->modulation;
+        p.wave_type   = (audio_wave_type_t)e->wave_type;
+        audio_generator_start_channel_locked(e->channel, &p);
+        return;
+    }
+
+    const uint32_t dur_ms = e->time_ms;
+    const uint64_t dur_samples = ((uint64_t)dur_ms * AUDIO_GEN_SAMPLE_RATE) / 1000ULL;
+
+    /* For each field: pick the dispatch path based on its interp + dur_ms. */
+    struct {
+        audio_param_t        param;
+        float                target;         /* in INTERNAL units (Hz / -1..1 / 0..1) */
+        config_interpolation_t interp;
+    } fields[] = {
+        { AUDIO_PARAM_FREQUENCY, e->frequency,          e->freq_interp   },
+        { AUDIO_PARAM_PAN,       e->pan    / 100.0f,    e->pan_interp    },
+        { AUDIO_PARAM_AMPLITUDE, e->volume / 100.0f,    e->volume_interp },
+        { AUDIO_PARAM_MOD_FREQ,  e->modulation,         e->mod_interp    },
+    };
+
+    for (size_t i = 0; i < sizeof(fields)/sizeof(fields[0]); i++) {
+        config_interpolation_t interp = fields[i].interp;
+        if (config_interp_is_modulation(interp)) {
+            /* Modulation prefix — dispatch via mod_engine, NOT as a sweep.
+             * mod_engine.c takes care of param mapping + UI-unit scaling. */
+            int wave = mod_wave_from_interp(interp);
+            /* Per-field _mod_end + _mod_period_ms live on the entry. */
+            float mod_end = 0.0f; uint32_t mod_period = 0;
+            switch (fields[i].param) {
+                case AUDIO_PARAM_FREQUENCY:
+                    mod_end = e->freq_mod_end;
+                    mod_period = (uint32_t)e->freq_mod_period_ms; break;
+                case AUDIO_PARAM_PAN:
+                    mod_end = e->pan_mod_end;
+                    mod_period = (uint32_t)e->pan_mod_period_ms; break;
+                case AUDIO_PARAM_AMPLITUDE:
+                    mod_end = e->vol_mod_end;
+                    mod_period = (uint32_t)e->vol_mod_period_ms; break;
+                case AUDIO_PARAM_MOD_FREQ:
+                    mod_end = e->mod_mod_end;
+                    mod_period = (uint32_t)e->mod_mod_period_ms; break;
+                default: break;
+            }
+            mod_audio_field_t mf = (fields[i].param == AUDIO_PARAM_FREQUENCY) ? MOD_AUDIO_FREQ
+                                 : (fields[i].param == AUDIO_PARAM_PAN)       ? MOD_AUDIO_PAN
+                                 : (fields[i].param == AUDIO_PARAM_AMPLITUDE) ? MOD_AUDIO_VOLUME
+                                 :                                              MOD_AUDIO_MOD;
+            mod_engine_start_audio(e->channel, mf, (mod_wave_t)wave,
+                                   fields[i].target * (fields[i].param == AUDIO_PARAM_PAN || fields[i].param == AUDIO_PARAM_AMPLITUDE ? 100.0f : 1.0f),
+                                   mod_end, mod_period);
+            continue;
+        }
+
+        audio_gen_sweep_type_t curve = patch_field_curve_audio(interp, dur_ms);
+        if (curve == AUDIO_GEN_SWEEP_NONE) {
+            /* Instant set — use set_param_locked (which also cancels any
+             * active sweep on this param). */
+            audio_generator_set_param_locked(e->channel, fields[i].param, fields[i].target);
+        } else {
+            /* Animated patch — read current value as the sweep start. */
+            float current = 0.0f;
+            audio_generator_get_param_locked(e->channel, fields[i].param, &current);
+            audio_generator_start_sweep_locked(e->channel, fields[i].param,
+                                               current, fields[i].target,
+                                               dur_samples, curve);
+        }
+    }
+}
+
+/* Dispatch one LED patch entry. Reads current values from the FIRST channel
+ * in the mask (typically a single-bit mask for UI-driven patches). For
+ * multi-bit masks the same start value is broadcast across all matched
+ * channels — acceptable for now since the UI sends one channel per patch. */
+static void apply_patch_led_entry(const config_led_entry_t *e)
+{
+    uint8_t mask = e->channel_mask;
+    if (mask == 0) return;
+    const uint32_t dur_ms = e->time_ms;
+
+    /* Snapshot current LED state so we can pick a sensible sweep start.
+     * Snapshot path takes s_flicker_mux briefly — fine from task context. */
+    led_matrix_channel_snapshot_t snap[NUM_LED_CHANNELS] = {0};
+    led_matrix_get_snapshot(snap, NUM_LED_CHANNELS);
+    int first_ch = -1;
+    for (int i = 0; i < NUM_LED_CHANNELS; i++) {
+        if (mask & (1u << i)) { first_ch = i; break; }
+    }
+    if (first_ch < 0) return;
+
+    /* Build a sweep spec. NONE curve on a field = "instant set to target,
+     * start value ignored" per the spec contract. So for fields the patch
+     * just wants set immediately (time_ms == 0 or no prefix + time_ms == 0),
+     * we still go through start_sweep_masked with curve=NONE — one API call,
+     * uniform path. */
+    led_sweep_spec_t spec = {
+        .freq_milliHz_start  = (uint32_t)(snap[first_ch].freq * 1000.0f),
+        .freq_milliHz_target = (uint32_t)(e->frequency       * 1000.0f),
+        .duty_start          = snap[first_ch].duty,
+        .duty_target         = e->duty_cycle,
+        .bright_start        = snap[first_ch].brightness,
+        .bright_target       = e->brightness,
+        .r_start             = snap[first_ch].r,
+        .r_target            = e->r,
+        .g_start             = snap[first_ch].g,
+        .g_target            = e->g,
+        .b_start             = snap[first_ch].b,
+        .b_target            = e->b,
+        .freq_curve   = patch_field_curve_led(e->freq_interp,       dur_ms),
+        .duty_curve   = patch_field_curve_led(e->duty_interp,       dur_ms),
+        .bright_curve = patch_field_curve_led(e->brightness_interp, dur_ms),
+        .r_curve      = patch_field_curve_led(e->r_interp,          dur_ms),
+        .g_curve      = patch_field_curve_led(e->g_interp,          dur_ms),
+        .b_curve      = patch_field_curve_led(e->b_interp,          dur_ms),
+        .duration_ms  = dur_ms,
+    };
+
+    /* If the channel isn't currently flickering AND the patch has a non-zero
+     * frequency, start it; otherwise just push the sweep spec. */
+    if (!led_matrix_is_flickering_masked(mask) && e->frequency > 0.0f) {
+        led_matrix_start_flicker_masked(mask, e->frequency, e->duty_cycle,
+                                        e->brightness, 0);
+        led_matrix_set_flicker_color_masked(mask, e->r, e->g, e->b);
+    } else {
+        led_matrix_start_sweep_masked(mask, &spec, 0);
+    }
+
+    /* Handle modulation prefixes on each field — dispatched independently
+     * of the sweep above. The mod_engine writes into the LED ISR slot.
+     * Fields without a modulation prefix get no mod change (existing
+     * modulation on that field, if any, is left alone). */
+    if (config_interp_is_modulation(e->freq_interp)) {
+        int wave = mod_wave_from_interp(e->freq_interp);
+        mod_engine_start_led(mask, MOD_LED_FREQ, (mod_wave_t)wave,
+                             e->frequency, e->freq_mod_end, (uint32_t)e->freq_mod_period_ms);
+    }
+    if (config_interp_is_modulation(e->duty_interp)) {
+        int wave = mod_wave_from_interp(e->duty_interp);
+        mod_engine_start_led(mask, MOD_LED_DUTY, (mod_wave_t)wave,
+                             e->duty_cycle, e->duty_mod_end, e->duty_mod_period_ms);
+    }
+    if (config_interp_is_modulation(e->brightness_interp)) {
+        int wave = mod_wave_from_interp(e->brightness_interp);
+        mod_engine_start_led(mask, MOD_LED_BRIGHT, (mod_wave_t)wave,
+                             e->brightness, e->bright_mod_end, e->bright_mod_period_ms);
+    }
+    if (config_interp_is_modulation(e->r_interp)) {
+        int wave = mod_wave_from_interp(e->r_interp);
+        mod_engine_start_led(mask, MOD_LED_R, (mod_wave_t)wave,
+                             e->r, e->r_mod_end, e->r_mod_period_ms);
+    }
+    if (config_interp_is_modulation(e->g_interp)) {
+        int wave = mod_wave_from_interp(e->g_interp);
+        mod_engine_start_led(mask, MOD_LED_G, (mod_wave_t)wave,
+                             e->g, e->g_mod_end, e->g_mod_period_ms);
+    }
+    if (config_interp_is_modulation(e->b_interp)) {
+        int wave = mod_wave_from_interp(e->b_interp);
+        mod_engine_start_led(mask, MOD_LED_B, (mod_wave_t)wave,
+                             e->b, e->b_mod_end, e->b_mod_period_ms);
+    }
+}
+
+esp_err_t config_parser_apply_patch(const char *content, size_t content_length)
+{
+    if (!content || content_length == 0) return ESP_ERR_INVALID_ARG;
+
+    /* Parse into a temporary on-stack timeline. Use the same parser as
+     * /api/play-config so the patch grammar is identical to .ledc. */
+    config_timeline_t parsed = {0};
+    esp_err_t ret = config_parser_parse_content(content, content_length, &parsed);
+    if (ret != ESP_OK) {
+        config_parser_free_timeline(&parsed);
+        ESP_LOGW(TAG, "apply_patch: parse failed");
+        return ret;
+    }
+    if (parsed.count == 0) {
+        config_parser_free_timeline(&parsed);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (parsed.count > PATCH_MAX_ENTRIES_PER) {
+        config_parser_free_timeline(&parsed);
+        ESP_LOGW(TAG, "apply_patch: too many entries (%zu > %d)",
+                 parsed.count, PATCH_MAX_ENTRIES_PER);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Dispatch each entry synchronously. Take audio_generator_lock ONCE
+     * around the whole batch so all audio dispatches see a consistent view
+     * (and so we don't keep flipping the mutex per entry, which would let
+     * fill_buffer interleave). LED entries take their own spinlock per call
+     * — no need to coordinate. */
+    int n_audio = 0, n_led = 0, n_other = 0;
+    audio_generator_lock();
+    for (size_t i = 0; i < parsed.count; i++) {
+        switch (parsed.entries[i].type) {
+            case CONFIG_ENTRY_AUDIO:
+                apply_patch_audio_entry(&parsed.entries[i].data.audio);
+                n_audio++;
+                break;
+            case CONFIG_ENTRY_LED:
+                apply_patch_led_entry(&parsed.entries[i].data.led);
+                n_led++;
+                break;
+            default:
+                n_other++;
+                break;
+        }
+    }
+    audio_generator_unlock();
+
+    config_parser_free_timeline(&parsed);
+    ESP_LOGI(TAG, "apply_patch: %d audio, %d LED, %d ignored", n_audio, n_led, n_other);
+    return ESP_OK;
+}
+
 
 uint32_t config_parser_get_timeline_position(void)
 {

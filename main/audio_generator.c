@@ -34,12 +34,18 @@
 #include "audio_config.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <math.h>
 #include <string.h>
 #include <stdatomic.h>
+
+/* Forward declaration for fill_buffer's modulation eval (definition lives
+ * further down next to the set_mod / clear_mod public API). */
+static inline float audio_eval_mod(const audio_gen_channel_t *ch,
+                                   audio_param_t param, uint64_t now_us);
 
 static const char* TAG = "audio_generator";
 
@@ -490,12 +496,37 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
         inv_n_per_sample[i] = s_inv_n_current;
     }
 
+    // Snapshot the current time once per buffer for modulation evaluation.
+    // All channels in this buffer use the same now_us so simultaneous mods
+    // stay phase-coherent.
+    uint64_t mod_now_us = (uint64_t)esp_timer_get_time();
+
     // Mix all active channels
     for (int ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
         audio_gen_channel_t* channel = &audio_channels[ch];
 
         if (!channel->active) {
             continue;
+        }
+
+        /* Apply any active periodic modulations BEFORE the per-sample
+         * loop. The modulator overrides current_X for the duration of
+         * this buffer (~5.8 ms at 44.1 kHz × 256 samples). Sweeps on the
+         * same param were already cleared at set_mod() time so they
+         * don't compete. */
+        if (channel->mods[AUDIO_PARAM_FREQUENCY].active) {
+            channel->current_freq = audio_eval_mod(channel, AUDIO_PARAM_FREQUENCY, mod_now_us);
+        }
+        if (channel->mods[AUDIO_PARAM_AMPLITUDE].active) {
+            channel->current_amp = audio_eval_mod(channel, AUDIO_PARAM_AMPLITUDE, mod_now_us);
+            channel->amp_target = channel->current_amp;
+            channel->amp_ramp_remaining = 0;  /* skip ramp — mod drives directly */
+        }
+        if (channel->mods[AUDIO_PARAM_PAN].active) {
+            channel->current_pan = audio_eval_mod(channel, AUDIO_PARAM_PAN, mod_now_us);
+        }
+        if (channel->mods[AUDIO_PARAM_MOD_FREQ].active) {
+            channel->current_mod_freq = audio_eval_mod(channel, AUDIO_PARAM_MOD_FREQ, mod_now_us);
         }
 
         // Check if channel has finished its duration.  Instead of snapping
@@ -1205,6 +1236,122 @@ esp_err_t audio_generator_set_param(int channel, audio_param_t param, float valu
     return ret;
 }
 
+esp_err_t audio_generator_get_param_locked(int channel, audio_param_t param, float *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return ESP_ERR_INVALID_ARG;
+    if (param >= AUDIO_PARAM_COUNT) return ESP_ERR_INVALID_ARG;
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    switch (param) {
+        case AUDIO_PARAM_FREQUENCY: *out = ch->current_freq;     break;
+        case AUDIO_PARAM_AMPLITUDE: *out = ch->current_amp;      break;
+        case AUDIO_PARAM_PAN:       *out = ch->current_pan;      break;
+        case AUDIO_PARAM_MOD_FREQ:  *out = ch->current_mod_freq; break;
+        default: return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Periodic modulation: arm a wave-shape modulation on a single parameter
+ * of one channel. Evaluated at fill_buffer entry (task context — full FP
+ * math, cosf() available). Wave codes match mod_wave_t:
+ *   0 = triangle, 1 = sine, 2 = saw-up, 3 = saw-down, 4 = square
+ * Replaces any previously-active modulation on the same (channel, param).
+ * ---------------------------------------------------------------------- */
+/* _locked variant: assumes audio_gen_mutex is ALREADY held by the caller.
+ * Use this from any path that already took the mutex (e.g., the timeline
+ * dispatch path in config_parser holds the mutex across the full batch).
+ * Taking the same non-recursive mutex twice on the same task deadlocks the
+ * task indefinitely with no panic — which is exactly what was happening
+ * when the timeline executor called mod_engine_start_audio() → public
+ * audio_generator_set_mod() → xSemaphoreTake() on a mutex it already owned. */
+esp_err_t audio_generator_set_mod_locked(int channel, audio_param_t param,
+                                          uint8_t wave, float start, float end,
+                                          uint32_t period_ms)
+{
+    if (!generator_initialized) return ESP_ERR_INVALID_STATE;
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return ESP_ERR_INVALID_ARG;
+    if (param >= AUDIO_PARAM_COUNT) return ESP_ERR_INVALID_ARG;
+
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    ch->mods[param].wave           = wave;
+    ch->mods[param].start          = start;
+    ch->mods[param].end            = end;
+    ch->mods[param].period_us      = period_ms * 1000u;
+    ch->mods[param].start_time_us  = (uint64_t)esp_timer_get_time();
+    ch->mods[param].active         = true; /* set last */
+    /* Also cancel any active sweep on this param so the sweep machinery
+     * doesn't fight the modulator. */
+    ch->sweeps[param].duration_samples = 0;
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_clear_mod_locked(int channel, audio_param_t param)
+{
+    if (!generator_initialized) return ESP_OK;
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return ESP_ERR_INVALID_ARG;
+    if (param >= AUDIO_PARAM_COUNT) return ESP_ERR_INVALID_ARG;
+
+    audio_channels[channel].mods[param].active = false;
+    return ESP_OK;
+}
+
+/* Public (unlocked) variants — take the mutex internally. Safe to call from
+ * any task that does NOT already hold audio_gen_mutex. */
+esp_err_t audio_generator_set_mod(int channel, audio_param_t param,
+                                  uint8_t wave, float start, float end,
+                                  uint32_t period_ms)
+{
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    esp_err_t ret = audio_generator_set_mod_locked(channel, param, wave, start, end, period_ms);
+    xSemaphoreGive(audio_gen_mutex);
+    return ret;
+}
+
+esp_err_t audio_generator_clear_mod(int channel, audio_param_t param)
+{
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    esp_err_t ret = audio_generator_clear_mod_locked(channel, param);
+    xSemaphoreGive(audio_gen_mutex);
+    return ret;
+}
+
+/* Evaluate a modulation slot at time `now_us`. Returns the current wave
+ * value in the param's native units. Caller has already checked active. */
+static inline float audio_eval_mod(const audio_gen_channel_t *ch,
+                                   audio_param_t param, uint64_t now_us)
+{
+    const typeof(ch->mods[0]) *m = &ch->mods[param];
+    if (m->period_us == 0) return m->start;
+    uint64_t elapsed_us = (now_us >= m->start_time_us)
+                          ? (now_us - m->start_time_us) : 0;
+    uint32_t t_in_cycle = (uint32_t)(elapsed_us % m->period_us);
+    float phase = (float)t_in_cycle / (float)m->period_us;  /* 0..1 */
+    float shape;
+    switch (m->wave) {
+        case 0:  /* TRIANGLE */
+            shape = (phase < 0.5f) ? (phase * 2.0f) : (2.0f - phase * 2.0f);
+            break;
+        case 1:  /* SINE (true cosf, since this is task context) */
+            shape = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * phase);
+            break;
+        case 2:  /* SAW_UP */
+            shape = phase;
+            break;
+        case 3:  /* SAW_DOWN */
+            shape = 1.0f - phase;
+            break;
+        case 4:  /* SQUARE */
+            shape = (phase < 0.5f) ? 0.0f : 1.0f;
+            break;
+        default:
+            shape = 0.0f;
+            break;
+    }
+    return m->start + (m->end - m->start) * shape;
+}
+
 esp_err_t audio_generator_get_current_freq_r(int channel, float *out) {
     if (!generator_initialized || channel < 0 || channel >= NUM_AUDIO_CHANNELS || !out) {
         return ESP_ERR_INVALID_ARG;
@@ -1221,6 +1368,32 @@ esp_err_t audio_generator_get_current_freq_r(int channel, float *out) {
 // sweep details. Designed for the push-button "what is the system actually
 // doing right now?" snapshot. Same snapshot-then-release-then-log pattern
 // as the sweep-progress logger so it never blocks fill_buffer on UART.
+int audio_generator_get_snapshot(audio_gen_channel_snapshot_t *out, int count)
+{
+    if (!out || count <= 0 || !generator_initialized) return 0;
+    int n = (count < NUM_AUDIO_CHANNELS) ? count : NUM_AUDIO_CHANNELS;
+
+    /* Same snapshot-under-mutex pattern as log_full_state. Keep the
+     * critical section short — just memcpy the fields out. */
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    for (int ch = 0; ch < n; ch++) {
+        audio_gen_channel_t *c = &audio_channels[ch];
+        out[ch].active            = c->active;
+        out[ch].freq              = c->current_freq;
+        out[ch].freq_r            = c->current_freq_r;
+        out[ch].pan               = c->current_pan * 100.0f;   /* internal -1..1 → UI -100..100 */
+        out[ch].volume            = c->current_amp * 100.0f;   /* internal 0..1  → UI 0..100 */
+        out[ch].modulation        = c->current_mod_freq;
+        out[ch].wave_type         = (uint8_t)c->wave_type;
+        out[ch].mod_freq_active   = c->mods[AUDIO_PARAM_FREQUENCY].active;
+        out[ch].mod_pan_active    = c->mods[AUDIO_PARAM_PAN].active;
+        out[ch].mod_vol_active    = c->mods[AUDIO_PARAM_AMPLITUDE].active;
+        out[ch].mod_mod_active    = c->mods[AUDIO_PARAM_MOD_FREQ].active;
+    }
+    xSemaphoreGive(audio_gen_mutex);
+    return n;
+}
+
 void audio_generator_log_full_state(void)
 {
     if (!generator_initialized) return;
