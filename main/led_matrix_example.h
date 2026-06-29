@@ -194,6 +194,15 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
  */
 esp_err_t led_matrix_update_brightness_masked(uint8_t channel_mask, uint8_t brightness);
 
+/* Per-field setters for the modulation engine (see mod_engine.c). Each
+ * updates ONE parameter on the masked channels, leaving all others
+ * (and the cycle origin) untouched. Mirror the brightness setter pattern. */
+esp_err_t led_matrix_update_frequency_masked(uint8_t channel_mask, float frequency);
+esp_err_t led_matrix_update_duty_masked     (uint8_t channel_mask, uint8_t duty_cycle);
+esp_err_t led_matrix_update_color_r_masked  (uint8_t channel_mask, uint8_t red);
+esp_err_t led_matrix_update_color_g_masked  (uint8_t channel_mask, uint8_t green);
+esp_err_t led_matrix_update_color_b_masked  (uint8_t channel_mask, uint8_t blue);
+
 /**
  * @brief Set flicker color on channels indicated by channel_mask.
  *

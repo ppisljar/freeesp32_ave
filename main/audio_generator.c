@@ -1169,6 +1169,42 @@ esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *n
     return ret;
 }
 
+/* Set a single parameter directly on a running channel — used by the
+ * modulation engine to push triangle/sine/etc. modulated values at
+ * 100 Hz without rebuilding the full audio_gen_params_t struct.
+ *
+ * Cancels any active sweep on the same parameter (sets duration_samples=0).
+ * Writes directly to current_X — fill_buffer picks up the new value on the
+ * next sample. */
+esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, float value)
+{
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return ESP_ERR_INVALID_ARG;
+    if (param >= AUDIO_PARAM_COUNT) return ESP_ERR_INVALID_ARG;
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    if (!ch->active) return ESP_ERR_INVALID_STATE;
+
+    /* Stop any active sweep on this param (duration_samples == 0 → inactive). */
+    ch->sweeps[param].duration_samples = 0;
+
+    switch (param) {
+        case AUDIO_PARAM_FREQUENCY: ch->current_freq     = value; break;
+        case AUDIO_PARAM_AMPLITUDE: ch->current_amp      = value; break;
+        case AUDIO_PARAM_PAN:       ch->current_pan      = value; break;
+        case AUDIO_PARAM_MOD_FREQ:  ch->current_mod_freq = value; break;
+        default: return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_set_param(int channel, audio_param_t param, float value)
+{
+    if (!generator_initialized) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(audio_gen_mutex, portMAX_DELAY);
+    esp_err_t ret = audio_generator_set_param_locked(channel, param, value);
+    xSemaphoreGive(audio_gen_mutex);
+    return ret;
+}
+
 esp_err_t audio_generator_get_current_freq_r(int channel, float *out) {
     if (!generator_initialized || channel < 0 || channel >= NUM_AUDIO_CHANNELS || !out) {
         return ESP_ERR_INVALID_ARG;

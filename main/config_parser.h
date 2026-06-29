@@ -26,9 +26,34 @@ typedef enum {
 
 typedef enum {
     CONFIG_INTERP_NONE = 0,
-    CONFIG_INTERP_LINEAR,     // > prefix
-    CONFIG_INTERP_QUADRATIC   // * prefix
+    CONFIG_INTERP_LINEAR,     // > prefix  — linear ramp to next entry's value
+    CONFIG_INTERP_QUADRATIC,  // * prefix  — quadratic ease to next entry's value
+    // Modulation prefixes — all 5 use the same `prefix start:end:period_ms` syntax.
+    // Self-contained: do NOT depend on the next entry's value. Runs continuously
+    // until preempted by a new entry on the same channel/field.
+    CONFIG_INTERP_TRIANGLE,   // ^ prefix  — triangle wave (linear ramp up then down)
+    CONFIG_INTERP_SINE,       // ~ prefix  — smooth sinusoidal oscillation
+    CONFIG_INTERP_SAW_UP,     // / prefix  — sawtooth, ramps from start to end then jumps back
+    CONFIG_INTERP_SAW_DOWN,   // \ prefix  — sawtooth, ramps from start to end then jumps back (start > end)
+    CONFIG_INTERP_SQUARE      // _ prefix  — square wave (half period at start, half at end)
 } config_interpolation_t;
+
+/* True iff the given interpolation type is a periodic modulation (one of
+ * triangle/sine/saw/square) rather than a one-shot ramp (linear/quadratic).
+ * Modulation entries carry extra (`_mod_end`, `_mod_period_ms`) fields. */
+static inline bool config_interp_is_modulation(config_interpolation_t i)
+{
+    return i == CONFIG_INTERP_TRIANGLE
+        || i == CONFIG_INTERP_SINE
+        || i == CONFIG_INTERP_SAW_UP
+        || i == CONFIG_INTERP_SAW_DOWN
+        || i == CONFIG_INTERP_SQUARE;
+}
+
+/* Modulation extras: each interpolatable field carries two extra floats
+ * — the wave's "end" value (other extreme of the oscillation; the entry's
+ * regular field value is the "start") and the period in ms (full cycle
+ * time start→end→start). Unused for NONE/LINEAR/QUADRATIC. */
 
 typedef struct {
     uint32_t time_ms;
@@ -44,6 +69,15 @@ typedef struct {
     config_interpolation_t r_interp;
     config_interpolation_t g_interp;
     config_interpolation_t b_interp;
+    // Modulation extras (valid only when the matching _interp is a
+    // modulation type — see config_interp_is_modulation()).
+    float    freq_mod_end,   freq_mod_period_ms;
+    uint8_t  duty_mod_end;
+    uint32_t duty_mod_period_ms;
+    uint8_t  bright_mod_end;
+    uint32_t bright_mod_period_ms;
+    uint8_t  r_mod_end, g_mod_end, b_mod_end;
+    uint32_t r_mod_period_ms, g_mod_period_ms, b_mod_period_ms;
 } config_led_entry_t;
 
 typedef struct {
@@ -59,6 +93,11 @@ typedef struct {
     config_interpolation_t pan_interp;
     config_interpolation_t volume_interp;
     config_interpolation_t mod_interp;
+    // Modulation extras (see notes above config_led_entry_t).
+    float    freq_mod_end,   freq_mod_period_ms;
+    float    pan_mod_end,    pan_mod_period_ms;
+    float    vol_mod_end,    vol_mod_period_ms;
+    float    mod_mod_end,    mod_mod_period_ms;
 } config_audio_entry_t;
 
 /**

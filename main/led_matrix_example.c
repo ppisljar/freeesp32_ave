@@ -984,6 +984,87 @@ esp_err_t led_matrix_set_flicker_color_masked(uint8_t channel_mask,
     return ESP_OK;
 }
 
+/* ------------------------------------------------------------------------
+ * Per-field setters for the modulation engine.
+ *
+ * Each updates ONE parameter on the masked channels and leaves all others
+ * untouched. Mirrors the brightness pattern in led_matrix_update_brightness_masked
+ * above. Used by mod_engine to push triangle/sine/saw/square modulated
+ * values without disturbing the channel's other state.
+ * ------------------------------------------------------------------------ */
+
+esp_err_t led_matrix_update_frequency_masked(uint8_t channel_mask, float frequency)
+{
+    if (frequency <= 0.0f || frequency > 500.0f) return ESP_ERR_INVALID_ARG;
+    uint32_t f_mhz = (uint32_t)(frequency * 1000.0f);
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        if (!flicker_state[ch].active) continue;
+        led_flicker_state_t *s = &flicker_state[ch];
+        portENTER_CRITICAL(&s_flicker_mux);
+        s->frequency_milliHz = f_mhz;
+        s->sw_freq = (led_sweep_param_t){ f_mhz, f_mhz, LED_INTERP_NONE };
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
+esp_err_t led_matrix_update_duty_masked(uint8_t channel_mask, uint8_t duty_cycle)
+{
+    if (duty_cycle > 100) return ESP_ERR_INVALID_ARG;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        if (!flicker_state[ch].active) continue;
+        led_flicker_state_t *s = &flicker_state[ch];
+        portENTER_CRITICAL(&s_flicker_mux);
+        s->duty_cycle = duty_cycle;
+        s->sw_duty = (led_sweep_param_t){ (uint32_t)duty_cycle * 256u,
+                                          (uint32_t)duty_cycle * 256u,
+                                          LED_INTERP_NONE };
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
+esp_err_t led_matrix_update_color_r_masked(uint8_t channel_mask, uint8_t red)
+{
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        led_flicker_state_t *s = &flicker_state[ch];
+        portENTER_CRITICAL(&s_flicker_mux);
+        s->red = red;
+        s->sw_r = (led_sweep_param_t){ (uint32_t)red * 256u, (uint32_t)red * 256u, LED_INTERP_NONE };
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
+esp_err_t led_matrix_update_color_g_masked(uint8_t channel_mask, uint8_t green)
+{
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        led_flicker_state_t *s = &flicker_state[ch];
+        portENTER_CRITICAL(&s_flicker_mux);
+        s->green = green;
+        s->sw_g = (led_sweep_param_t){ (uint32_t)green * 256u, (uint32_t)green * 256u, LED_INTERP_NONE };
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
+esp_err_t led_matrix_update_color_b_masked(uint8_t channel_mask, uint8_t blue)
+{
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        led_flicker_state_t *s = &flicker_state[ch];
+        portENTER_CRITICAL(&s_flicker_mux);
+        s->blue = blue;
+        s->sw_b = (led_sweep_param_t){ (uint32_t)blue * 256u, (uint32_t)blue * 256u, LED_INTERP_NONE };
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
 /**
  * @brief Start a parametric LED flicker sweep on channels indicated by channel_mask.
  *

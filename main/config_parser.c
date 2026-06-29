@@ -2,6 +2,7 @@
 #include "audio_manager.h"
 #include "led_strip.h"
 #include "led_matrix_example.h"
+#include "mod_engine.h"
 #include "audio_config.h"
 #include "timing_engine.h"
 #include "lock_free_comm.h"
@@ -50,6 +51,7 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
 static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, config_audio_entry_t *audio_entry);
 static esp_err_t parse_bg_line(const char *tokens[], size_t token_count, config_bg_entry_t *bg_entry);
 static float parse_value_with_interpolation(const char *str, config_interpolation_t *interp);
+static void  parse_mod_extras(const char *str, float *out_end, float *out_period_ms);
 static void timeline_timing_callback(uint64_t timestamp_us, void *user_data);
 static void timeline_execution_task(void *pvParameters);
 // execute_timeline_entry_ctx has full timeline context for sweep wiring.
@@ -106,12 +108,13 @@ static void log_entry_summary(const config_timeline_t *tl, size_t idx)
             const config_led_entry_t *nb = find_next_led_for_bit(tl, idx, bitmask);
             if (!nb) break;
             uint32_t dur = nb->time_ms - led->time_ms;
-            if (nb->freq_interp       != CONFIG_INTERP_NONE) SWEEP_APPEND(" freq:%.1f->%.1fHz/%ums",  led->frequency, nb->frequency, (unsigned)dur);
-            if (nb->duty_interp       != CONFIG_INTERP_NONE) SWEEP_APPEND(" duty:%d->%d%%/%ums",      led->duty_cycle, nb->duty_cycle, (unsigned)dur);
-            if (nb->brightness_interp != CONFIG_INTERP_NONE) SWEEP_APPEND(" bri:%d->%d%%/%ums",       led->brightness, nb->brightness, (unsigned)dur);
-            if (nb->r_interp          != CONFIG_INTERP_NONE) SWEEP_APPEND(" R:%d->%d/%ums",           led->r, nb->r, (unsigned)dur);
-            if (nb->g_interp          != CONFIG_INTERP_NONE) SWEEP_APPEND(" G:%d->%d/%ums",           led->g, nb->g, (unsigned)dur);
-            if (nb->b_interp          != CONFIG_INTERP_NONE) SWEEP_APPEND(" B:%d->%d/%ums",           led->b, nb->b, (unsigned)dur);
+            // NEW CONVENTION: prefix lives on THIS entry; target value lives on next.
+            if (led->freq_interp       != CONFIG_INTERP_NONE) SWEEP_APPEND(" freq:%.1f->%.1fHz/%ums",  led->frequency, nb->frequency, (unsigned)dur);
+            if (led->duty_interp       != CONFIG_INTERP_NONE) SWEEP_APPEND(" duty:%d->%d%%/%ums",      led->duty_cycle, nb->duty_cycle, (unsigned)dur);
+            if ((led->brightness_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(led->brightness_interp)) SWEEP_APPEND(" bri:%d->%d%%/%ums",       led->brightness, nb->brightness, (unsigned)dur);
+            if (led->r_interp          != CONFIG_INTERP_NONE) SWEEP_APPEND(" R:%d->%d/%ums",           led->r, nb->r, (unsigned)dur);
+            if (led->g_interp          != CONFIG_INTERP_NONE) SWEEP_APPEND(" G:%d->%d/%ums",           led->g, nb->g, (unsigned)dur);
+            if (led->b_interp          != CONFIG_INTERP_NONE) SWEEP_APPEND(" B:%d->%d/%ums",           led->b, nb->b, (unsigned)dur);
             break;
         }
 
@@ -130,10 +133,11 @@ static void log_entry_summary(const config_timeline_t *tl, size_t idx)
         const config_audio_entry_t *nb = find_next_audio_for_bit(tl, idx, ch_bit);
         if (nb) {
             uint32_t dur = nb->time_ms - au->time_ms;
-            if (nb->freq_interp   != CONFIG_INTERP_NONE) SWEEP_APPEND(" freq:%.1f->%.1fHz/%ums", au->frequency, nb->frequency, (unsigned)dur);
-            if (nb->pan_interp    != CONFIG_INTERP_NONE) SWEEP_APPEND(" pan:%.0f->%.0f/%ums",    au->pan, nb->pan, (unsigned)dur);
-            if (nb->volume_interp != CONFIG_INTERP_NONE) SWEEP_APPEND(" vol:%.0f->%.0f/%ums",    au->volume, nb->volume, (unsigned)dur);
-            if (nb->mod_interp    != CONFIG_INTERP_NONE) SWEEP_APPEND(" mod:%.1f->%.1f/%ums",    au->modulation, nb->modulation, (unsigned)dur);
+            // NEW CONVENTION: prefix lives on THIS entry; target value lives on next.
+            if (au->freq_interp   != CONFIG_INTERP_NONE) SWEEP_APPEND(" freq:%.1f->%.1fHz/%ums", au->frequency, nb->frequency, (unsigned)dur);
+            if (au->pan_interp    != CONFIG_INTERP_NONE) SWEEP_APPEND(" pan:%.0f->%.0f/%ums",    au->pan, nb->pan, (unsigned)dur);
+            if (au->volume_interp != CONFIG_INTERP_NONE) SWEEP_APPEND(" vol:%.0f->%.0f/%ums",    au->volume, nb->volume, (unsigned)dur);
+            if (au->mod_interp    != CONFIG_INTERP_NONE) SWEEP_APPEND(" mod:%.1f->%.1f/%ums",    au->modulation, nb->modulation, (unsigned)dur);
         }
 
         ESP_LOGI(TAG, "  AUDIO[ch=%u] t=%u  freq=%.1fHz pan=%.0f vol=%.0f mod=%.1f%s%s",
@@ -877,6 +881,23 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
     led_entry->duty_cycle = (uint8_t)duty_f;
     led_entry->brightness = (uint8_t)bright_f;
 
+    // Capture triangle modulation params (end + period) for fields that use ^.
+    if (config_interp_is_modulation(led_entry->freq_interp)) {
+        parse_mod_extras(tokens[1], &led_entry->freq_mod_end, &led_entry->freq_mod_period_ms);
+    }
+    if (config_interp_is_modulation(led_entry->duty_interp)) {
+        float end_f, period_f;
+        parse_mod_extras(tokens[2], &end_f, &period_f);
+        led_entry->duty_mod_end       = (uint8_t)end_f;
+        led_entry->duty_mod_period_ms = (uint32_t)period_f;
+    }
+    if (config_interp_is_modulation(led_entry->brightness_interp)) {
+        float end_f, period_f;
+        parse_mod_extras(tokens[3], &end_f, &period_f);
+        led_entry->bright_mod_end       = (uint8_t)end_f;
+        led_entry->bright_mod_period_ms = (uint32_t)period_f;
+    }
+
     if (token_count == 8) {
         // Canonical 8-token format: R G B carry independent interp prefixes
         float r_f = parse_value_with_interpolation(tokens[4], &led_entry->r_interp);
@@ -886,6 +907,24 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
         led_entry->g = clamp_u8_field(g_f, "G");
         led_entry->b = clamp_u8_field(b_f, "B");
         led_entry->channel_mask = (uint8_t)atoi(tokens[7]);
+
+        // Triangle extras for color channels
+        float end_f, period_f;
+        if (config_interp_is_modulation(led_entry->r_interp)) {
+            parse_mod_extras(tokens[4], &end_f, &period_f);
+            led_entry->r_mod_end = clamp_u8_field(end_f, "R^end");
+            led_entry->r_mod_period_ms = (uint32_t)period_f;
+        }
+        if (config_interp_is_modulation(led_entry->g_interp)) {
+            parse_mod_extras(tokens[5], &end_f, &period_f);
+            led_entry->g_mod_end = clamp_u8_field(end_f, "G^end");
+            led_entry->g_mod_period_ms = (uint32_t)period_f;
+        }
+        if (config_interp_is_modulation(led_entry->b_interp)) {
+            parse_mod_extras(tokens[6], &end_f, &period_f);
+            led_entry->b_mod_end = clamp_u8_field(end_f, "B^end");
+            led_entry->b_mod_period_ms = (uint32_t)period_f;
+        }
     } else {
         // Legacy 5-token format: default RGB = full white; no interp on colors
         led_entry->r = 255;
@@ -928,6 +967,20 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
 
     // Parse modulation with interpolation support
     audio_entry->modulation = parse_value_with_interpolation(tokens[4], &audio_entry->mod_interp);
+
+    // Capture triangle modulation extras for any field that uses ^.
+    if (config_interp_is_modulation(audio_entry->freq_interp)) {
+        parse_mod_extras(tokens[1], &audio_entry->freq_mod_end, &audio_entry->freq_mod_period_ms);
+    }
+    if (config_interp_is_modulation(audio_entry->pan_interp)) {
+        parse_mod_extras(tokens[2], &audio_entry->pan_mod_end, &audio_entry->pan_mod_period_ms);
+    }
+    if (config_interp_is_modulation(audio_entry->volume_interp)) {
+        parse_mod_extras(tokens[3], &audio_entry->vol_mod_end, &audio_entry->vol_mod_period_ms);
+    }
+    if (config_interp_is_modulation(audio_entry->mod_interp)) {
+        parse_mod_extras(tokens[4], &audio_entry->mod_mod_end, &audio_entry->mod_mod_period_ms);
+    }
 
     // Parse channel (optional, defaults to 0)
     if (token_count >= 6) {
@@ -1031,6 +1084,20 @@ static esp_err_t parse_bg_line(const char *tokens[], size_t token_count,
     return ESP_OK;
 }
 
+/*
+ * Parse a numeric field that may carry an interpolation prefix:
+ *   >value             — linear ramp from this entry to next entry
+ *   *value             — quadratic ease from this entry to next entry
+ *   ^start:end:period  — triangle wave (linear up/down) start..end period ms
+ *   ~start:end:period  — sine wave start..end period ms
+ *   /start:end:period  — sawtooth (ramp from start to end, jumps back)
+ *   \start:end:period  — reverse sawtooth (end < start typically)
+ *   _start:end:period  — square wave (half period at start, half at end)
+ *   value              — bare value, no interpolation
+ *
+ * For modulation prefixes, the function returns `start`. The caller must
+ * extract `end` and `period` via parse_mod_extras() if they need them.
+ */
 static float parse_value_with_interpolation(const char *str, config_interpolation_t *interp)
 {
     if (!str || !interp) {
@@ -1038,17 +1105,49 @@ static float parse_value_with_interpolation(const char *str, config_interpolatio
         return 0.0f;
     }
 
-    // Check for interpolation prefixes
-    if (str[0] == '>') {
-        *interp = CONFIG_INTERP_LINEAR;
-        return atof(&str[1]);
-    } else if (str[0] == '*') {
-        *interp = CONFIG_INTERP_QUADRATIC;
-        return atof(&str[1]);
-    } else {
-        *interp = CONFIG_INTERP_NONE;
-        return atof(str);
+    switch (str[0]) {
+        case '>':  *interp = CONFIG_INTERP_LINEAR;    return atof(&str[1]);
+        case '*':  *interp = CONFIG_INTERP_QUADRATIC; return atof(&str[1]);
+        case '^':  *interp = CONFIG_INTERP_TRIANGLE;  return atof(&str[1]);
+        case '~':  *interp = CONFIG_INTERP_SINE;      return atof(&str[1]);
+        case '/':  *interp = CONFIG_INTERP_SAW_UP;    return atof(&str[1]);
+        case '\\': *interp = CONFIG_INTERP_SAW_DOWN;  return atof(&str[1]);
+        case '_':  *interp = CONFIG_INTERP_SQUARE;    return atof(&str[1]);
+        default:   *interp = CONFIG_INTERP_NONE;      return atof(str);
     }
+}
+
+/*
+ * Extract the second and third colon-separated values from a modulation
+ * token like "^50:75:1000" or "~50:75:1000". Works for any modulation
+ * prefix (^, ~, /, \, _) — the leading prefix character is skipped.
+ * Defaults: end = start (degenerate, no modulation), period = 1000 ms.
+ * Caller has already verified the interp is a modulation type.
+ */
+static void parse_mod_extras(const char *str, float *out_end, float *out_period_ms)
+{
+    if (!str || str[0] == '\0') {
+        if (out_end)        *out_end = 0.0f;
+        if (out_period_ms)  *out_period_ms = 1000.0f;
+        return;
+    }
+    // Skip the prefix character (any of ^~/\_); body starts at str+1.
+    const char *body = str + 1;
+    const char *p = strchr(body, ':');
+    if (!p) {
+        // No `:end` — degenerate, leave defaults
+        if (out_end)        *out_end = atof(body);
+        if (out_period_ms)  *out_period_ms = 1000.0f;
+        return;
+    }
+    if (out_end) *out_end = atof(p + 1);
+    const char *p2 = strchr(p + 1, ':');
+    if (!p2) {
+        // No `:period` — use default
+        if (out_period_ms) *out_period_ms = 1000.0f;
+        return;
+    }
+    if (out_period_ms) *out_period_ms = atof(p2 + 1);
 }
 
 static void timeline_timing_callback(uint64_t timestamp_us, void *user_data)
@@ -1518,6 +1617,36 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             ESP_LOGD(TAG, "Audio channel %d %s successfully", audio->channel,
                      ch_active_after ? "updated" : "started");
 
+            // ---- Modulation wiring (new in mod_engine phase) ----
+            // Stop any previously-active modulations on this channel's fields.
+            // A new entry always preempts whatever was running, regardless of
+            // whether the new entry is a step, sweep, or new modulation.
+            mod_engine_stop_audio(audio->channel, MOD_AUDIO_FREQ);
+            mod_engine_stop_audio(audio->channel, MOD_AUDIO_PAN);
+            mod_engine_stop_audio(audio->channel, MOD_AUDIO_VOLUME);
+            mod_engine_stop_audio(audio->channel, MOD_AUDIO_MOD);
+            // Start new modulations for fields that use a modulation prefix.
+            if (config_interp_is_modulation(audio->freq_interp)) {
+                mod_engine_start_audio(audio->channel, MOD_AUDIO_FREQ,
+                    (mod_wave_t)mod_wave_from_interp(audio->freq_interp),
+                    audio->frequency, audio->freq_mod_end, (uint32_t)audio->freq_mod_period_ms);
+            }
+            if (config_interp_is_modulation(audio->pan_interp)) {
+                mod_engine_start_audio(audio->channel, MOD_AUDIO_PAN,
+                    (mod_wave_t)mod_wave_from_interp(audio->pan_interp),
+                    audio->pan, audio->pan_mod_end, (uint32_t)audio->pan_mod_period_ms);
+            }
+            if (config_interp_is_modulation(audio->volume_interp)) {
+                mod_engine_start_audio(audio->channel, MOD_AUDIO_VOLUME,
+                    (mod_wave_t)mod_wave_from_interp(audio->volume_interp),
+                    audio->volume, audio->vol_mod_end, (uint32_t)audio->vol_mod_period_ms);
+            }
+            if (config_interp_is_modulation(audio->mod_interp)) {
+                mod_engine_start_audio(audio->channel, MOD_AUDIO_MOD,
+                    (mod_wave_t)mod_wave_from_interp(audio->mod_interp),
+                    audio->modulation, audio->mod_mod_end, (uint32_t)audio->mod_mod_period_ms);
+            }
+
             // ---- Sweep wiring (substep 3.4) ----
             // For each sweep-capable parameter, look ahead to the next entry
             // on the SAME channel to determine the window duration and target.
@@ -1532,24 +1661,29 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 // caused the original 10-second bug.
                 uint64_t dur_samples = ((uint64_t)window_ms * AUDIO_GEN_SAMPLE_RATE) / 1000ULL;
 
+                // NEW CONVENTION (animate-on-start): the interp flag lives on
+                // THIS entry (audio->X_interp), not on the next entry. Means:
+                // "starting at this entry, run a sweep that reaches the next
+                // entry's value over the time window to next". The VALUES
+                // still come from this entry (start) and next entry (target).
                 // Frequency sweep
-                if (next->freq_interp != CONFIG_INTERP_NONE) {
+                if ((audio->freq_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(audio->freq_interp)) {
                     esp_err_t sw;
                     if (lock_held) {
                         sw = audio_generator_start_sweep_locked(
                             audio->channel, AUDIO_PARAM_FREQUENCY,
                             audio->frequency, next->frequency,
-                            dur_samples, interp_to_audio_curve(next->freq_interp));
+                            dur_samples, interp_to_audio_curve(audio->freq_interp));
                     } else {
                         sw = audio_generator_start_sweep(
                             audio->channel, AUDIO_PARAM_FREQUENCY,
                             audio->frequency, next->frequency,
-                            dur_samples, interp_to_audio_curve(next->freq_interp));
+                            dur_samples, interp_to_audio_curve(audio->freq_interp));
                     }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=FREQ %.2f→%.2f over %ums curve=%d",
                              audio->channel, audio->frequency, next->frequency,
-                             window_ms, (int)next->freq_interp);
+                             window_ms, (int)audio->freq_interp);
 #endif
                     if (sw != ESP_OK) {
                         ESP_LOGW(TAG, "freq sweep start failed ch=%d: %s",
@@ -1558,24 +1692,24 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 }
 
                 // Amplitude sweep — volume 0-100 → amplitude 0.0-1.0
-                if (next->volume_interp != CONFIG_INTERP_NONE) {
+                if ((audio->volume_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(audio->volume_interp)) {
                     esp_err_t sw;
                     if (lock_held) {
                         sw = audio_generator_start_sweep_locked(
                             audio->channel, AUDIO_PARAM_AMPLITUDE,
                             audio->volume / 100.0f, next->volume / 100.0f,
-                            dur_samples, interp_to_audio_curve(next->volume_interp));
+                            dur_samples, interp_to_audio_curve(audio->volume_interp));
                     } else {
                         sw = audio_generator_start_sweep(
                             audio->channel, AUDIO_PARAM_AMPLITUDE,
                             audio->volume / 100.0f, next->volume / 100.0f,
-                            dur_samples, interp_to_audio_curve(next->volume_interp));
+                            dur_samples, interp_to_audio_curve(audio->volume_interp));
                     }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=AMP %.2f→%.2f over %ums curve=%d",
                              audio->channel,
                              audio->volume / 100.0f, next->volume / 100.0f,
-                             window_ms, (int)next->volume_interp);
+                             window_ms, (int)audio->volume_interp);
 #endif
                     if (sw != ESP_OK) {
                         ESP_LOGW(TAG, "amp sweep start failed ch=%d: %s",
@@ -1584,24 +1718,24 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 }
 
                 // Pan sweep — pan -100/+100 → -1.0/+1.0
-                if (next->pan_interp != CONFIG_INTERP_NONE) {
+                if ((audio->pan_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(audio->pan_interp)) {
                     esp_err_t sw;
                     if (lock_held) {
                         sw = audio_generator_start_sweep_locked(
                             audio->channel, AUDIO_PARAM_PAN,
                             audio->pan / 100.0f, next->pan / 100.0f,
-                            dur_samples, interp_to_audio_curve(next->pan_interp));
+                            dur_samples, interp_to_audio_curve(audio->pan_interp));
                     } else {
                         sw = audio_generator_start_sweep(
                             audio->channel, AUDIO_PARAM_PAN,
                             audio->pan / 100.0f, next->pan / 100.0f,
-                            dur_samples, interp_to_audio_curve(next->pan_interp));
+                            dur_samples, interp_to_audio_curve(audio->pan_interp));
                     }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=PAN %.2f→%.2f over %ums curve=%d",
                              audio->channel,
                              audio->pan / 100.0f, next->pan / 100.0f,
-                             window_ms, (int)next->pan_interp);
+                             window_ms, (int)audio->pan_interp);
 #endif
                     if (sw != ESP_OK) {
                         ESP_LOGW(TAG, "pan sweep start failed ch=%d: %s",
@@ -1610,24 +1744,24 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 }
 
                 // Modulation frequency sweep
-                if (next->mod_interp != CONFIG_INTERP_NONE) {
+                if ((audio->mod_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(audio->mod_interp)) {
                     esp_err_t sw;
                     if (lock_held) {
                         sw = audio_generator_start_sweep_locked(
                             audio->channel, AUDIO_PARAM_MOD_FREQ,
                             audio->modulation, next->modulation,
-                            dur_samples, interp_to_audio_curve(next->mod_interp));
+                            dur_samples, interp_to_audio_curve(audio->mod_interp));
                     } else {
                         sw = audio_generator_start_sweep(
                             audio->channel, AUDIO_PARAM_MOD_FREQ,
                             audio->modulation, next->modulation,
-                            dur_samples, interp_to_audio_curve(next->mod_interp));
+                            dur_samples, interp_to_audio_curve(audio->mod_interp));
                     }
 #ifdef CONFIG_TIMELINE_DEBUG
                     ESP_LOGI(TAG, "Timeline sweep: ch=%d param=MOD %.2f→%.2f over %ums curve=%d",
                              audio->channel,
                              audio->modulation, next->modulation,
-                             window_ms, (int)next->mod_interp);
+                             window_ms, (int)audio->mod_interp);
 #endif
                     if (sw != ESP_OK) {
                         ESP_LOGW(TAG, "mod sweep start failed ch=%d: %s",
@@ -1706,7 +1840,49 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         }
         /* led_ret stays ESP_OK — re-acquire lock and return via led_done below */
     } else {
-    /* ---------- freq > 0: sweep wiring + LED matrix dispatch ---------- */
+    /* ---------- freq > 0: modulation + sweep wiring + LED dispatch ---------- */
+
+    // ---- Modulation wiring (mod_engine phase) ----
+    // Preempt any active modulations on this entry's channel-mask fields,
+    // then start new ones for fields that carry a modulation prefix.
+    // Modulation is mask-wide and self-contained — doesn't depend on the
+    // bucketing below (which is for sweep target value lookup).
+    mod_engine_stop_led(led->channel_mask, MOD_LED_FREQ);
+    mod_engine_stop_led(led->channel_mask, MOD_LED_DUTY);
+    mod_engine_stop_led(led->channel_mask, MOD_LED_BRIGHT);
+    mod_engine_stop_led(led->channel_mask, MOD_LED_R);
+    mod_engine_stop_led(led->channel_mask, MOD_LED_G);
+    mod_engine_stop_led(led->channel_mask, MOD_LED_B);
+    if (config_interp_is_modulation(led->freq_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_FREQ,
+            (mod_wave_t)mod_wave_from_interp(led->freq_interp),
+            led->frequency, led->freq_mod_end, (uint32_t)led->freq_mod_period_ms);
+    }
+    if (config_interp_is_modulation(led->duty_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_DUTY,
+            (mod_wave_t)mod_wave_from_interp(led->duty_interp),
+            (float)led->duty_cycle, (float)led->duty_mod_end, led->duty_mod_period_ms);
+    }
+    if (config_interp_is_modulation(led->brightness_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_BRIGHT,
+            (mod_wave_t)mod_wave_from_interp(led->brightness_interp),
+            (float)led->brightness, (float)led->bright_mod_end, led->bright_mod_period_ms);
+    }
+    if (config_interp_is_modulation(led->r_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_R,
+            (mod_wave_t)mod_wave_from_interp(led->r_interp),
+            (float)led->r, (float)led->r_mod_end, led->r_mod_period_ms);
+    }
+    if (config_interp_is_modulation(led->g_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_G,
+            (mod_wave_t)mod_wave_from_interp(led->g_interp),
+            (float)led->g, (float)led->g_mod_end, led->g_mod_period_ms);
+    }
+    if (config_interp_is_modulation(led->b_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_B,
+            (mod_wave_t)mod_wave_from_interp(led->b_interp),
+            (float)led->b, (float)led->b_mod_end, led->b_mod_period_ms);
+    }
 
     // ---- Sweep wiring (substep 3.5, bucketed) ----
     // Group bits in channel_mask by their next-entry pointer. Bits sharing the
@@ -1760,40 +1936,43 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         sweep_spec.duration_ms = next_bit->time_ms - led->time_ms;
         bool bucket_has_sweep = false;
 
-        if (next_bit->freq_interp != CONFIG_INTERP_NONE) {
+        // NEW CONVENTION (animate-on-start): the interp flag lives on
+        // led (this entry), not next_bit (the next entry). Start value
+        // is led->X, target is next_bit->X. See audio sweep block above.
+        if ((led->freq_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(led->freq_interp)) {
             sweep_spec.freq_milliHz_start  = (uint32_t)(led->frequency  * 1000.0f);
             sweep_spec.freq_milliHz_target = (uint32_t)(next_bit->frequency * 1000.0f);
-            sweep_spec.freq_curve          = interp_to_led_curve(next_bit->freq_interp);
+            sweep_spec.freq_curve          = interp_to_led_curve(led->freq_interp);
             bucket_has_sweep = true;
         }
-        if (next_bit->duty_interp != CONFIG_INTERP_NONE) {
+        if ((led->duty_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(led->duty_interp)) {
             sweep_spec.duty_start   = led->duty_cycle;
             sweep_spec.duty_target  = next_bit->duty_cycle;
-            sweep_spec.duty_curve   = interp_to_led_curve(next_bit->duty_interp);
+            sweep_spec.duty_curve   = interp_to_led_curve(led->duty_interp);
             bucket_has_sweep = true;
         }
-        if (next_bit->brightness_interp != CONFIG_INTERP_NONE) {
+        if ((led->brightness_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(led->brightness_interp)) {
             sweep_spec.bright_start  = led->brightness;
             sweep_spec.bright_target = next_bit->brightness;
-            sweep_spec.bright_curve  = interp_to_led_curve(next_bit->brightness_interp);
+            sweep_spec.bright_curve  = interp_to_led_curve(led->brightness_interp);
             bucket_has_sweep = true;
         }
-        if (next_bit->r_interp != CONFIG_INTERP_NONE) {
+        if ((led->r_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(led->r_interp)) {
             sweep_spec.r_start  = led->r;
             sweep_spec.r_target = next_bit->r;
-            sweep_spec.r_curve  = interp_to_led_curve(next_bit->r_interp);
+            sweep_spec.r_curve  = interp_to_led_curve(led->r_interp);
             bucket_has_sweep = true;
         }
-        if (next_bit->g_interp != CONFIG_INTERP_NONE) {
+        if ((led->g_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(led->g_interp)) {
             sweep_spec.g_start  = led->g;
             sweep_spec.g_target = next_bit->g;
-            sweep_spec.g_curve  = interp_to_led_curve(next_bit->g_interp);
+            sweep_spec.g_curve  = interp_to_led_curve(led->g_interp);
             bucket_has_sweep = true;
         }
-        if (next_bit->b_interp != CONFIG_INTERP_NONE) {
+        if ((led->b_interp) != CONFIG_INTERP_NONE && !config_interp_is_modulation(led->b_interp)) {
             sweep_spec.b_start  = led->b;
             sweep_spec.b_target = next_bit->b;
-            sweep_spec.b_curve  = interp_to_led_curve(next_bit->b_interp);
+            sweep_spec.b_curve  = interp_to_led_curve(led->b_interp);
             bucket_has_sweep = true;
         }
 

@@ -8,6 +8,7 @@
 #include "audio_manager.h"
 #include "audio_generator.h"
 #include "audio_test.h"
+#include "mod_engine.h"
 #include "wifi_manager.h"
 #include "web_server.h"
 #include "led_matrix_example.h"
@@ -224,6 +225,15 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize audio manager: %s", esp_err_to_name(ret));
         return;
+    }
+
+    // Initialize modulation engine (runtime support for .ledc ^~/\_ prefixes).
+    // Spawns a low-priority polling task on core 1; harmless if no timeline
+    // entries use modulation prefixes.
+    ret = mod_engine_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "mod_engine_init failed: %s — timeline modulation prefixes "
+                 "will be no-ops", esp_err_to_name(ret));
     }
 
     // Initialize background audio player (Plan 006).

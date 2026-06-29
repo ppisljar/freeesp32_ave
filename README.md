@@ -191,20 +191,197 @@ idf.py menuconfig           # pick LED backend, set GPIO mapping
 idf.py build flash monitor
 ```
 
-## Timeline format
+## Timeline format (`.ledc` files)
 
-Sessions are described in plain-text `.led` files. Use
-[`freeesp32_ave_generator`](https://github.com/ppisljar/freeesp32_ave_generator)
-for a browser-based graphical editor that produces them.
+Sessions are described in plain-text `.ledc` files (legacy `.led` also
+accepted). Each line is one of: a comment, an LED command, an audio
+command, or a background-audio command. The web UI on the ESP32 and
+the [`freeesp32_ave_generator`](https://github.com/ppisljar/freeesp32_ave_generator)
+graphical editor both produce this format.
 
-Quick example:
+### General syntax rules
+
+- One command per line. Fields are whitespace-separated (spaces or tabs).
+- Lines starting with `#` are comments. Inline `# ...` after a command
+  is also a comment.
+- Blank lines are ignored.
+- Numeric values are decimal — integer or floating-point as appropriate.
+- Timestamps are absolute milliseconds from session start (t=0).
+- Commands within a file do **not** need to be sorted by time — the
+  parser orders them. Multiple commands sharing the same timestamp fire
+  in the same dispatch cycle.
+
+### LED commands (no prefix)
+
+LED commands change the flicker / brightness / color of one or more LED
+channels at a specific time. Two formats are accepted:
+
+**Canonical 8-token form:**
 
 ```
-# time(ms)  freq(Hz)  duty(%)  brightness(%)  channel
-1000        10.0      50       75             0
-2000        >40.0     50       100            1     # > = linear ramp
-A1500       binaural  40.0     6.0                  # 40 Hz base, 6 Hz beat
+time  freq  duty  bright  R  G  B  mask
 ```
+
+| Field | Range | Meaning |
+|---|---|---|
+| `time` | 0..N ms | Absolute timestamp |
+| `freq` | 0.01..500 Hz | LED flicker frequency. `0` = LED stays at solid `bright` level (no flicker). |
+| `duty` | 0..100 % | Duty cycle within each flicker period. 50 = symmetric on/off. |
+| `bright` | 0..100 % | Peak brightness during the "on" phase of the flicker. |
+| `R` `G` `B` | 0..255 each | LED color, used by NeoPixel / DotStar backends. Ignored by the DIRECT backend (monochrome PWM). |
+| `mask` | 0..255 | Bitmask of which logical channels (CH1..CH8) to update. `bit N = channel N+1`. `mask=1` = CH1 only; `mask=3` = CH1+CH2; `mask=255` = all 8 channels. |
+
+**Legacy 5-token form** (no color, single channel):
+
+```
+time  freq  duty  bright  channel
+```
+
+`channel` is the 1-indexed channel number (1..8). RGB defaults to white
+(255,255,255). The mask is derived as `1 << (channel - 1)`. Useful for
+quick monochrome LED scripts; for richer behavior use the 8-token form.
+
+### Audio commands (`A` prefix)
+
+Audio commands start a tone / noise on a synthesis channel, or update
+parameters of a channel already running. Format is positional with
+optional trailing fields:
+
+```
+A  time  freq  pan  vol  mod  channel  [freq_r]  [wave_type]
+```
+
+| Field | Range | Meaning |
+|---|---|---|
+| `time` | 0..N ms | Absolute timestamp |
+| `freq` | 0..20000 Hz | Carrier frequency (left ear for binaural; ignored for noise types). `0` stops the channel. |
+| `pan` | -100..+100 | Stereo position. -100 = full left, 0 = center, +100 = full right. |
+| `vol` | 0..100 % | Channel volume. |
+| `mod` | 0..N Hz | Amplitude-modulation rate (isochronic tone). `0` = continuous tone. |
+| `channel` | 1..16 | Audio channel index. Each channel is an independent oscillator. |
+| `freq_r` | 0 or 1..20000 Hz | **Optional.** Right-ear carrier frequency for **binaural beats**. `0` = same as `freq` (mono). When `freq_r != 0`, the channel becomes binaural: left ear gets `freq`, right ear gets `freq_r`, and the brain perceives a beat at `|freq - freq_r|` Hz. |
+| `wave_type` | 0..6 | **Optional.** Waveform: `0`=sine (default), `1`=square, `2`=triangle, `3`=sawtooth, `4`=white noise, `5`=pink noise, `6`=brown noise. Noise types ignore `freq` and `freq_r`. |
+
+**Important quirk:** the parser is positional, so to specify `wave_type`
+you must also include `freq_r` (use `0` if not binaural). Example for
+20 % white noise on channel 9:
+
+```
+A  0  0  0  20  0  9  0  4
+```
+
+### BG command (`BG` prefix)
+
+Plays a background audio file continuously for the entire session,
+mixed underneath the synthesized channels. Not time-scheduled — it's
+a global timeline property applied from t=0 to the end. Only one `BG`
+line per file is honored (last one wins, with a warning).
+
+```
+BG  <url>  <pan>  <loudness>
+```
+
+| Field | Range | Meaning |
+|---|---|---|
+| `url` | string | Source location. Three schemes: `http://host:port/path`, `https://...`, or `sdcard://path`. The URL **must point to a WAV file** — the ESP32 has no MP3 decoder. The generator server auto-transcodes MP3 → WAV when you request a `.wav` URL whose source is an `.mp3` file (i.e. `wav/river.wav` works even if only `wav/river.mp3` exists on disk). |
+| `pan` | -100..+100 | Stereo position. |
+| `loudness` | 0..100 % | Background mix level. Typical values: 20-40 for ambient sound under binaural tracks. |
+
+Example:
+
+```
+BG  http://10.0.0.213:8000/wav/river.wav  0  30
+```
+
+### Interpolation prefixes — animate-on-start convention
+
+Any numeric field may be prefixed with a special character. **The prefix
+lives on the START entry of a transition, not the target entry** — i.e.
+the prefix tells the engine "starting at this entry, do X going forward".
+There are two families:
+
+**One-shot ramps** — transition smoothly from this entry's value to the
+NEXT entry's value (for the same channel/mask), over the time window
+between the two entries:
+
+| Prefix | Curve | Example |
+|---|---|---|
+| `>` | Linear | `>20` then `30` at +1000ms = linear ramp 20→30 over 1 second |
+| `*` | Quadratic | `*20` then `30` at +1000ms = quadratic ease 20→30 over 1 second |
+| (none) | Step | Instant step to the value at the entry's timestamp. |
+
+**Periodic modulation** — self-contained oscillation that ignores the
+next entry and runs continuously until a new entry preempts it. All
+five share the same `prefix start:end:period_ms` syntax. The wave runs
+its first half-cycle from `start` to `end` over `period_ms/2`, then
+back to `start`, repeating:
+
+| Prefix | Wave | Mnemonic | Example |
+|---|---|---|---|
+| `^` | Triangle (linear up/down) | Caret = triangle peak | `^50:75:1000` = triangle 50↔75 with 1s period |
+| `~` | Sine (smooth) | Tilde = sine wave shape | `~50:75:1000` = smooth oscillation 50↔75 |
+| `/` | Sawtooth (ramp up) | Forward slash = ramp up | `/0:100:2000` = ramp 0→100 over 2s then jump back to 0 |
+| `\` | Reverse sawtooth | Backslash = ramp down | `\100:0:2000` = ramp 100→0 over 2s then jump back to 100 |
+| `_` | Square | Underscore = flat | `_50:75:1000` = half period at 50, half at 75 |
+
+Example — fade brightness from 100 to 0 over 60 seconds, then oscillate
+LED brightness 50↔75 with sine wave at 500 ms period:
+
+```
+0       1.0  50  >100  255 50 0  255       # ramp starts here, target = 0
+60000   1.0  50  0     255 50 0  255       # ramp ends here at brightness 0
+60500   1.0  50  ~50:75:500  255 50 0  255 # sine modulation begins here
+```
+
+**Runtime support status:** every modulation-capable field supports all
+5 wave shapes. The engine updates values at 100 Hz via per-field setters
+on the LED matrix and audio_generator layers.
+
+| Field | Backed by |
+|---|---|
+| LED brightness | `led_matrix_update_brightness_masked` |
+| LED frequency  | `led_matrix_update_frequency_masked` |
+| LED duty       | `led_matrix_update_duty_masked` |
+| LED R / G / B  | `led_matrix_update_color_{r,g,b}_masked` |
+| Audio frequency | `audio_generator_set_param(ch, AUDIO_PARAM_FREQUENCY, val)` |
+| Audio pan       | `audio_generator_set_param(ch, AUDIO_PARAM_PAN, val/100)` |
+| Audio volume    | `audio_generator_set_param(ch, AUDIO_PARAM_AMPLITUDE, val/100)` |
+| Audio mod freq  | `audio_generator_set_param(ch, AUDIO_PARAM_MOD_FREQ, val)` |
+
+**Implementation note**: 100 Hz update rate gives ~10ms timing jitter on
+modulation transitions. For modulation periods under ~200ms this becomes
+visible — the rising/falling edges of a square wave or the cusps of a
+triangle look "stepped" rather than smooth. Periods ≥ 500ms produce
+smooth-looking modulation. For audio modulation specifically, the 100 Hz
+update rate is fine for sub-Hz oscillations of any carrier; modulating
+a carrier at audio-rate frequencies isn't the intended use.
+
+### A complete, runnable example
+
+A 10-minute session with a binaural pair drifting from 12 Hz beat to
+7.83 Hz, amber LED flicker locked to the beat frequency on all
+channels, white noise underlay through channel 9, river-sound
+background:
+
+```
+# Background ambience
+BG http://10.0.0.213:8000/wav/river.wav  0  30
+
+# t = 0: start at 12 Hz beat, LED amber at 70 % duty / 60 % bright
+0        12     70  60  255 50 0  255
+A 0      105   -100  60  0  1            # left ear, binaural
+A 0      117    100  60  0  2            # right ear, beat = 12 Hz
+A 0        0      0  20  0  9  0  4      # white noise underlay
+
+# t = 10 min: ramp to 7.83 Hz (Schumann resonance)
+600000   >7.83  70  60  255 50 0  255
+A 600000  >107.085  -100  60  0  1
+A 600000  >114.915   100  60  0  2
+A 600000        0      0  20  0  9  0  4
+```
+
+Real-world session files (45-minute deep-meditation, etc.) live in
+`freeesp32_ave_generator/ledc/` — read those for richer examples.
 
 ## Related projects
 

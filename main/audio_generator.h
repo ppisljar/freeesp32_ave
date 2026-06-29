@@ -280,6 +280,13 @@ esp_err_t audio_generator_start_sweep(int channel, audio_param_t param,
  */
 esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *new_params);
 
+/* Set a single parameter on a running channel — used by the modulation
+ * engine (mod_engine.c). Cancels any active sweep on the same parameter
+ * and writes directly to the channel's current_X. fill_buffer picks up
+ * the new value on the next sample. */
+esp_err_t audio_generator_set_param(int channel, audio_param_t param, float value);
+esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, float value);
+
 /**
  * @brief Read the current interpolated right-channel frequency for a channel.
  *
