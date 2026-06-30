@@ -1,7 +1,7 @@
 // Top tab navigation. Four pages (home / live / reports / settings) toggled by
 // the menu; the active tab is reflected in the URL hash so reload and the
 // browser back/forward buttons work.
-const TABS = ['home', 'live', 'reports', 'settings'];
+const TABS = ['home', 'generator', 'live', 'reports', 'settings', 'firmware'];
 
 function show(tab) {
     if (!TABS.includes(tab)) tab = 'home';

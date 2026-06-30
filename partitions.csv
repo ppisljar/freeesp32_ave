@@ -1,7 +1,10 @@
-# ESP32 Audio Player partition table (4 MB flash)
-# Name,     Type, SubType, Offset,   Size,     Flags
-nvs,        data, nvs,     0x9000,   0x6000,
-phy_init,   data, phy,     0xf000,   0x1000,
-factory,    app,  factory, 0x10000,  0x177000,
-storage,    data, spiffs,  ,         0x180000,
-cfgfs,      data, spiffs,  ,         0x80000,
+# freeesp32_ave device partition table — 4 MB flash, dual-boot OTA.
+# Table at 0x8000; first partition at 0x9000. ota_0 = main app, ota_1 = OTA updater (esp32ota).
+# Name,    Type, SubType, Offset,    Size,     Flags
+nvs,       data, nvs,     0x9000,    0x4000,
+otadata,   data, ota,     0xd000,    0x2000,
+phy_init,  data, phy,     0xf000,    0x1000,
+ota_0,     app,  ota_0,   0x10000,   0x200000,
+ota_1,     app,  ota_1,   ,          0xB0000,
+storage,   data, spiffs,  ,          0x80000,
+cfgfs,     data, spiffs,  ,          0x80000,

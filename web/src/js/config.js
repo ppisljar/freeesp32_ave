@@ -3,6 +3,12 @@
 import { appConfig, showMessage } from './util.js';
 import { getCurrentConfigName } from './configstore.js';
 import { saveReport } from './reportstore.js';
+// Interpolation evaluators are shared with the Generator (gen/interp.js) so the
+// report path and the Generator agree on the math. Behavior is identical to the
+// previous in-file definitions.
+import {
+    parseValueInterp, audioStateAtTime, ledStateAtTime,
+} from './gen/interp.js';
 
 // Report-on-session-end. Rather than guessing when a session finishes, we
 // fetch the report when the live-control poll detects the timeline's
@@ -74,28 +80,8 @@ function parseConfigDurationMs(text) {
 // Mirrors the device-side interpolation: for each parameter on each
 // entry, find the active entry at time T and (if the next entry has
 // a '>' or '*' marker on that parameter) interpolate live value.
-function parseValueInterp(s) {
-    let interp = 'none';
-    if (s[0] === '>') { interp = 'linear'; s = s.slice(1); }
-    else if (s[0] === '*') { interp = 'quadratic'; s = s.slice(1); }
-    return { v: parseFloat(s), interp: interp };
-}
-function lerp(a, b, t) { return a + (b - a) * t; }
-function quad(a, b, t) {
-    const tt = t < 0.5 ? 2*t*t : 1 - 2*(1-t)*(1-t);
-    return a + (b - a) * tt;
-}
-function interpField(active, next, tMs, fname) {
-    if (!active[fname]) return null;
-    if (next && next[fname] && next[fname].interp !== 'none') {
-        const win = next.time - active.time;
-        if (win <= 0) return active[fname].v;
-        const p = Math.max(0, Math.min(1, (tMs - active.time) / win));
-        const fn = next[fname].interp === 'linear' ? lerp : quad;
-        return fn(active[fname].v, next[fname].v, p);
-    }
-    return active[fname].v;
-}
+// (parseValueInterp / lerp / quad / interpField / audioStateAtTime /
+//  ledStateAtTime now live in gen/interp.js and are imported above.)
 function parseConfigStructured(text) {
     const led = [], audio = [];
     for (const raw of text.split('\n')) {
@@ -142,41 +128,6 @@ function parseConfigStructured(text) {
         }
     }
     return { led: led, audio: audio };
-}
-function audioStateAtTime(audioEntries, tMs, channel) {
-    const seq = audioEntries.filter(e => e.channel === channel)
-                            .sort((a,b) => a.time - b.time);
-    let active = null, next = null;
-    for (let i = 0; i < seq.length; i++) {
-        if (seq[i].time <= tMs) { active = seq[i]; next = seq[i+1] || null; }
-        else break;
-    }
-    if (!active) return null;
-    return {
-        freq: interpField(active, next, tMs, 'freq'),
-        pan:  interpField(active, next, tMs, 'pan'),
-        vol:  interpField(active, next, tMs, 'vol'),
-        mod:  interpField(active, next, tMs, 'mod'),
-    };
-}
-function ledStateAtTime(ledEntries, tMs, ledCh) {
-    const bit = 1 << ledCh;
-    const seq = ledEntries.filter(e => e.mask & bit)
-                          .sort((a,b) => a.time - b.time);
-    let active = null, next = null;
-    for (let i = 0; i < seq.length; i++) {
-        if (seq[i].time <= tMs) { active = seq[i]; next = seq[i+1] || null; }
-        else break;
-    }
-    if (!active) return null;
-    return {
-        freq: interpField(active, next, tMs, 'freq'),
-        duty: interpField(active, next, tMs, 'duty'),
-        bri:  interpField(active, next, tMs, 'brightness'),
-        r:    interpField(active, next, tMs, 'r'),
-        g:    interpField(active, next, tMs, 'g'),
-        b:    interpField(active, next, tMs, 'b'),
-    };
 }
 function formatPressSnapshot(parsed, tMs) {
     const lines = [];

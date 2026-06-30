@@ -192,3 +192,50 @@ export function saveAsDialog() {
     });
     box.querySelector('#saveAsName').focus();
 }
+
+// ---- Generator-tab helpers (additive; do NOT touch the Home wiring) --------
+// The existing exports above are bound to the Home page's DOM ids
+// (exampleConfig / ledcDropdown / loadedFilename). The Generator tab owns its
+// own model + controls, so it needs DOM-agnostic access to the same per-source
+// list/load/save plumbing. These wrappers reuse the internal functions without
+// changing any existing behavior, keeping Option A (Home stays independent).
+
+// Returns a Promise of [{ src, label, names[] }] across all available sources.
+// A source that fails to list resolves to names:[] (with an `error` flag).
+export function fetchConfigGroups() {
+    const sources = [
+        ['generator', listGenerator()],
+        ['spiffs', listSpiffs()],
+        ['local', listLocal()],
+    ];
+    return Promise.allSettled(sources.map(s => s[1])).then(results => {
+        const groups = [];
+        results.forEach((res, i) => {
+            const src = sources[i][0];
+            if (src === 'generator' && res.status === 'fulfilled' && res.value === null) return; // no URL
+            if (res.status === 'fulfilled' && res.value) {
+                lastLists[src] = res.value;
+                groups.push({ src, label: SRC_LABEL[src], names: res.value });
+            } else {
+                lastLists[src] = [];
+                groups.push({ src, label: SRC_LABEL[src], names: [], error: true });
+            }
+        });
+        return groups;
+    });
+}
+
+// Load raw text for a given source/name (no DOM side effects).
+export function loadConfigText(src, name) {
+    return loadFromSource(src, name);
+}
+
+// Save text to a source/name; validates the filename against NAME_RE.
+export function saveConfigText(src, name, body) {
+    if (!NAME_RE.test(name)) {
+        return Promise.reject(new Error('Invalid filename. Use [A-Za-z0-9._-] and end in .ledc'));
+    }
+    return saveToSource(src, name, body);
+}
+
+export function isValidConfigName(name) { return NAME_RE.test(name); }

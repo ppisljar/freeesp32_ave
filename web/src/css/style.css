@@ -54,12 +54,136 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .ctrl-row .field input:disabled, .ctrl-row .field input[type="color"]:disabled { opacity: 0.35; cursor: not-allowed; }
 .ctrl-row.locked .label::after { content: ' \1f517'; font-size: 10px; }
 
+/* ---- Generator tab -------------------------------------------------------- */
+.gen-subtabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; border-bottom: 1px solid #e0e0e0; }
+.gen-subtab { background: #f0f0f0; color: #555; border: 1px solid #ddd; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 14px; margin: 0; font-size: 13px; }
+.gen-subtab:hover { background: #e6e6e6; }
+.gen-subtab.active { background: #007bff; color: #fff; border-color: #007bff; }
+.gen-store { margin: 10px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 4px; }
+.gen-transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.gen-meter { font-size: 12px; color: #666; font-family: monospace; margin-left: 8px; }
+.gen-meter.has-warn { color: #8a6d00; }
+.gen-meter.has-error { color: #b21f2d; font-weight: bold; }
+.gen-viewarea { background: #f7f9fc; border: 1px dashed #c3d0e0; border-radius: 4px; padding: 14px; font-size: 13px; color: #5a6b80; }
+.gen-preview { background: #1e1e1e; color: #d4d4d4; border-radius: 4px; padding: 12px; font-family: monospace; font-size: 12px; white-space: pre; overflow: auto; max-height: 360px; margin: 0; }
+
+/* ---- Generator: Text view ------------------------------------------------- */
+.gen-textview { display: flex; flex-direction: column; gap: 6px; }
+.gen-text-head { display: flex; align-items: center; gap: 8px; min-height: 20px; }
+.gen-badge { font-size: 12px; font-family: monospace; padding: 2px 8px; border-radius: 10px; border: 1px solid transparent; }
+.gen-badge-ok    { color: #1a7f37; background: #eaf6ec; border-color: #b6e0bf; }
+.gen-badge-warn  { color: #8a6d00; background: #fdf6e3; border-color: #ecd9a0; }
+.gen-badge-error { color: #b21f2d; background: #fdeced; border-color: #f2bcc1; font-weight: bold; }
+
+/* Editor = a left gutter (line numbers + markers) next to the textarea. They
+   share the exact same font/line-height so rows line up; both scroll in sync. */
+.gen-text-editor { display: flex; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; background: #1e1e1e; }
+.gen-gutter {
+    flex: 0 0 auto; min-width: 42px; text-align: right;
+    padding: 10px 6px 10px 8px; margin: 0;
+    background: #252526; color: #6a737d;
+    font-family: monospace; font-size: 13px; line-height: 1.5;
+    white-space: pre; overflow: hidden; user-select: none;
+    border-right: 1px solid #333;
+}
+.gen-gutter-line { display: block; }
+.gen-gutter-line.has-error { color: #f48771; font-weight: bold; }
+.gen-gutter-line.has-warn  { color: #e2c08d; }
+.gen-textarea {
+    flex: 1 1 auto; width: 100%; height: 280px; margin: 0;
+    padding: 10px 8px; border: none; resize: vertical;
+    background: #1e1e1e; color: #d4d4d4; caret-color: #fff;
+    font-family: monospace; font-size: 13px; line-height: 1.5;
+    white-space: pre; overflow: auto; tab-size: 4;
+}
+.gen-textarea:focus { outline: none; }
+
+/* Problems strip */
+.gen-problems { border: 1px solid #e0e0e0; border-radius: 4px; max-height: 160px; overflow: auto; background: #fafafa; }
+.gen-problem { display: flex; gap: 8px; align-items: baseline; padding: 4px 10px; font-size: 12px; border-bottom: 1px solid #eee; }
+.gen-problem:last-child { border-bottom: none; }
+.gen-problem-ok { color: #6a737d; font-style: italic; }
+.gen-problem-loc { flex: 0 0 auto; font-family: monospace; color: #555; min-width: 56px; }
+.gen-problem-msg { flex: 1 1 auto; }
+.gen-problem-error .gen-problem-loc { color: #b21f2d; font-weight: bold; }
+.gen-problem-error .gen-problem-msg { color: #b21f2d; }
+.gen-problem-warn  .gen-problem-loc { color: #8a6d00; }
+.gen-problem-warn  .gen-problem-msg { color: #8a6d00; }
+.gen-problem-jump { cursor: pointer; }
+.gen-problem-jump:hover { background: #eef3fb; }
+
+/* ---- Generator Table view (Phase 3) --------------------------------------- */
+.gen-tableview { display: flex; flex-direction: column; gap: 8px; }
+.gen-cards { display: none; } /* desktop uses the grid; cards show <=640px */
+.gen-table-filters { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.gen-filter-label { font-size: 12px; color: #666; }
+.gen-filter-chip { background: #f0f0f0; color: #555; border: 1px solid #ddd; border-radius: 12px; padding: 3px 12px; font-size: 12px; min-height: 28px; }
+.gen-filter-chip.on { background: #007bff; color: #fff; border-color: #007bff; }
+
+.gen-grid-scroll { overflow: auto; border: 1px solid #e0e0e0; border-radius: 4px; max-height: 420px; }
+.gen-grid { border-collapse: collapse; width: 100%; font-size: 12px; }
+.gen-grid th { position: sticky; top: 0; background: #f4f6f9; border-bottom: 1px solid #d6dde6; padding: 5px 6px; text-align: left; white-space: nowrap; z-index: 1; }
+.gen-grid td { border-bottom: 1px solid #eef1f4; padding: 3px 6px; vertical-align: middle; }
+.gen-grid-row:hover { background: #f7faff; }
+.gen-grid-comment td, .gen-grid-blank td, .gen-grid-raw td { color: #777; font-style: italic; }
+.gen-grid-rawcell { font-family: monospace; font-style: normal; color: #555; white-space: pre; }
+.gen-grid-empty { padding: 14px; font-size: 13px; color: #888; text-align: center; }
+
+.gen-type-select, .gen-ch-select, .gen-wave-select { font-size: 12px; padding: 2px; }
+.gen-time-cell { display: inline-flex; flex-direction: column; }
+.gen-time-input { width: 72px; font-size: 12px; padding: 2px 4px; }
+.gen-time-input.invalid { border-color: #dc3545; background: #fdeced; }
+.gen-time-hint { font-size: 10px; color: #999; font-family: monospace; }
+.gen-num { width: 64px; font-size: 12px; padding: 2px 4px; }
+
+.gen-mask-chips { display: inline-flex; gap: 2px; flex-wrap: wrap; }
+.gen-mask-chips.invalid { outline: 1px solid #dc3545; border-radius: 4px; }
+.gen-chip { width: 22px; height: 24px; min-height: 24px; padding: 0; font-size: 11px; background: #eee; color: #777; border: 1px solid #ccc; border-radius: 4px; }
+.gen-chip.on { background: #28a745; color: #fff; border-color: #28a745; }
+.gen-chip-preset { width: auto; padding: 0 6px; background: #e6eefc; color: #345; }
+
+.gen-cell-trigger { font-size: 12px; padding: 2px 8px; min-width: 44px; min-height: 26px; background: #fff; border: 1px solid #ccc; border-radius: 4px; color: #222; }
+.gen-cell-trigger.is-ramp { border-color: #0a84ff; color: #0a5ad0; }
+.gen-cell-trigger.is-mod  { border-color: #a05cff; color: #6a2ed0; }
+.gen-swatch { width: 40px; height: 24px; min-height: 24px; padding: 0; border: 1px solid #999; border-radius: 4px; font-size: 10px; color: #fff; text-shadow: 0 0 2px #000; }
+.gen-swatch.is-ramp { outline: 2px dashed #0a84ff; }
+
+.gen-row-menu-btn { background: transparent; border: none; font-size: 16px; padding: 0 6px; color: #666; min-height: 26px; }
+.gen-row-menu { display: flex; flex-direction: column; min-width: 140px; }
+.gen-row-menu-item { text-align: left; background: #fff; border: none; border-bottom: 1px solid #eee; padding: 8px 12px; font-size: 13px; min-height: 40px; }
+.gen-row-menu-item:hover { background: #f0f4fb; }
+
+.gen-bg-inputs { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+.gen-bg-url { width: 220px; font-size: 12px; padding: 2px 4px; }
+.gen-comment-input { width: 100%; font-size: 12px; font-family: monospace; padding: 2px 4px; box-sizing: border-box; }
+
+.gen-table-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.gen-add-label { font-size: 12px; color: #666; }
+.gen-add-btn { background: #eef7f0; color: #1a7f37; border: 1px solid #b6e0bf; border-radius: 4px; padding: 4px 12px; font-size: 13px; min-height: 32px; }
+
+/* Compound-cell / color / actions popover (desktop: floating; mobile: sheet). */
+.gen-popover-back { position: fixed; inset: 0; z-index: 1100; background: transparent; }
+.gen-popover { position: fixed; z-index: 1101; background: #fff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.22); padding: 12px; font-size: 13px; max-width: 92vw; }
+.gen-popover-title { font-weight: bold; font-size: 13px; margin-bottom: 8px; }
+.gen-popover-foot { text-align: right; margin-top: 10px; }
+.gen-popover-done { background: #007bff; color: #fff; }
+.gen-cell-editor { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+.gen-cell-field { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; }
+.gen-cell-field input { width: 110px; padding: 3px 5px; }
+.gen-cell-interp { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+.gen-cell-radio { font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.gen-cell-extras { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid #eee; padding-top: 6px; }
+.gen-cell-target { font-size: 11px; color: #0a5ad0; }
+.gen-color-editor { display: flex; flex-direction: column; gap: 8px; min-width: 200px; }
+.gen-color-chan { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
 /* ---- Mobile / narrow-screen layout ---------------------------------------- */
 @media (max-width: 640px) {
     body { margin: 8px; }
     .container { padding: 12px; }
     h1 { font-size: 20px; }
     textarea { height: 140px; }
+    .gen-textarea { height: 200px; }
 
     /* Nav: STOP on its own full-width line above the tabs; tabs share the row. */
     .tabs .nav-stop { order: -1; width: 100%; margin: 0 0 8px 0; }
@@ -87,4 +211,121 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
     /* !important overrides the inline widths (width:90px, min-width:260px, …)
        the settings renderer puts on each input/select. */
     .set-row > input, .set-row > select { width: 100% !important; min-width: 0 !important; box-sizing: border-box; }
+
+    /* Generator Table: swap the wide grid for stacked cards. */
+    .gen-grid-scroll { display: none; }
+    .gen-cards { display: flex; flex-direction: column; gap: 8px; }
+    .gen-card { border: 1px solid #dde3ea; border-radius: 8px; padding: 10px; background: #fff; }
+    .gen-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+    .gen-card-sub { font-size: 12px; color: #666; font-family: monospace; }
+    .gen-card-head .gen-row-actions { margin-left: auto; }
+    .gen-card-field { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+    .gen-card-label { flex: 0 0 70px; font-size: 12px; color: #555; }
+    .gen-card-more { margin-top: 4px; }
+    .gen-card-more summary { font-size: 12px; color: #007bff; cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+    .gen-bg-url { width: 100%; box-sizing: border-box; }
+
+    /* Interp / color / actions popovers become full-screen bottom sheets. */
+    .gen-popover-back { background: rgba(0,0,0,0.35); }
+    .gen-popover { left: 0 !important; right: 0; top: auto !important; bottom: 0; max-width: 100vw; width: 100%; box-sizing: border-box; border-radius: 12px 12px 0 0; max-height: 80vh; overflow: auto; }
+    .gen-cell-field input { width: 40%; }
+}
+
+/* ---- Firmware Update tab -------------------------------------------------- */
+.fw-form { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; padding: 10px; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 4px; }
+.fw-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fw-label { min-width: 140px; font-size: 13px; color: #555; }
+.fw-hash { font-size: 12px; color: #444; margin-top: 4px; word-break: break-all; }
+.fw-hash-label { color: #888; }
+.fw-hash-val { font-family: monospace; color: #222; }
+.fw-hash-size { color: #999; margin-left: 6px; }
+
+.fw-version { font-size: 13px; color: #333; margin-bottom: 10px; padding: 8px 10px; background: #f0f4f8; border: 1px solid #d6dde6; border-radius: 4px; }
+.fw-version .fw-version-main { font-weight: 600; }
+.fw-version .fw-version-sub { display: block; margin-top: 2px; font-size: 11px; color: #888; }
+.fw-banner { padding: 10px 12px; margin: 10px 0; border-radius: 4px; font-size: 13px; }
+.fw-info    { background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; }
+.fw-working { background: #fff3cd; border: 1px solid #ffeeba; color: #856404; }
+.fw-success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+.fw-error   { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+
+.fw-progress-wrap { position: relative; height: 22px; background: #e9ecef; border-radius: 4px; overflow: hidden; margin: 10px 0; border: 1px solid #d6dde6; }
+.fw-progress-bar { height: 100%; width: 0; background: #28a745; transition: width 0.2s ease; }
+.fw-progress-text { position: absolute; top: 0; left: 0; right: 0; line-height: 22px; text-align: center; font-size: 12px; font-family: monospace; color: #222; }
+
+.fw-softap { margin: 10px 0; padding: 12px; background: #fff8e6; border: 1px solid #ffe08a; border-radius: 4px; font-size: 13px; color: #6b5800; }
+.fw-softap p { margin: 6px 0; }
+.fw-softap code { background: #fdecc8; padding: 1px 4px; border-radius: 3px; font-family: monospace; }
+.fw-cmd { background: #1e1e1e; color: #d4d4d4; border-radius: 4px; padding: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 6px 0; }
+
+@media (max-width: 640px) {
+    .fw-label { min-width: 0; width: 100%; }
+    .fw-row > input, .fw-row > select { width: 100%; box-sizing: border-box; }
+}
+
+/* ---- Lane (DAW) view (Phase 4) ---- */
+.gen-laneview { display: flex; flex-direction: column; gap: 6px; }
+.gen-lane-toolbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.gen-lane-toolbar button { font-size: 12px; padding: 4px 8px; min-height: 32px; }
+.gen-lane-warn { display: flex; flex-direction: column; gap: 4px; background: #fff8e6; border: 1px solid #ffe08a; border-radius: 4px; padding: 6px 8px; }
+.gen-lane-warn-item { font-size: 12px; color: #8a6d00; }
+.gen-lane-snap { align-self: flex-start; font-size: 12px; padding: 4px 8px; background: #f59f00; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+.gen-lane-scroll { overflow: auto; border: 1px solid #dde1e7; border-radius: 4px; background: #fff; max-height: 520px; }
+.gen-lane-canvas { display: block; width: 100%; touch-action: none; }
+
+/* ---- Wizard view (Phase 5) ---- */
+.gen-wizardview { display: flex; flex-direction: column; gap: 8px; }
+.gen-wiz-banner { background: #fff8e6; border: 1px solid #ffe08a; border-radius: 4px; padding: 6px 8px; font-size: 12px; color: #8a6d00; }
+.gen-wiz-warn { display: flex; flex-direction: column; gap: 4px; background: #fff8e6; border: 1px solid #ffe08a; border-radius: 4px; padding: 6px 8px; }
+.gen-wiz-warn-item { font-size: 12px; color: #8a6d00; }
+
+.gen-wiz-layout { display: flex; gap: 12px; align-items: flex-start; }
+.gen-wiz-minimap { display: none; }
+.gen-wiz-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+
+.gen-wiz-header { display: flex; align-items: center; gap: 8px; }
+.gen-wiz-sessname { flex: 1 1 auto; padding: 6px; font-size: 15px; font-weight: 600; border: 1px solid #ccd2da; border-radius: 4px; }
+
+.gen-wiz-seg { border: 1px solid #d3d9e0; border-radius: 8px; background: #fafbfc; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.gen-wiz-seg-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gen-wiz-segname { flex: 1 1 120px; padding: 5px; font-size: 14px; font-weight: 600; border: 1px solid #ccd2da; border-radius: 4px; }
+.gen-wiz-dur { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #555; }
+.gen-wiz-segstart { font-size: 12px; color: #888; font-family: monospace; }
+.gen-wiz-seg-acts { margin-left: auto; display: inline-flex; gap: 4px; }
+
+.gen-wiz-layer { border: 1px solid #e1e6ec; border-radius: 6px; background: #fff; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.gen-wiz-layer-head { display: flex; align-items: center; }
+.gen-wiz-layer-head strong { font-size: 13px; }
+.gen-wiz-del { margin-left: auto; background: #e9ecef; color: #555; border: none; border-radius: 4px; padding: 3px 8px; min-height: 30px; cursor: pointer; }
+
+.gen-wiz-field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gen-wiz-flabel { flex: 0 0 84px; font-size: 12px; color: #555; }
+.gen-wiz-field input[type=range] { flex: 1 1 120px; min-width: 80px; }
+.gen-wiz-num { width: 72px; padding: 4px; border: 1px solid #ccd2da; border-radius: 4px; }
+.gen-wiz-live { background: #ffd43b; border: none; border-radius: 4px; padding: 2px 6px; cursor: pointer; min-height: 28px; }
+.gen-wiz-badge { font-size: 12px; color: #1971c2; }
+
+.gen-wiz-dyn, .gen-wiz-adv { border-top: 1px dashed #e1e6ec; padding-top: 4px; }
+.gen-wiz-dyn summary, .gen-wiz-adv summary { font-size: 12px; color: #007bff; cursor: pointer; min-height: 30px; display: flex; align-items: center; }
+.gen-wiz-subrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 0; }
+.gen-wiz-subrow select { padding: 4px; border: 1px solid #ccd2da; border-radius: 4px; }
+
+.gen-wiz-regions, .gen-wiz-presets { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.gen-wiz-chip { border: 1px solid #ccd2da; background: #fff; border-radius: 14px; padding: 4px 10px; font-size: 12px; cursor: pointer; min-height: 30px; }
+.gen-wiz-chip.on { background: #1971c2; color: #fff; border-color: #1971c2; }
+.gen-wiz-preset { border: 1px solid #ccd2da; background: #f1f3f5; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer; min-height: 30px; }
+
+.gen-wiz-addlayer, .gen-wiz-addseg { display: flex; gap: 6px; flex-wrap: wrap; }
+.gen-wiz-addbtn { background: #e7f5ff; color: #1971c2; border: 1px dashed #74c0fc; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; min-height: 32px; }
+
+@media (min-width: 1024px) {
+    .gen-wiz-minimap { display: flex; flex: 0 0 180px; flex-direction: column; gap: 4px; position: sticky; top: 8px; }
+    .gen-wiz-mini-title { font-size: 12px; font-weight: 600; color: #555; }
+    .gen-wiz-mini-item { text-align: left; background: #f1f3f5; border: 1px solid #dde1e7; border-radius: 4px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
+    .gen-wiz-mini-total { font-size: 12px; color: #888; margin-top: 4px; }
+}
+
+@media (max-width: 640px) {
+    .gen-wiz-flabel { flex-basis: 100%; }
+    .gen-wiz-field input[type=range] { flex-basis: 70%; }
 }

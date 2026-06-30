@@ -1,0 +1,58 @@
+// Transport helpers — talk to the device's existing HTTP endpoints.
+// Reused/adapted from config.js's play/stop logic; no new endpoints.
+
+import { serialize } from './serialize.js';
+import { NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS } from './model.js';
+
+// Serialize the model and POST it to /api/play-config (text/plain). Stops any
+// running timeline on the device and starts this one.
+export function playDoc(doc) {
+    const body = serialize(doc);
+    return fetch('/api/play-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body,
+    }).then(r => r.text());
+}
+
+// Stop all audio + LED (drops the running timeline).
+export function stop() {
+    return fetch('/api/stop', { method: 'POST' }).then(r => r.text());
+}
+
+// Apply a single live-patch line (additive; does not restart the timeline).
+// `line` is one .ledc-format line of text.
+export function patchLine(line) {
+    return fetch('/api/patch-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: line,
+    }).then(r => r.text());
+}
+
+// Snapshot of current per-channel engine state (JSON).
+export function getState() {
+    return fetch('/api/state').then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    });
+}
+
+// Channel/colour capabilities. Reads caps from /api/state if present, else
+// falls back to the compile-time NUM_* constants.
+export function getCaps() {
+    return getState()
+        .then(s => {
+            const c = (s && s.caps) || {};
+            return {
+                num_audio_ch: c.num_audio_ch || NUM_AUDIO_CHANNELS,
+                num_led_ch:   c.num_led_ch   || NUM_LED_CHANNELS,
+                led_color:    (c.led_color === undefined) ? true : !!c.led_color,
+            };
+        })
+        .catch(() => ({
+            num_audio_ch: NUM_AUDIO_CHANNELS,
+            num_led_ch:   NUM_LED_CHANNELS,
+            led_color:    true,
+        }));
+}

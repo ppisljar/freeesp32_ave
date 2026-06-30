@@ -53,6 +53,29 @@ Convenience scripts (in `freeesp32_ave/`):
   SPIFFS partition (fast UI iteration; does not reflash the app). Reset the
   device afterward to load the new page.
 
+## Three ways to put firmware on the device
+
+Since the dual-boot OTA layout (`plans/ota_dual_boot_plan.md`), pick the right
+tool for the job:
+
+- **`./flash_all.sh [--port ...] [--yes] [--dry-run]`** — the **one-time wired
+  full flash**. Builds the web UI, the main app, and the OTA updater
+  (`../esp32ota`), then writes the bootloader, partition table, otadata seed,
+  `ota_0` (main app), `ota_1` (updater) and `storage` (web SPIFFS) in a single
+  `esptool write_flash`. This is the **only** way to lay down the new partition
+  table — OTA cannot change it, so the first deploy of this layout must be wired.
+  Offsets are derived from the built partition table at runtime; flash
+  mode/freq/size are read from `build/flash_args`. `--dry-run` builds + verifies
+  + prints the command without flashing. `cfgfs` is omitted (formatted on first
+  mount).
+- **`./flash_web.sh [--port ...]`** — fast **web-UI-only** iteration: rebuilds
+  the UI and writes just the `storage` partition by label (no app reflash). Use
+  this for day-to-day frontend work.
+- **OTA (browser Firmware Update)** — routine **main-app** updates after the
+  initial wired flash: the main app reboots into the `ota_1` updater, which
+  receives the new `ota_0` image over HTTP and reboots back into it. No USB
+  cable needed. This is the normal way to ship new app firmware.
+
 ## How assets are served
 
 - Only the `.gz` files ship. `main/web_server.c`'s `static_file_handler`

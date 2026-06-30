@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Vanilla-JS web UI for the ESP32 Audio/Video Entrainment device. Bundled + minified + gzipped into the SPIFFS 'storage' partition.",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "esbuild": "^0.24.0"

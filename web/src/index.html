@@ -12,9 +12,11 @@
 
         <nav class="tabs">
             <button class="tab active" data-tab="home">Home</button>
+            <button class="tab" data-tab="generator">Generator</button>
             <button class="tab" data-tab="live">Live Control</button>
             <button class="tab" data-tab="reports">Reports</button>
             <button class="tab" data-tab="settings">Settings</button>
+            <button class="tab" data-tab="firmware">Firmware</button>
             <button id="btnStop" class="nav-stop" title="Stop all audio + LED">■ STOP</button>
         </nav>
 
@@ -40,6 +42,71 @@
                     <span id="loadedFilename" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
                 </div>
                 <textarea id="exampleConfig" placeholder="Enter .led config here..."></textarea>
+            </div>
+        </div>
+
+        <!-- ===================== GENERATOR ===================== -->
+        <div class="page" id="page-generator">
+            <div class="section">
+                <h2>Generator</h2>
+                <div style="font-size:12px;color:#888;margin-bottom:8px;">Visual <code>.led</code> timeline editor over one shared model: raw Text, a Table grid, DAW Lanes, and a guided Wizard — all edit the same model.</div>
+
+                <!-- View sub-tabs -->
+                <div class="gen-subtabs">
+                    <button class="gen-subtab active" data-view="text">Text</button>
+                    <button class="gen-subtab" data-view="table">Table</button>
+                    <button class="gen-subtab" data-view="lanes">Lanes</button>
+                    <button class="gen-subtab" data-view="wizard">Wizard</button>
+                </div>
+
+                <!-- Config load/save row -->
+                <div class="gen-store">
+                    <strong style="font-size:13px;">Configs:</strong>
+                    <select id="genLedcDropdown" style="min-width:220px;padding:4px;"></select>
+                    <button id="btnGenRefresh" title="Reload list from all sources">⟳</button>
+                    <button id="btnGenLoad">Load</button>
+                    <button id="btnGenSave">Save</button>
+                    <button id="btnGenSaveAs">Save As…</button>
+                    <span id="genLoadedName" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
+                </div>
+
+                <!-- Transport bar -->
+                <div class="gen-transport">
+                    <button id="btnGenPlay" style="background:#28a745;">▶ Play</button>
+                    <button id="btnGenStopLocal" style="background:#dc3545;">■ Stop</button>
+                    <button id="btnGenApply">⚡ Apply live</button>
+                    <span id="genRowMeter" class="gen-meter">0 / 100 entries</span>
+                </div>
+
+                <!-- Active view area -->
+                <div id="genViewArea">
+                    <!-- Text view (Phase 2): raw .led editor synced to the model -->
+                    <div id="genTextView" class="gen-textview">
+                        <div class="gen-text-head">
+                            <span id="genTextBadge" class="gen-badge gen-badge-ok">✓ synced</span>
+                        </div>
+                        <div class="gen-text-editor">
+                            <div id="genTextGutter" class="gen-gutter" aria-hidden="true"></div>
+                            <textarea id="genTextArea" class="gen-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" wrap="off" placeholder="Enter .led timeline here…"></textarea>
+                        </div>
+                        <div id="genProblems" class="gen-problems"></div>
+                    </div>
+                    <!-- Table view (Phase 3): spreadsheet grid synced to the model.
+                         Chrome (filters / grid / cards / add-row bar) is built in JS. -->
+                    <div id="genTableView" class="gen-tableview" style="display:none;"></div>
+                    <!-- Lane view (Phase 4): DAW canvas lanes + ramp/LFO regions.
+                         Chrome (toolbar / warnings / canvas) is built in JS. -->
+                    <div id="genLaneView" class="gen-laneview" style="display:none;"></div>
+                    <!-- Wizard view (Phase 5): segment forms + Field/Transition/Pulse.
+                         Chrome (minimap / segment cards / layer sheets) is built in JS. -->
+                    <div id="genWizardView" class="gen-wizardview" style="display:none;"></div>
+                    <!-- Placeholder for not-yet-built views -->
+                    <div id="genOtherView" class="gen-viewarea" style="display:none;"></div>
+                </div>
+
+                <!-- Read-only serialized preview -->
+                <h3 style="margin:14px 0 4px 0;font-size:14px;color:#444;">Serialized preview (read-only)</h3>
+                <pre id="genPreview" class="gen-preview"></pre>
             </div>
         </div>
 
@@ -81,6 +148,49 @@
                     <button id="btnSettingsRestore" style="background:#dc3545;">Restore Defaults</button>
                     <button id="btnSettingsReload">Reload</button>
                 </div>
+            </div>
+        </div>
+        <!-- ===================== FIRMWARE ===================== -->
+        <div class="page" id="page-firmware">
+            <div class="section">
+                <h2>Firmware Update</h2>
+                <div id="fwVersion" class="fw-version">Current firmware: loading…</div>
+                <div style="font-size:12px;color:#888;margin-bottom:10px;">
+                    Over-the-air update via the dual-boot updater. The device reboots into the
+                    <strong>OTA updater</strong>, receives the new image (verified by SHA-256),
+                    flashes it, then boots back into the main app. Do not power off during an update.
+                </div>
+
+                <div class="fw-form">
+                    <div class="fw-row">
+                        <label for="fwFile" class="fw-label">Image file (.bin)</label>
+                        <input type="file" id="fwFile" accept=".bin">
+                    </div>
+                    <div class="fw-row">
+                        <label for="fwTarget" class="fw-label">Target</label>
+                        <select id="fwTarget">
+                            <option value="app">Main app (ota_0)</option>
+                            <option value="storage">Web assets (storage)</option>
+                            <option value="cfgfs">Configs (cfgfs)</option>
+                        </select>
+                    </div>
+                    <div id="fwHash" class="fw-hash"></div>
+                </div>
+
+                <div class="controls" style="margin-top:10px;">
+                    <button id="fwStart" style="background:#28a745;" disabled>Start Update</button>
+                    <button id="fwRetry" style="background:#fd7e14;display:none;">Retry</button>
+                    <button id="fwReset" style="display:none;">Start Over</button>
+                </div>
+
+                <div id="fwBanner" class="fw-banner" style="display:none;"></div>
+
+                <div id="fwProgressWrap" class="fw-progress-wrap" style="display:none;">
+                    <div id="fwProgressBar" class="fw-progress-bar"></div>
+                    <span id="fwProgressText" class="fw-progress-text"></span>
+                </div>
+
+                <div id="fwSoftap" class="fw-softap" style="display:none;"></div>
             </div>
         </div>
     </div>

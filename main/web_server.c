@@ -14,6 +14,9 @@
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "esp_system.h"          // esp_restart (POST /api/reboot)
+#include "esp_ota_ops.h"         // OTA boot-slot handoff (POST /api/ota)
+#include "esp_app_desc.h"        // esp_app_get_description (GET /api/version)
+#include "nvs.h"                 // WiFi cred handoff to the updater (namespace "ota")
 #include "esp_spiffs.h"          // web UI assets served from SPIFFS
 #include <string.h>
 #include <strings.h>           // strcasecmp
@@ -68,6 +71,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req);
 static esp_err_t settings_post_handler(httpd_req_t *req);
 static esp_err_t settings_reset_handler(httpd_req_t *req);
 static esp_err_t reboot_handler(httpd_req_t *req);
+static esp_err_t ota_handler(httpd_req_t *req);
+static esp_err_t version_handler(httpd_req_t *req);
 static esp_err_t configs_list_handler(httpd_req_t *req);
 static esp_err_t configs_get_handler(httpd_req_t *req);
 static esp_err_t configs_put_handler(httpd_req_t *req);
@@ -243,6 +248,22 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &reboot_uri);
+
+    httpd_uri_t ota_uri = {
+        .uri = "/api/ota",
+        .method = HTTP_POST,
+        .handler = ota_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &ota_uri);
+
+    httpd_uri_t version_uri = {
+        .uri = "/api/version",
+        .method = HTTP_GET,
+        .handler = version_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &version_uri);
 
     // Device config storage. Exact /api/configs (list) first, then the
     // /api/configs/* per-file routes (GET/PUT/DELETE), all before the wildcard.
@@ -826,6 +847,122 @@ static esp_err_t reboot_handler(httpd_req_t *req)
     }
     esp_timer_start_once(reboot_timer, 500000 /* 500 ms */);
     return ESP_OK;
+}
+
+// POST /api/ota — hand the current WiFi creds to the ota_1 updater (NVS
+// namespace "ota", keys "ssid"/"pass"), point the boot slot at the updater,
+// acknowledge, then reboot via the same deferred mechanism as /api/reboot so
+// the JSON response flushes first. On any NVS or boot-partition failure we
+// return 500 and stay in the main app (no reboot).
+static esp_err_t ota_handler(httpd_req_t *req)
+{
+    const device_settings_t *s = settings_get();
+    // An empty SSID is valid: we still write it so the updater skips STA and
+    // comes up on its SoftAP fallback (ESP32-AVE-Setup @ 192.168.4.1).
+    bool ssid_handoff = (s->wifi_ssid[0] != '\0');
+
+    // Hand off the creds to the updater via the shared NVS "ota" namespace.
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("ota", NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA: nvs_open failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs open failed");
+        return ESP_FAIL;
+    }
+    err = nvs_set_str(h, "ssid", s->wifi_ssid);
+    if (err == ESP_OK) err = nvs_set_str(h, "pass", s->wifi_password);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA: cred handoff failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs write failed");
+        return ESP_FAIL;
+    }
+
+    // Point the boot slot at the updater. Running = ota_0, so next = ota_1.
+    const esp_partition_t *updater = esp_ota_get_next_update_partition(NULL);
+    if (!updater) {
+        ESP_LOGE(TAG, "OTA: no updater partition found");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no updater partition");
+        return ESP_FAIL;
+    }
+    err = esp_ota_set_boot_partition(updater);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA: set_boot_partition failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set boot partition failed");
+        return ESP_FAIL;
+    }
+
+    // Acknowledge before rebooting so the response reaches the browser.
+    cJSON *root = cJSON_CreateObject();
+    if (root) {
+        cJSON_AddBoolToObject(root, "ok", true);
+        cJSON_AddStringToObject(root, "target", "ota_1");
+        cJSON_AddBoolToObject(root, "ssid_handoff", ssid_handoff);
+        char *out = cJSON_PrintUnformatted(root);
+        httpd_resp_set_type(req, "application/json");
+        if (out) {
+            httpd_resp_sendstr(req, out);
+            cJSON_free(out);
+        } else {
+            httpd_resp_sendstr(req, "{\"ok\":true,\"target\":\"ota_1\"}");
+        }
+        cJSON_Delete(root);
+    } else {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"target\":\"ota_1\"}");
+    }
+
+    // Deferred restart — same one-shot esp_timer pattern as reboot_handler.
+    static esp_timer_handle_t ota_reboot_timer = NULL;
+    if (!ota_reboot_timer) {
+        const esp_timer_create_args_t targs = {
+            .callback = reboot_timer_cb,
+            .name = "ota_reboot",
+        };
+        if (esp_timer_create(&targs, &ota_reboot_timer) != ESP_OK) {
+            esp_restart();
+        }
+    }
+    esp_timer_start_once(ota_reboot_timer, 500000 /* 500 ms */);
+    return ESP_OK;
+}
+
+// GET /api/version — report the running firmware's compile-time descriptor
+// (ESP-IDF auto-captures version/date/time on every build; the semver comes
+// from version.txt → PROJECT_VER) plus which OTA slot we booted from.
+static esp_err_t version_handler(httpd_req_t *req)
+{
+    const esp_app_desc_t *desc = esp_app_get_description();
+    const esp_partition_t *running = esp_ota_get_running_partition();
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    if (desc) {
+        cJSON_AddStringToObject(root, "version", desc->version);
+        cJSON_AddStringToObject(root, "project", desc->project_name);
+        cJSON_AddStringToObject(root, "compile_date", desc->date);
+        cJSON_AddStringToObject(root, "compile_time", desc->time);
+        cJSON_AddStringToObject(root, "idf_ver", desc->idf_ver);
+    }
+    if (running) {
+        cJSON_AddStringToObject(root, "partition", running->label);
+        cJSON_AddNumberToObject(root, "address", (double)running->address);
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    if (out) {
+        httpd_resp_sendstr(req, out);
+        cJSON_free(out);
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json print failed");
+    }
+    cJSON_Delete(root);
+    return out ? ESP_OK : ESP_FAIL;
 }
 
 static esp_err_t stop_handler(httpd_req_t *req)

@@ -1,6 +1,8 @@
 # Project defaults — applied when sdkconfig is regenerated.
-# Custom partition table that adds a 1.5 MB SPIFFS "storage" partition
-# for the web UI assets (served by web_server.c from /spiffs).
+# Custom dual-boot OTA partition table (partitions.csv): ota_0 = main app
+# (0x200000), ota_1 = standalone OTA updater (0xB0000), plus a 512 KB SPIFFS
+# "storage" partition for the web UI assets (served by web_server.c from /spiffs)
+# and a 512 KB "cfgfs". App-rollback stays OFF (no esp_ota_mark_app_valid needed).
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"

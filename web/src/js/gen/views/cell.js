@@ -1,0 +1,285 @@
+// Shared compound "value + interp" cell widget (Phase 3).
+//
+// A `Cell` (see gen/model.js) bundles a value with an interpolation kind:
+//   step (none) / linear `>` / quadratic `*` ramps, and the five periodic
+//   modulations triangle `^` / sine `~` / saw-up `/` / saw-down `\` /
+//   square `_` (which additionally carry modEnd + modPeriodMs).
+//
+// This module renders, for any Cell-valued field:
+//   - a compact inline TRIGGER (value + a glyph hinting the interp), and
+//   - a POPOVER/inspector that edits the full Cell struct (radio interp picker;
+//     `end` + `period` fields only for periodic mods; ramp shows the resolved
+//     "→ value at t=next" target).
+//
+// It is intentionally DOM-only-on-call (no DOM touched at import) so the pure
+// helpers below can be unit-tested in plain Node, mirroring views/text.js.
+//
+// Used by the Table view now; Lane/Wizard reuse it in later phases.
+
+import { isModInterp, DEFAULT_MOD_PERIOD_MS, cell } from '../model.js';
+
+// interp kind -> human label for the radio picker (order per the plan:
+// Step / > / * / ^ / ~ / / / \ / _).
+export const INTERP_OPTIONS = [
+    ['none',  'Step'],
+    ['lin',   'Linear  →'],
+    ['quad',  'Quadratic  x²'],
+    ['tri',   'Triangle  ^'],
+    ['sine',  'Sine  ~'],
+    ['sawup', 'Saw-up  /'],
+    ['sawdn', 'Saw-down  \\'],
+    ['sq',    'Square  _'],
+];
+
+// ---- Pure helpers (unit-tested) -------------------------------------------
+
+// A short inline glyph hinting the interp kind on the trigger button.
+//   none → ''   lin → '→'   quad → 'x²'   periodic mods → '∿'
+export function cellInlineGlyph(c) {
+    if (!c || c.interp === 'none') return '';
+    if (c.interp === 'lin') return '→';
+    if (c.interp === 'quad') return 'x²';
+    if (isModInterp(c.interp)) return '∿';
+    return '';
+}
+
+// The text shown on the compact trigger button for a cell.
+//   step      → "12"
+//   ramp      → "→ 12" / "x² 12"
+//   periodic  → "10∿20"   (start∿end, the period lives in the popover)
+export function cellLabel(c) {
+    if (!c) return '0';
+    if (isModInterp(c.interp)) {
+        const end = (c.modEnd === null || c.modEnd === undefined) ? c.value : c.modEnd;
+        return c.value + '∿' + end;
+    }
+    const g = cellInlineGlyph(c);
+    return (g ? g + ' ' : '') + c.value;
+}
+
+// ---- Popover plumbing ------------------------------------------------------
+
+let openClose = null; // the close() of the currently-open popover, if any
+
+// Open `content` as a floating popover anchored to `anchor`. Returns close().
+// On narrow screens CSS turns `.gen-popover` into a full-screen bottom sheet.
+export function openPopover(anchor, content, title) {
+    closeOpenPopover();
+
+    const back = document.createElement('div');
+    back.className = 'gen-popover-back';
+
+    const pop = document.createElement('div');
+    pop.className = 'gen-popover';
+
+    if (title) {
+        const h = document.createElement('div');
+        h.className = 'gen-popover-title';
+        h.textContent = title;
+        pop.appendChild(h);
+    }
+    pop.appendChild(content);
+
+    const foot = document.createElement('div');
+    foot.className = 'gen-popover-foot';
+    const done = document.createElement('button');
+    done.textContent = 'Done';
+    done.className = 'gen-popover-done';
+    foot.appendChild(done);
+    pop.appendChild(foot);
+
+    document.body.appendChild(back);
+    document.body.appendChild(pop);
+
+    // Desktop positioning near the anchor (CSS overrides to a sheet on mobile).
+    try {
+        const r = anchor.getBoundingClientRect();
+        const pw = pop.offsetWidth || 240;
+        const ph = pop.offsetHeight || 160;
+        let left = r.left;
+        let top = r.bottom + 4;
+        if (left + pw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - pw - 8);
+        if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 4);
+        pop.style.left = left + 'px';
+        pop.style.top = top + 'px';
+    } catch (e) { /* anchor may be detached in tests */ }
+
+    const close = () => {
+        if (openClose === close) openClose = null;
+        back.remove();
+        pop.remove();
+        document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+    back.addEventListener('click', close);
+    done.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+
+    openClose = close;
+    return close;
+}
+
+export function closeOpenPopover() {
+    if (openClose) openClose();
+}
+
+// ---- Cell inspector form ---------------------------------------------------
+
+// Build the inspector form for one Cell. Calls onChange(newCell) live on every
+// edit. `resolveTarget` (optional) returns the resolved ramp target value (or
+// null) shown for `>`/`*` interps. Returns the form element.
+export function buildCellEditor(initial, opts) {
+    opts = opts || {};
+    const onChange = opts.onChange || function () {};
+    const resolveTarget = opts.resolveTarget || (() => null);
+
+    let cur = cell(initial ? initial.value : 0,
+                   initial ? initial.interp : 'none',
+                   initial ? initial.modEnd : null,
+                   initial ? initial.modPeriodMs : null);
+
+    const form = document.createElement('div');
+    form.className = 'gen-cell-editor';
+
+    // Value -----------------------------------------------------------------
+    const vRow = document.createElement('label');
+    vRow.className = 'gen-cell-field';
+    vRow.append('Value');
+    const vIn = document.createElement('input');
+    vIn.type = 'number';
+    vIn.value = cur.value;
+    if (opts.step !== undefined) vIn.step = opts.step;
+    vRow.appendChild(vIn);
+    form.appendChild(vRow);
+
+    // Interp radios ---------------------------------------------------------
+    const radios = document.createElement('div');
+    radios.className = 'gen-cell-interp';
+    const name = 'ci' + Math.random().toString(36).slice(2);
+    const radioEls = {};
+    for (const [kind, label] of INTERP_OPTIONS) {
+        const l = document.createElement('label');
+        l.className = 'gen-cell-radio';
+        const rb = document.createElement('input');
+        rb.type = 'radio';
+        rb.name = name;
+        rb.value = kind;
+        if (kind === cur.interp) rb.checked = true;
+        radioEls[kind] = rb;
+        l.appendChild(rb);
+        l.append(' ' + label);
+        radios.appendChild(l);
+    }
+    form.appendChild(radios);
+
+    // Periodic-mod extras ---------------------------------------------------
+    const extras = document.createElement('div');
+    extras.className = 'gen-cell-extras';
+    const eRow = document.createElement('label');
+    eRow.className = 'gen-cell-field';
+    eRow.append('End');
+    const eIn = document.createElement('input');
+    eIn.type = 'number';
+    eIn.value = (cur.modEnd === null || cur.modEnd === undefined) ? cur.value : cur.modEnd;
+    eRow.appendChild(eIn);
+    const pRow = document.createElement('label');
+    pRow.className = 'gen-cell-field';
+    pRow.append('Period (ms)');
+    const pIn = document.createElement('input');
+    pIn.type = 'number';
+    pIn.value = (cur.modPeriodMs === null || cur.modPeriodMs === undefined)
+        ? DEFAULT_MOD_PERIOD_MS : cur.modPeriodMs;
+    pRow.appendChild(pIn);
+    extras.appendChild(eRow);
+    extras.appendChild(pRow);
+    form.appendChild(extras);
+
+    // Ramp target readout ---------------------------------------------------
+    const tgt = document.createElement('div');
+    tgt.className = 'gen-cell-target';
+    form.appendChild(tgt);
+
+    // ---- Visibility + emit ------------------------------------------------
+    function syncVisibility() {
+        const mod = isModInterp(cur.interp);
+        const ramp = cur.interp === 'lin' || cur.interp === 'quad';
+        extras.style.display = mod ? '' : 'none';
+        if (ramp) {
+            const t = resolveTarget();
+            tgt.style.display = '';
+            tgt.textContent = (t === null || t === undefined)
+                ? '→ no later same-field entry to ramp toward (holds at start)'
+                : '→ ramps to ' + t + ' at the next entry';
+        } else {
+            tgt.style.display = 'none';
+        }
+    }
+
+    function emit() {
+        const v = parseFloat(vIn.value);
+        cur = cell(Number.isFinite(v) ? v : 0, cur.interp);
+        if (isModInterp(cur.interp)) {
+            const e = parseFloat(eIn.value);
+            const p = parseFloat(pIn.value);
+            cur.modEnd = Number.isFinite(e) ? e : cur.value;
+            cur.modPeriodMs = Number.isFinite(p) ? p : DEFAULT_MOD_PERIOD_MS;
+        }
+        onChange(cur);
+    }
+
+    vIn.addEventListener('input', emit);
+    eIn.addEventListener('input', emit);
+    pIn.addEventListener('input', emit);
+    for (const kind in radioEls) {
+        radioEls[kind].addEventListener('change', () => {
+            cur.interp = kind;
+            // Seed sensible mod extras when switching into a periodic mod.
+            if (isModInterp(kind)) {
+                if (cur.modEnd === null || cur.modEnd === undefined) eIn.value = cur.value;
+                if (cur.modPeriodMs === null || cur.modPeriodMs === undefined) {
+                    if (!pIn.value) pIn.value = DEFAULT_MOD_PERIOD_MS;
+                }
+            }
+            syncVisibility();
+            emit();
+        });
+    }
+
+    syncVisibility();
+    return form;
+}
+
+// ---- Compound cell trigger -------------------------------------------------
+
+// Create the inline trigger element for a Cell-valued model field.
+//   opts.getCell()        -> current Cell
+//   opts.onChange(cell)   -> commit a new Cell to the model
+//   opts.resolveTarget()  -> resolved ramp target (number|null), optional
+//   opts.title            -> popover title, optional
+//   opts.step             -> numeric step for the value input, optional
+// Returns the trigger <button>. Its label updates live while the popover edits.
+export function createCompoundCell(opts) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'gen-cell-trigger';
+
+    function paint() {
+        const c = opts.getCell();
+        btn.textContent = cellLabel(c);
+        btn.classList.toggle('is-ramp', c && (c.interp === 'lin' || c.interp === 'quad'));
+        btn.classList.toggle('is-mod', c && isModInterp(c.interp));
+    }
+    paint();
+
+    btn.addEventListener('click', () => {
+        const form = buildCellEditor(opts.getCell(), {
+            resolveTarget: opts.resolveTarget,
+            step: opts.step,
+            onChange: (c) => { opts.onChange(c); paint(); },
+        });
+        openPopover(btn, form, opts.title || 'Edit value');
+    });
+
+    return btn;
+}
