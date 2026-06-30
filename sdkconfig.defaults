@@ -4,3 +4,16 @@
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# Phase 3 (runtime_settings_plan.md): compile ALL LED backends and ALL audio
+# codecs into one firmware; the active one is selected at runtime from settings.
+# The *_SUPPORT_* bools gate which backend/codec code is compiled in (all on).
+# The *_DEFAULT_* choices only seed the runtime store on first boot — they match
+# the previously-active compile-time selection (DIRECT LED, ES8388 codec).
+CONFIG_LED_SUPPORT_NEOPIXEL=y
+CONFIG_LED_SUPPORT_DOTSTAR=y
+CONFIG_LED_SUPPORT_DIRECT=y
+CONFIG_LED_DEFAULT_BACKEND_DIRECT=y
+CONFIG_AUDIO_SUPPORT_AC101=y
+CONFIG_AUDIO_SUPPORT_ES8388=y
+CONFIG_AUDIO_DEFAULT_CODEC_ES8388=y

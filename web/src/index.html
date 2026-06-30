@@ -10,37 +10,78 @@
     <div class="container">
         <h1>ESP32 Audio/Video Entrainment</h1>
 
+        <nav class="tabs">
+            <button class="tab active" data-tab="home">Home</button>
+            <button class="tab" data-tab="live">Live Control</button>
+            <button class="tab" data-tab="reports">Reports</button>
+            <button class="tab" data-tab="settings">Settings</button>
+            <button id="btnStop" class="nav-stop" title="Stop all audio + LED">■ STOP</button>
+        </nav>
+
         <div id="status" class="status info" style="display:none"></div>
 
-        <div class="section" id="liveCtrl">
-            <h2>Live Control <span id="ctrl-status" style="font-size:12px;color:#666;margin-left:8px;font-weight:normal;"></span></h2>
-            <div style="font-size:12px;color:#888;margin-bottom:8px;">Sliders animate over 1 s. Pauses polling for a control while you're dragging it.</div>
-            <div id="ctrl-audio" class="ctrl-block"></div>
-            <div id="ctrl-noise" class="ctrl-block"></div>
-            <div id="ctrl-led" class="ctrl-block"></div>
+        <!-- ===================== HOME ===================== -->
+        <div class="page active" id="page-home">
+            <div class="section">
+                <h2>Config</h2>
+                <div class="controls">
+                    <button id="btnUpload">📂 Upload File…</button>
+                    <input type="file" id="configFile" accept=".led,.ledc,.txt" style="display:none">
+                    <button id="btnPlay" style="background: #28a745;">▶ PLAY Config</button>
+                    <button id="btnClear">Clear</button>
+                </div>
+                <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
+                    <strong style="font-size:13px;">Configs:</strong>
+                    <select id="ledcDropdown" style="min-width:240px;padding:4px;"></select>
+                    <button id="btnRefreshLedc" title="Reload list from all sources">⟳</button>
+                    <button id="btnLoadGen">Load</button>
+                    <button id="btnSaveGen">Save</button>
+                    <button id="btnSaveAsGen">Save As…</button>
+                    <span id="loadedFilename" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
+                </div>
+                <textarea id="exampleConfig" placeholder="Enter .led config here..."></textarea>
+            </div>
         </div>
 
-        <div class="section">
-            <h2>Test Config</h2>
-            <div class="controls">
-                <button id="btnLoadExample">Load Fresh Example</button>
-                <button id="btnUpload">📂 Upload File…</button>
-                <input type="file" id="configFile" accept=".led,.ledc,.txt" style="display:none">
-                <button id="btnPlay" style="background: #28a745;">▶ PLAY Config</button>
-                <button id="btnStop" style="background: #dc3545;">■ STOP</button>
-                <button id="btnClear">Clear</button>
+        <!-- ================== LIVE CONTROL ================== -->
+        <div class="page" id="page-live">
+            <div class="section" id="liveCtrl">
+                <h2>Live Control <span id="ctrl-status" style="font-size:12px;color:#666;margin-left:8px;font-weight:normal;"></span></h2>
+                <div style="font-size:12px;color:#888;margin-bottom:8px;">Sliders animate over 1 s. Pauses polling for a control while you're dragging it.</div>
+                <div id="ctrl-audio" class="ctrl-block"></div>
+                <div id="ctrl-noise" class="ctrl-block"></div>
+                <div id="ctrl-led" class="ctrl-block"></div>
             </div>
-            <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
-                <strong style="font-size:13px;">Generator:</strong>
-                <select id="ledcDropdown" style="min-width:220px;padding:4px;"></select>
-                <button id="btnRefreshLedc" title="Reload list from generator">⟳</button>
-                <button id="btnLoadGen">Load</button>
-                <button id="btnSaveGen">Save</button>
-                <button id="btnSaveAsGen">Save As…</button>
-                <span id="loadedFilename" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
+        </div>
+
+        <!-- ===================== REPORTS ===================== -->
+        <div class="page" id="page-reports">
+            <div class="section">
+                <h2>Reports</h2>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <strong style="font-size:13px;">Saved reports:</strong>
+                    <select id="reportDropdown" style="min-width:240px;padding:4px;"></select>
+                    <button id="btnReportDelete" style="background:#dc3545;" title="Delete selected report">🗑</button>
+                    <button id="btnReportRefresh" title="Reload report list">⟳</button>
+                </div>
+                <div style="font-size:12px;color:#888;margin-top:6px;">Reports are generated after a config session. Where they're stored is configured in Settings; they're always uploaded to the generator when its URL is set.</div>
+                <div id="reportBox" style="margin-top:15px;display:none;background:#f0f4f8;border:1px solid #c3d0e0;border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;"></div>
             </div>
-            <textarea id="exampleConfig" placeholder="Enter .led config here..."></textarea>
-            <div id="reportBox" style="margin-top:15px;display:none;background:#f0f4f8;border:1px solid #c3d0e0;border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;"></div>
+        </div>
+
+        <!-- ===================== SETTINGS ===================== -->
+        <div class="page" id="page-settings">
+            <div class="section" id="settings">
+                <h2>Device Settings</h2>
+                <div style="font-size:12px;color:#888;margin-bottom:8px;">Hardware settings (pins, codec, LED) take effect after a reboot. Generator URL and default volume are seeds applied at next boot.</div>
+                <div id="settings-body"></div>
+                <div class="controls" style="margin-top:10px;">
+                    <button id="btnSettingsSave" style="background:#28a745;">Save</button>
+                    <button id="btnSettingsReboot" style="background:#fd7e14;">Save &amp; Reboot</button>
+                    <button id="btnSettingsRestore" style="background:#dc3545;">Restore Defaults</button>
+                    <button id="btnSettingsReload">Reload</button>
+                </div>
+            </div>
         </div>
     </div>
 

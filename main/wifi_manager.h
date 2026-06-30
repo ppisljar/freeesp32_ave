@@ -19,6 +19,18 @@ typedef enum {
     WIFI_STATE_ERROR
 } wifi_state_t;
 
+/** Whether the radio is acting as a station (joined a network) or a SoftAP. */
+typedef enum {
+    WIFI_RUN_MODE_STA = 0,
+    WIFI_RUN_MODE_AP
+} wifi_run_mode_t;
+
+/* SoftAP fallback parameters (advertised in logs / docs). Clients reach the
+ * web UI at http://192.168.4.1 after joining this network. */
+#define WIFI_AP_SSID     "ESP32-AVE-Setup"
+#define WIFI_AP_PASSWORD "entrain123"   /* WPA2, >= 8 chars */
+#define WIFI_AP_IP_STR   "192.168.4.1"
+
 /**
  * @brief Initialize WiFi manager
  *
@@ -34,6 +46,21 @@ esp_err_t wifi_manager_init(void);
  * @return esp_err_t ESP_OK on success
  */
 esp_err_t wifi_manager_connect(const char* ssid, const char* password);
+
+/**
+ * @brief Start a SoftAP fallback so the web UI stays reachable when STA can't
+ *        join (wrong/empty credentials or association timeout). Brings up
+ *        SSID WIFI_AP_SSID with WPA2 password WIFI_AP_PASSWORD on channel 1;
+ *        clients reach the device at WIFI_AP_IP_STR (192.168.4.1).
+ *
+ * @return esp_err_t ESP_OK on success
+ */
+esp_err_t wifi_manager_start_ap(void);
+
+/**
+ * @brief Current run mode (STA joined a network, or SoftAP fallback active).
+ */
+wifi_run_mode_t wifi_manager_get_run_mode(void);
 
 /**
  * @brief Disconnect from WiFi

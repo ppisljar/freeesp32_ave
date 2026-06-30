@@ -2,19 +2,25 @@
 #include "web_server.h"
 #include "config_parser.h"
 #include "audio_manager.h"
-#include "audio_generator.h"     // for NUM_AUDIO_CHANNELS
+#include "audio_generator.h"     // for NUM_AUDIO_CHANNELS, audio_generator_lock
+#include "mod_engine.h"          // POST /api/mod — per-field modulation
+#include "cJSON.h"               // POST /api/mod body parsing
 #include "led_matrix_example.h"
 #include "bg_player.h"
+#include "settings.h"            // runtime device settings (GET/POST /api/settings)
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
 #include "esp_timer.h"
+#include "esp_system.h"          // esp_restart (POST /api/reboot)
 #include "esp_spiffs.h"          // web UI assets served from SPIFFS
 #include <string.h>
 #include <strings.h>           // strcasecmp
 #include <stdlib.h>
 #include <stdio.h>
+#include <dirent.h>            // opendir/readdir for /api/configs listing
+#include <sys/stat.h>
 
 // Defined in esp32_audioplayer.c — snapshot of the GPIO 5 button press log.
 // Returns up to `max` absolute esp_timer_get_time() values, chronological.
@@ -28,6 +34,11 @@ static web_server_state_t g_server_state = {0};
 // Set true once the "storage" SPIFFS partition (web UI assets) is mounted.
 static bool s_spiffs_ok = false;
 #define WEB_SPIFFS_BASE "/spiffs"
+
+// Dedicated SPIFFS partition for user .ledc configs (see partitions.csv).
+static bool s_cfgfs_ok = false;
+#define WEB_CFG_BASE "/configs"
+#define WEB_CFG_MAX_SIZE (32 * 1024)   // max .ledc file size
 
 // HTML pages
 // Minimal fallback page, served only if the SPIFFS web image failed to
@@ -46,12 +57,25 @@ static const char* fallback_html =
 // HTTP Handler functions
 static esp_err_t static_file_handler(httpd_req_t *req);
 static esp_err_t appconfig_handler(httpd_req_t *req);
+static esp_err_t mod_handler(httpd_req_t *req);
 static esp_err_t stop_handler(httpd_req_t *req);
 static esp_err_t example_handler(httpd_req_t *req);
 static esp_err_t play_config_handler(httpd_req_t *req);
 static esp_err_t patch_config_handler(httpd_req_t *req);
 static esp_err_t state_handler(httpd_req_t *req);
 static esp_err_t report_handler(httpd_req_t *req);
+static esp_err_t settings_get_handler(httpd_req_t *req);
+static esp_err_t settings_post_handler(httpd_req_t *req);
+static esp_err_t settings_reset_handler(httpd_req_t *req);
+static esp_err_t reboot_handler(httpd_req_t *req);
+static esp_err_t configs_list_handler(httpd_req_t *req);
+static esp_err_t configs_get_handler(httpd_req_t *req);
+static esp_err_t configs_put_handler(httpd_req_t *req);
+static esp_err_t configs_delete_handler(httpd_req_t *req);
+static esp_err_t reports_list_handler(httpd_req_t *req);
+static esp_err_t reports_get_handler(httpd_req_t *req);
+static esp_err_t reports_put_handler(httpd_req_t *req);
+static esp_err_t reports_delete_handler(httpd_req_t *req);
 
 esp_err_t web_server_init(void)
 {
@@ -78,6 +102,29 @@ esp_err_t web_server_init(void)
         s_spiffs_ok = false;
     }
 
+    // Mount the dedicated "cfgfs" SPIFFS partition for user .ledc configs at
+    // /configs. This partition has no flashed image (it's not in CMake's
+    // spiffs_create_partition_image), so format_if_mount_failed=true formats it
+    // on first boot. It is separate from "storage" so reflashing the web UI /
+    // app does not erase saved configs.
+    esp_vfs_spiffs_conf_t cfg_conf = {
+        .base_path = WEB_CFG_BASE,
+        .partition_label = "cfgfs",
+        .max_files = 4,
+        .format_if_mount_failed = true,
+    };
+    esp_err_t cret = esp_vfs_spiffs_register(&cfg_conf);
+    if (cret == ESP_OK) {
+        size_t total = 0, used = 0;
+        if (esp_spiffs_info("cfgfs", &total, &used) == ESP_OK) {
+            ESP_LOGI(TAG, "cfgfs mounted: %u/%u bytes used", (unsigned)used, (unsigned)total);
+        }
+        s_cfgfs_ok = true;
+    } else {
+        ESP_LOGE(TAG, "cfgfs mount failed (%s) — device config storage disabled", esp_err_to_name(cret));
+        s_cfgfs_ok = false;
+    }
+
     // Allocate upload buffer
     g_server_state.upload_buffer = malloc(WEB_SERVER_MAX_UPLOAD_SIZE);
     if (!g_server_state.upload_buffer) {
@@ -88,7 +135,7 @@ esp_err_t web_server_init(void)
     // Configure HTTP server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 24;
     // Enable wildcard matching so "/*" can serve arbitrary static assets.
     // Exact /api/... handlers are registered first and keep priority.
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -159,6 +206,80 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &appconfig_uri);
+
+    httpd_uri_t mod_uri = {
+        .uri = "/api/mod", .method = HTTP_POST, .handler = mod_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &mod_uri);
+
+    httpd_uri_t settings_get_uri = {
+        .uri = "/api/settings",
+        .method = HTTP_GET,
+        .handler = settings_get_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &settings_get_uri);
+
+    httpd_uri_t settings_post_uri = {
+        .uri = "/api/settings",
+        .method = HTTP_POST,
+        .handler = settings_post_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &settings_post_uri);
+
+    httpd_uri_t settings_reset_uri = {
+        .uri = "/api/settings/reset",
+        .method = HTTP_POST,
+        .handler = settings_reset_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &settings_reset_uri);
+
+    httpd_uri_t reboot_uri = {
+        .uri = "/api/reboot",
+        .method = HTTP_POST,
+        .handler = reboot_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &reboot_uri);
+
+    // Device config storage. Exact /api/configs (list) first, then the
+    // /api/configs/* per-file routes (GET/PUT/DELETE), all before the wildcard.
+    httpd_uri_t configs_list_uri = {
+        .uri = "/api/configs", .method = HTTP_GET, .handler = configs_list_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &configs_list_uri);
+    httpd_uri_t configs_get_uri = {
+        .uri = "/api/configs/*", .method = HTTP_GET, .handler = configs_get_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &configs_get_uri);
+    httpd_uri_t configs_put_uri = {
+        .uri = "/api/configs/*", .method = HTTP_PUT, .handler = configs_put_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &configs_put_uri);
+    httpd_uri_t configs_delete_uri = {
+        .uri = "/api/configs/*", .method = HTTP_DELETE, .handler = configs_delete_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &configs_delete_uri);
+
+    // Device report storage (same cfgfs partition, ".rpt" files).
+    httpd_uri_t reports_list_uri = {
+        .uri = "/api/reports", .method = HTTP_GET, .handler = reports_list_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &reports_list_uri);
+    httpd_uri_t reports_get_uri = {
+        .uri = "/api/reports/*", .method = HTTP_GET, .handler = reports_get_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &reports_get_uri);
+    httpd_uri_t reports_put_uri = {
+        .uri = "/api/reports/*", .method = HTTP_PUT, .handler = reports_put_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &reports_put_uri);
+    httpd_uri_t reports_delete_uri = {
+        .uri = "/api/reports/*", .method = HTTP_DELETE, .handler = reports_delete_handler, .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &reports_delete_uri);
 
     // Wildcard static-asset handler — MUST be registered last so the exact
     // /api/... routes above take precedence over file serving.
@@ -341,9 +462,369 @@ static esp_err_t appconfig_handler(httpd_req_t *req)
 {
     char buf[256];
     int n = snprintf(buf, sizeof(buf),
-                     "{\"generator_url\":\"%s\"}", CONFIG_GENERATOR_SERVER_URL);
+                     "{\"generator_url\":\"%s\"}", settings_get()->generator_url);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, (n > 0 && n < (int)sizeof(buf)) ? n : HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// POST /api/mod — set or clear a periodic modulation on one audio/LED field.
+// Body JSON: {domain:"audio"|"led", ch:N, field:"...", wave:"none"|"triangle"|
+//   "sine"|"sawup"|"sawdown"|"square", from:x, to:y, period_ms:p}
+//   - audio ch is the generator channel (A1 -> 1 .. A8 -> 8); led ch is 0-based
+//     (a single-channel mask 1<<ch is used).
+//   - wave "none" stops modulation on that field; from/to/period are in UI units
+//     (Hz, %, -100..100), matching the sliders.
+static int mod_wave_enum(const char *w)
+{
+    if (!w) return -1;
+    if (!strcmp(w, "triangle")) return MOD_WAVE_TRIANGLE;
+    if (!strcmp(w, "sine"))     return MOD_WAVE_SINE;
+    if (!strcmp(w, "sawup"))    return MOD_WAVE_SAW_UP;
+    if (!strcmp(w, "sawdown"))  return MOD_WAVE_SAW_DOWN;
+    if (!strcmp(w, "square"))   return MOD_WAVE_SQUARE;
+    return -1;   // "none" or unknown → stop
+}
+static int mod_audio_field_enum(const char *f)
+{
+    if (!f) return -1;
+    if (!strcmp(f, "freq")) return MOD_AUDIO_FREQ;
+    if (!strcmp(f, "pan"))  return MOD_AUDIO_PAN;
+    if (!strcmp(f, "vol"))  return MOD_AUDIO_VOLUME;
+    if (!strcmp(f, "mod"))  return MOD_AUDIO_MOD;
+    return -1;
+}
+static int mod_led_field_enum(const char *f)
+{
+    if (!f) return -1;
+    if (!strcmp(f, "freq"))   return MOD_LED_FREQ;
+    if (!strcmp(f, "duty"))   return MOD_LED_DUTY;
+    if (!strcmp(f, "bright")) return MOD_LED_BRIGHT;
+    if (!strcmp(f, "r"))      return MOD_LED_R;
+    if (!strcmp(f, "g"))      return MOD_LED_G;
+    if (!strcmp(f, "b"))      return MOD_LED_B;
+    return -1;
+}
+
+static esp_err_t mod_handler(httpd_req_t *req)
+{
+    char body[256];
+    int total = req->content_len;
+    if (total <= 0 || total >= (int)sizeof(body)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body"); return ESP_FAIL;
+    }
+    int rec = 0;
+    while (rec < total) {
+        int r = httpd_req_recv(req, body + rec, total - rec);
+        if (r <= 0) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv"); return ESP_FAIL; }
+        rec += r;
+    }
+    body[rec] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json"); return ESP_FAIL; }
+
+    const cJSON *jdom = cJSON_GetObjectItemCaseSensitive(root, "domain");
+    const cJSON *jch  = cJSON_GetObjectItemCaseSensitive(root, "ch");
+    const cJSON *jfld = cJSON_GetObjectItemCaseSensitive(root, "field");
+    const cJSON *jwav = cJSON_GetObjectItemCaseSensitive(root, "wave");
+    const cJSON *jfr  = cJSON_GetObjectItemCaseSensitive(root, "from");
+    const cJSON *jto  = cJSON_GetObjectItemCaseSensitive(root, "to");
+    const cJSON *jper = cJSON_GetObjectItemCaseSensitive(root, "period_ms");
+
+    bool is_audio = cJSON_IsString(jdom) && !strcmp(jdom->valuestring, "audio");
+    bool is_led   = cJSON_IsString(jdom) && !strcmp(jdom->valuestring, "led");
+    int  ch    = cJSON_IsNumber(jch) ? (int)jch->valuedouble : -1;
+    int  wave  = (cJSON_IsString(jwav)) ? mod_wave_enum(jwav->valuestring) : -1;
+    float from = cJSON_IsNumber(jfr) ? (float)jfr->valuedouble : 0.0f;
+    float to   = cJSON_IsNumber(jto) ? (float)jto->valuedouble : 0.0f;
+    uint32_t period = cJSON_IsNumber(jper) ? (uint32_t)jper->valuedouble : 1000u;
+    if (period == 0) period = 1000u;
+
+    esp_err_t r = ESP_ERR_INVALID_ARG;
+    audio_generator_lock();
+    if (is_audio && ch >= 0 && ch < NUM_AUDIO_CHANNELS) {
+        int f = mod_audio_field_enum(cJSON_IsString(jfld) ? jfld->valuestring : NULL);
+        if (f >= 0) {
+            r = (wave < 0) ? mod_engine_stop_audio(ch, (mod_audio_field_t)f)
+                           : mod_engine_start_audio(ch, (mod_audio_field_t)f, (mod_wave_t)wave, from, to, period);
+        }
+    } else if (is_led && ch >= 0 && ch < NUM_LED_CHANNELS) {
+        int f = mod_led_field_enum(cJSON_IsString(jfld) ? jfld->valuestring : NULL);
+        if (f >= 0) {
+            uint8_t mask = (uint8_t)(1u << ch);
+            r = (wave < 0) ? mod_engine_stop_led(mask, (mod_led_field_t)f)
+                           : mod_engine_start_led(mask, (mod_led_field_t)f, (mod_wave_t)wave, from, to, period);
+        }
+    }
+    audio_generator_unlock();
+    cJSON_Delete(root);
+
+    if (r != ESP_OK) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad args"); return ESP_FAIL; }
+    httpd_resp_sendstr(req, "ok");
+    return ESP_OK;
+}
+
+// ---- Device config storage (/api/configs, cfgfs SPIFFS at /configs) --------
+// Stores user .ledc files on the dedicated "cfgfs" partition so they survive
+// web/app reflashes. GET /api/configs lists names; GET/PUT/DELETE
+// /api/configs/<name> read/write/remove a single file.
+
+// Validate + extract a bare config filename from the URI after `prefix`.
+// Rejects empty names, path separators, "..", and disallowed characters.
+// Returns true and fills out (NUL-terminated) on success.
+static bool cfg_name_from_uri(httpd_req_t *req, const char *prefix, char *out, size_t cap)
+{
+    const char *uri = req->uri;
+    size_t plen = strlen(prefix);
+    if (strncmp(uri, prefix, plen) != 0) return false;
+    const char *name = uri + plen;
+    // stop at any query string
+    size_t len = 0;
+    while (name[len] && name[len] != '?') len++;
+    if (len == 0 || len >= cap) return false;
+    for (size_t i = 0; i < len; i++) {
+        char c = name[i];
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    if (strstr(name, "..")) return false;
+    memcpy(out, name, len);
+    out[len] = '\0';
+    return true;
+}
+
+// Does `name` end with `suffix` (case-insensitive)?
+static bool has_suffix_ci(const char *name, const char *suffix)
+{
+    size_t nl = strlen(name), sl = strlen(suffix);
+    return nl >= sl && !strcasecmp(name + nl - sl, suffix);
+}
+
+// Shared store on the cfgfs partition (/configs). Configs and reports share the
+// partition, separated by extension: ".ledc" vs ".rpt".
+
+// List files in /configs whose name ends with `suffix`: {"files":["a.ledc",...]}
+static esp_err_t store_list(httpd_req_t *req, const char *suffix)
+{
+    httpd_resp_set_type(req, "application/json");
+    if (!s_cfgfs_ok) { httpd_resp_sendstr(req, "{\"files\":[]}"); return ESP_OK; }
+
+    httpd_resp_sendstr_chunk(req, "{\"files\":[");
+    DIR *d = opendir(WEB_CFG_BASE);
+    if (d) {
+        struct dirent *e;
+        bool first = true;
+        char item[160];
+        while ((e = readdir(d)) != NULL) {
+            if (e->d_name[0] == '\0' || e->d_name[0] == '.') continue;
+            if (!has_suffix_ci(e->d_name, suffix)) continue;
+            int n = snprintf(item, sizeof(item), "%s\"%s\"", first ? "" : ",", e->d_name);
+            if (n > 0 && n < (int)sizeof(item)) httpd_resp_sendstr_chunk(req, item);
+            first = false;
+        }
+        closedir(d);
+    }
+    httpd_resp_sendstr_chunk(req, "]}");
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+// GET /api/<store>/<name> — return the file's text.
+static esp_err_t store_get(httpd_req_t *req, const char *prefix)
+{
+    char name[128];
+    if (!s_cfgfs_ok) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "storage unavailable"); return ESP_FAIL; }
+    if (!cfg_name_from_uri(req, prefix, name, sizeof(name))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name"); return ESP_FAIL;
+    }
+    char path[160];
+    snprintf(path, sizeof(path), WEB_CFG_BASE "/%s", name);
+    FILE *f = fopen(path, "r");
+    if (!f) { httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found"); return ESP_FAIL; }
+    httpd_resp_set_type(req, "text/plain");
+    char chunk[512];
+    size_t r;
+    while ((r = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+        if (httpd_resp_send_chunk(req, chunk, r) != ESP_OK) { fclose(f); return ESP_FAIL; }
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+// PUT /api/<store>/<name> — write the request body to the file.
+static esp_err_t store_put(httpd_req_t *req, const char *prefix)
+{
+    char name[128];
+    if (!s_cfgfs_ok) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "storage unavailable"); return ESP_FAIL; }
+    if (!cfg_name_from_uri(req, prefix, name, sizeof(name))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name"); return ESP_FAIL;
+    }
+    int remaining = req->content_len;
+    if (remaining <= 0 || remaining > WEB_CFG_MAX_SIZE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty or too large"); return ESP_FAIL;
+    }
+    char path[160];
+    snprintf(path, sizeof(path), WEB_CFG_BASE "/%s", name);
+    FILE *f = fopen(path, "w");
+    if (!f) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "open failed"); return ESP_FAIL; }
+    char buf[512];
+    int received = 0;
+    while (received < remaining) {
+        int chunk = remaining - received;
+        if (chunk > (int)sizeof(buf)) chunk = sizeof(buf);
+        int r = httpd_req_recv(req, buf, chunk);
+        if (r <= 0) {
+            fclose(f); remove(path);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"); return ESP_FAIL;
+        }
+        if (fwrite(buf, 1, r, f) != (size_t)r) {
+            fclose(f); remove(path);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed (disk full?)"); return ESP_FAIL;
+        }
+        received += r;
+    }
+    fclose(f);
+    httpd_resp_set_type(req, "application/json");
+    char out[160];
+    int n = snprintf(out, sizeof(out), "{\"saved\":\"%s\",\"bytes\":%d}", name, received);
+    httpd_resp_send(req, out, (n > 0 && n < (int)sizeof(out)) ? n : HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// DELETE /api/<store>/<name> — remove the file.
+static esp_err_t store_delete(httpd_req_t *req, const char *prefix)
+{
+    char name[128];
+    if (!s_cfgfs_ok) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "storage unavailable"); return ESP_FAIL; }
+    if (!cfg_name_from_uri(req, prefix, name, sizeof(name))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name"); return ESP_FAIL;
+    }
+    char path[160];
+    snprintf(path, sizeof(path), WEB_CFG_BASE "/%s", name);
+    if (remove(path) != 0) { httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found"); return ESP_FAIL; }
+    httpd_resp_sendstr(req, "deleted");
+    return ESP_OK;
+}
+
+// Configs (.ledc) and reports (.rpt) are thin wrappers over the shared store.
+static esp_err_t configs_list_handler(httpd_req_t *req)   { return store_list(req, ".ledc"); }
+static esp_err_t configs_get_handler(httpd_req_t *req)    { return store_get(req, "/api/configs/"); }
+static esp_err_t configs_put_handler(httpd_req_t *req)    { return store_put(req, "/api/configs/"); }
+static esp_err_t configs_delete_handler(httpd_req_t *req) { return store_delete(req, "/api/configs/"); }
+static esp_err_t reports_list_handler(httpd_req_t *req)   { return store_list(req, ".rpt"); }
+static esp_err_t reports_get_handler(httpd_req_t *req)    { return store_get(req, "/api/reports/"); }
+static esp_err_t reports_put_handler(httpd_req_t *req)    { return store_put(req, "/api/reports/"); }
+static esp_err_t reports_delete_handler(httpd_req_t *req) { return store_delete(req, "/api/reports/"); }
+
+// GET /api/settings — serialize the runtime device settings as JSON.
+static esp_err_t settings_get_handler(httpd_req_t *req)
+{
+    char buf[1024];
+    int n = settings_to_json(buf, sizeof(buf));
+    if (n < 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "settings serialize failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, n);
+    return ESP_OK;
+}
+
+// POST /api/settings — apply a (possibly partial) JSON settings update and
+// persist to NVS. Hardware settings take effect on the next reboot.
+static esp_err_t settings_post_handler(httpd_req_t *req)
+{
+    int total = req->content_len;
+    if (total <= 0 || total > 4096) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body length");
+        return ESP_FAIL;
+    }
+    char *body = malloc(total + 1);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    int received = 0;
+    while (received < total) {
+        int r = httpd_req_recv(req, body + received, total - received);
+        if (r <= 0) {
+            free(body);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed");
+            return ESP_FAIL;
+        }
+        received += r;
+    }
+    body[total] = '\0';
+
+    esp_err_t err = settings_apply_json(body, total);
+    free(body);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "settings apply failed");
+        return ESP_FAIL;
+    }
+
+    char buf[1024];
+    int n = settings_to_json(buf, sizeof(buf));
+    httpd_resp_set_type(req, "application/json");
+    if (n < 0) {
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+    } else {
+        httpd_resp_send(req, buf, n);
+    }
+    return ESP_OK;
+}
+
+// POST /api/settings/reset — erase the settings namespace, reseed from the
+// compile-time CONFIG_* defaults, and return the fresh settings JSON.
+static esp_err_t settings_reset_handler(httpd_req_t *req)
+{
+    esp_err_t err = settings_reset_defaults();
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "reset failed");
+        return ESP_FAIL;
+    }
+    char buf[1024];
+    int n = settings_to_json(buf, sizeof(buf));
+    httpd_resp_set_type(req, "application/json");
+    if (n < 0) {
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+    } else {
+        httpd_resp_send(req, buf, n);
+    }
+    return ESP_OK;
+}
+
+// Deferred-restart callback: gives the HTTP response time to flush before the
+// chip resets. Scheduled by reboot_handler via a one-shot esp_timer.
+static void reboot_timer_cb(void *arg)
+{
+    (void)arg;
+    ESP_LOGW(TAG, "Rebooting now (requested via /api/reboot)");
+    esp_restart();
+}
+
+// POST /api/reboot — acknowledge, then restart after a short delay so the
+// response reaches the browser before the connection drops.
+static esp_err_t reboot_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true,\"rebooting\":true}");
+
+    static esp_timer_handle_t reboot_timer = NULL;
+    if (!reboot_timer) {
+        const esp_timer_create_args_t targs = {
+            .callback = reboot_timer_cb,
+            .name = "reboot",
+        };
+        if (esp_timer_create(&targs, &reboot_timer) != ESP_OK) {
+            // Fall back to an immediate restart if the timer can't be made.
+            esp_restart();
+        }
+    }
+    esp_timer_start_once(reboot_timer, 500000 /* 500 ms */);
     return ESP_OK;
 }
 
@@ -611,7 +1092,7 @@ static esp_err_t state_handler(httpd_req_t *req)
 
     APPEND("\"audio\":[");
     for (int i = 0; i < n_aud; i++) {
-        APPEND("%s{\"ch\":%d,\"active\":%s,\"freq\":%.2f,\"freq_r\":%.2f,"
+        APPEND("%s{\"ch\":%d,\"active\":%s,\"freq\":%.3f,\"freq_r\":%.3f,"
                "\"pan\":%.1f,\"vol\":%.1f,\"mod\":%.2f,\"wave\":%u,"
                "\"modf\":{\"freq\":%s,\"pan\":%s,\"vol\":%s,\"mod\":%s}}",
                (i == 0) ? "" : ",", i + 1,

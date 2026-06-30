@@ -5,6 +5,7 @@
 #include "led_matrix_example.h"
 #include "isr_profiling.h"
 #include "bg_player.h"
+#include "settings.h"           // audio_max_volume (master output gain)
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -135,10 +136,17 @@ void audio_test_output_task(void* pvParameters)
             bg_player_mix_into(audio_buffer, stereo_samples);
         }
 
+        // Master output gain from the runtime "maximum volume" setting (0-100%).
+        // Scales ALL audio (timeline channels, live control, noise, background)
+        // uniformly — e.g. a .ledc volume of 80 with max=10 yields 80%*10% = 8%.
+        // Read once per buffer; lock-free (a 32-bit int read is atomic) so it
+        // applies on the next buffer after a settings change, no reboot needed.
+        const float master_gain = settings_get()->audio_max_volume / 100.0f;
+
         // Convert float samples to int16 for I2S output
         for (size_t i = 0; i < stereo_samples * 2; i++) {
             // Convert float (-1.0 to 1.0) to int16 (-32768 to 32767)
-            float sample = audio_buffer[i];
+            float sample = audio_buffer[i] * master_gain;
 
             // Clamp to valid range
             if (sample > 1.0f) sample = 1.0f;

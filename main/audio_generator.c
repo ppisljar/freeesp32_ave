@@ -1236,6 +1236,22 @@ esp_err_t audio_generator_set_param(int channel, audio_param_t param, float valu
     return ret;
 }
 
+/* Change the waveform of an already-running channel (e.g. switching the noise
+ * type White↔Pink↔Brown live). wave_type is not a sweepable param, so this sets
+ * it directly. Updates current, params and pending copies so the change sticks
+ * regardless of whether a pending-params latch happens next buffer. Caller must
+ * hold audio_gen_mutex. */
+esp_err_t audio_generator_set_wave_type_locked(int channel, audio_wave_type_t wt)
+{
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return ESP_ERR_INVALID_ARG;
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    if (!ch->active) return ESP_ERR_INVALID_STATE;
+    ch->wave_type            = wt;
+    ch->params.wave_type     = wt;
+    ch->pending_params.wave_type = wt;
+    return ESP_OK;
+}
+
 esp_err_t audio_generator_get_param_locked(int channel, audio_param_t param, float *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;

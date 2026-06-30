@@ -19,13 +19,14 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_AUDIO_DRIVER_ES8388
+#if CONFIG_AUDIO_SUPPORT_ES8388
 
 #include "esp_err.h"
 #include "esp_log.h"
 #include "driver/i2c_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "settings.h"
 #include <string.h>
 
 static const char *TAG = "es8388";
@@ -75,10 +76,11 @@ static esp_err_t es8388_i2c_open(void)
 {
     if (s_bus_handle) return ESP_OK;
 
+    const device_settings_t *cfg = settings_get();
     i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = CONFIG_AUDIO_CODEC_I2C_PORT,
-        .sda_io_num = CONFIG_AUDIO_CODEC_I2C_SDA_GPIO,
-        .scl_io_num = CONFIG_AUDIO_CODEC_I2C_SCL_GPIO,
+        .i2c_port = cfg->codec_i2c_port,
+        .sda_io_num = cfg->codec_i2c_sda,
+        .scl_io_num = cfg->codec_i2c_scl,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         /* Higher glitch tolerance helps on long I2C lines or boards with
          * weaker pull-ups. ESP-IDF's default is 7; the maximum is 7 on the
@@ -95,7 +97,7 @@ static esp_err_t es8388_i2c_open(void)
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = ES8388_I2C_ADDR,
-        .scl_speed_hz = CONFIG_AUDIO_CODEC_I2C_FREQ_HZ,
+        .scl_speed_hz = cfg->codec_i2c_freq_hz,
     };
     err = i2c_master_bus_add_device(s_bus_handle, &dev_cfg, &s_dev_handle);
     if (err != ESP_OK) {
@@ -261,4 +263,4 @@ esp_err_t es8388_deinit(void)
     return ESP_OK;
 }
 
-#endif /* CONFIG_AUDIO_DRIVER_ES8388 */
+#endif /* CONFIG_AUDIO_SUPPORT_ES8388 */

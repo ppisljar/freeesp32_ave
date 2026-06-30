@@ -3,8 +3,11 @@
 // handlers), then kicks off initial loads and the live-control panel.
 import { appConfig } from './util.js';
 import { loadExample, playConfig, stopConfig, clearConfig, bindFileInput } from './config.js';
-import { refreshLedcDropdown, loadFromGenerator, saveToGenerator, saveAsToGenerator } from './generator.js';
+import { refreshConfigList, loadSelected, saveCurrent, saveAsDialog } from './configstore.js';
 import { ctrlInit } from './livecontrol.js';
+import { settingsInit } from './settings.js';
+import { refreshReportList, viewReport, deleteReport } from './reportstore.js';
+import { initTabs } from './nav.js';
 
 function bind(id, fn) {
     const el = document.getElementById(id);
@@ -21,20 +24,27 @@ async function boot() {
         appConfig.generatorUrl = '';
     }
 
-    bind('btnLoadExample', loadExample);
     bind('btnUpload', () => document.getElementById('configFile').click());
     bind('btnPlay', playConfig);
     bind('btnStop', stopConfig);
     bind('btnClear', clearConfig);
-    bind('btnRefreshLedc', refreshLedcDropdown);
-    bind('btnLoadGen', loadFromGenerator);
-    bind('btnSaveGen', saveToGenerator);
-    bind('btnSaveAsGen', saveAsToGenerator);
+    bind('btnRefreshLedc', refreshConfigList);
+    bind('btnLoadGen', loadSelected);
+    bind('btnSaveGen', saveCurrent);
+    bind('btnSaveAsGen', saveAsDialog);
+    bind('btnReportDelete', deleteReport);
+    bind('btnReportRefresh', refreshReportList);
+    // View a report by selecting it in the dropdown (no separate View button).
+    const reportDd = document.getElementById('reportDropdown');
+    if (reportDd) reportDd.addEventListener('change', viewReport);
     bindFileInput();
+    initTabs();            // top menu: home / live / reports / settings
 
     loadExample();         // populate textarea with the example config
-    refreshLedcDropdown(); // fetch the generator's config list
+    refreshConfigList();   // list configs from generator + device + browser
     ctrlInit();            // build live-control panel + start state polling
+    settingsInit();        // build device-settings panel + load current values
+    refreshReportList();   // list saved reports from device + browser
 }
 
 boot();

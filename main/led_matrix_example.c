@@ -4,6 +4,7 @@
 #include "led_matrix_example.h"
 #include "led_strip.h"
 #include "audio_config.h"
+#include "settings.h"
 #include "sdkconfig.h"
 #include "isr_profiling.h"
 #include "esp_log.h"
@@ -152,16 +153,8 @@ static uint32_t matrix_xy_to_index(uint8_t x, uint8_t y)
         return led_strip_get_pixel_count(matrix_handle); // invalid sentinel
     }
 
-#ifdef CONFIG_LED_GRID_WIDTH
-    uint8_t grid_w = (uint8_t)CONFIG_LED_GRID_WIDTH;
-#else
-    uint8_t grid_w = LED_MATRIX_WIDTH;
-#endif
-#ifdef CONFIG_LED_GRID_HEIGHT
-    uint8_t grid_h = (uint8_t)CONFIG_LED_GRID_HEIGHT;
-#else
-    uint8_t grid_h = LED_MATRIX_HEIGHT;
-#endif
+    uint8_t grid_w = (uint8_t)settings_get()->led_grid_width;
+    uint8_t grid_h = (uint8_t)settings_get()->led_grid_height;
 
     if (x >= grid_w || y >= grid_h) {
         return led_strip_get_pixel_count(matrix_handle); // out of bounds

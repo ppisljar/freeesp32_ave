@@ -302,6 +302,10 @@ esp_err_t audio_generator_update_params(int channel, const audio_gen_params_t *n
 esp_err_t audio_generator_set_param(int channel, audio_param_t param, float value);
 esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, float value);
 
+/* Set the waveform of an active channel directly (wave_type isn't sweepable).
+ * Used to switch noise type live. Caller must hold audio_gen_mutex. */
+esp_err_t audio_generator_set_wave_type_locked(int channel, audio_wave_type_t wt);
+
 /* _locked one-field readers — caller must hold audio_gen_mutex via
  * audio_generator_lock(). Used by patch dispatch (config_parser.c) to read
  * the current value of each field so animated patches can sweep FROM the

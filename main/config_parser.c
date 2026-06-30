@@ -820,6 +820,15 @@ static void apply_patch_audio_entry(const config_audio_entry_t *e)
         return;
     }
 
+    /* Waveform isn't sweepable, so the field-loop below never touches it. If the
+     * patch explicitly carried a wave_type (8th field — e.g. the noise UI
+     * switching White↔Pink↔Brown on an already-running channel), apply it
+     * directly. Patches without it (the 6-field tone sliders) leave it alone, so
+     * a square/saw tone from a .ledc file isn't reset to sine by a slider nudge. */
+    if (e->has_wave_type) {
+        audio_generator_set_wave_type_locked(e->channel, (audio_wave_type_t)e->wave_type);
+    }
+
     const uint32_t dur_ms = e->time_ms;
     const uint64_t dur_samples = ((uint64_t)dur_ms * AUDIO_GEN_SAMPLE_RATE) / 1000ULL;
 
@@ -1326,8 +1335,10 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
         int wave_type_int = atoi(tokens[7]);
         audio_entry->wave_type = (wave_type_int >= 0 && wave_type_int < AUDIO_WAVE_COUNT)
                                  ? (uint8_t)wave_type_int : 0;
+        audio_entry->has_wave_type = true;
     } else {
         audio_entry->wave_type = 0;
+        audio_entry->has_wave_type = false;
     }
 
     return ESP_OK;

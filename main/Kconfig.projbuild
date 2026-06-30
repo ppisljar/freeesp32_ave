@@ -71,24 +71,49 @@ config BG_SDCARD_CLK_GPIO
 # LED Backend Selection (Step 1 of Plan 008)
 # ---------------------------------------------------------------------------
 
-choice LED_TYPE
-    prompt "LED hardware backend"
-    default LED_TYPE_NEOPIXEL
+# Phase 3 (runtime_settings_plan.md): all LED backends are compiled into a
+# single firmware and the ACTIVE one is selected at runtime from the settings
+# store. The three SUPPORT bools below decide which backend *code* is compiled
+# in (default: everything). The LED_DEFAULT_BACKEND choice only seeds the
+# runtime default on first boot; it does NOT gate any code.
+
+config LED_SUPPORT_NEOPIXEL
+    bool "Compile in Neopixel (WS2812/SK6812) backend — single-wire RMT"
+    default y
     help
-        Select the physical LED hardware attached to this build.
-        NEOPIXEL  — single-wire addressable strips (WS2812/SK6812), driven by RMT.
-        DOTSTAR   — two-wire addressable strips (APA102), driven by hardware SPI (SPI3_HOST).
-        DIRECT    — 4 discrete LEDs (one per logical channel) driven by LEDC PWM; only
-                    brightness is meaningful — R/G/B from .led timelines are silently ignored.
+        Compile the RMT-driven Neopixel (WS2812/SK6812) backend into the
+        firmware. Leave enabled to allow runtime selection of this backend.
 
-    config LED_TYPE_NEOPIXEL
-        bool "Neopixel (WS2812/SK6812) — single-wire RMT"
+config LED_SUPPORT_DOTSTAR
+    bool "Compile in DotStar (APA102) backend — two-wire SPI"
+    default y
+    help
+        Compile the SPI-driven DotStar (APA102) backend into the firmware
+        (SPI3_HOST). Leave enabled to allow runtime selection of this backend.
 
-    config LED_TYPE_DOTSTAR
-        bool "DotStar (APA102) — two-wire SPI"
+config LED_SUPPORT_DIRECT
+    bool "Compile in Direct (LEDC PWM) backend — discrete GPIOs"
+    default y
+    help
+        Compile the LEDC-PWM Direct backend (discrete brightness-only LEDs)
+        into the firmware. Leave enabled to allow runtime selection.
 
-    config LED_TYPE_DIRECT
-        bool "Direct — 4 discrete GPIOs via LEDC PWM"
+choice LED_DEFAULT_BACKEND
+    prompt "Default LED backend (runtime seed)"
+    default LED_DEFAULT_BACKEND_DIRECT
+    help
+        Selects the LED backend the runtime settings store is seeded with on
+        first boot (or after a settings reset). The active backend can be
+        changed at runtime over the web UI; this only sets the initial value.
+
+    config LED_DEFAULT_BACKEND_NEOPIXEL
+        bool "Neopixel (WS2812/SK6812)"
+
+    config LED_DEFAULT_BACKEND_DOTSTAR
+        bool "DotStar (APA102)"
+
+    config LED_DEFAULT_BACKEND_DIRECT
+        bool "Direct (LEDC PWM)"
 
 endchoice
 
@@ -96,7 +121,7 @@ config LED_DATA_PIN
     int "LED data GPIO pin"
     range 0 39
     default 12
-    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    depends on LED_SUPPORT_NEOPIXEL || LED_SUPPORT_DOTSTAR
     help
         GPIO pin connected to the DIN (data-in) line of the LED strip.
         For DotStar this is the DATA line; the CLOCK line is LED_CLOCK_PIN.
@@ -106,7 +131,7 @@ config LED_CLOCK_PIN
     int "DotStar clock GPIO pin"
     range 0 39
     default 14
-    depends on LED_TYPE_DOTSTAR
+    depends on LED_SUPPORT_DOTSTAR
     help
         GPIO pin connected to the CLK line of the DotStar (APA102) strip.
         Must not conflict with I2S audio pins (25, 26, 22), UART (1, 3),
@@ -116,7 +141,7 @@ config LED_COUNT
     int "Number of LEDs in the strip"
     range 1 1000
     default 48
-    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    depends on LED_SUPPORT_NEOPIXEL || LED_SUPPORT_DOTSTAR
     help
         Total number of individually addressable pixels on the strip.
         Must match the actual wired pixel count.  The channel-map string
@@ -125,7 +150,7 @@ config LED_COUNT
 config LED_CHANNEL_MAP
     string "Per-pixel channel map (comma-separated, length = LED_COUNT)"
     default "1,1,1,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,2,2,2,2,2,3,3,2,2,3,3,2,2,3,3,2,2,3,3,2,2,2,2,2"
-    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    depends on LED_SUPPORT_NEOPIXEL || LED_SUPPORT_DOTSTAR
     help
         Flat comma-separated list of channel indices (0-3), one entry per LED.
         Entry i controls which logical channel owns LED i.  Length must equal
@@ -145,7 +170,7 @@ config LED_DIRECT_PIN_CH1
     int "Direct mode — GPIO pin for channel 1 (-1 = disabled)"
     range -1 39
     default 12
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 0 (channel index 0).
         Brightness from the .led timeline controls PWM duty; R/G/B are ignored.
@@ -155,7 +180,7 @@ config LED_DIRECT_PIN_CH2
     int "Direct mode — GPIO pin for channel 2 (-1 = disabled)"
     range -1 39
     default 13
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 1 (channel index 1).
         Set to -1 to disable this channel.
@@ -164,7 +189,7 @@ config LED_DIRECT_PIN_CH3
     int "Direct mode — GPIO pin for channel 3 (-1 = disabled)"
     range -1 39
     default 14
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 2 (channel index 2).
         Set to -1 to disable this channel.
@@ -173,7 +198,7 @@ config LED_DIRECT_PIN_CH4
     int "Direct mode — GPIO pin for channel 4 (-1 = disabled)"
     range -1 39
     default 15
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 3 (channel index 3).
         Set to -1 to disable this channel.
@@ -182,7 +207,7 @@ config LED_DIRECT_PIN_CH5
     int "Direct mode — GPIO pin for channel 5 (-1 = disabled)"
     range -1 39
     default 2
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 4 (channel index 4).
         Default GPIO 2 is the on-board LED on most ESP32 dev boards; adjust
@@ -194,7 +219,7 @@ config LED_DIRECT_PIN_CH6
     int "Direct mode — GPIO pin for channel 6 (-1 = disabled)"
     range -1 39
     default 4
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 5 (channel index 5).
         Default GPIO 4. Must not conflict with the configured I2S pins,
@@ -205,7 +230,7 @@ config LED_DIRECT_PIN_CH7
     int "Direct mode — GPIO pin for channel 7 (-1 = disabled)"
     range -1 39
     default 16
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 6 (channel index 6).
         Default GPIO 16. Must not conflict with the configured I2S pins,
@@ -217,7 +242,7 @@ config LED_DIRECT_PIN_CH8
     int "Direct mode — GPIO pin for channel 8 (-1 = disabled)"
     range -1 39
     default 17
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         GPIO pin driven by LEDC PWM for logical channel 7 (channel index 7).
         Default GPIO 17. Same PSRAM caveat as CH7 above. Adjust to an
@@ -228,7 +253,7 @@ config LED_DIRECT_ACTIVE_LOW_MASK
     int "Direct mode — active-low channel bitmask (0-255)"
     range 0 255
     default 0
-    depends on LED_TYPE_DIRECT
+    depends on LED_SUPPORT_DIRECT
     help
         Bit N set means logical channel N drives an active-low LED — i.e.
         the LED's anode is on Vcc and its cathode goes to the GPIO via a
@@ -247,7 +272,7 @@ config LED_DOTSTAR_SPI_CLOCK_HZ
     int "DotStar SPI bus clock frequency (Hz)"
     range 100000 40000000
     default 10000000
-    depends on LED_TYPE_DOTSTAR
+    depends on LED_SUPPORT_DOTSTAR
     help
         SPI clock rate for the DotStar (APA102) strip in Hz.
         APA102 supports up to ~30 MHz.  Lower values improve signal integrity
@@ -258,7 +283,7 @@ config LED_GRID_WIDTH
     int "LED grid width (columns) for optional grid addressing"
     range 1 64
     default 12
-    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    depends on LED_SUPPORT_NEOPIXEL || LED_SUPPORT_DOTSTAR
     help
         Number of columns in the logical pixel grid used by led_matrix_set_pixel(x, y, ...).
         Only meaningful when LED_GRID_WIDTH * LED_GRID_HEIGHT == LED_COUNT.
@@ -268,7 +293,7 @@ config LED_GRID_HEIGHT
     int "LED grid height (rows) for optional grid addressing"
     range 1 64
     default 4
-    depends on LED_TYPE_NEOPIXEL || LED_TYPE_DOTSTAR
+    depends on LED_SUPPORT_NEOPIXEL || LED_SUPPORT_DOTSTAR
     help
         Number of rows in the logical pixel grid used by led_matrix_set_pixel(x, y, ...).
         Only meaningful when LED_GRID_WIDTH * LED_GRID_HEIGHT == LED_COUNT.
@@ -355,28 +380,45 @@ config AUDIO_AMP_ENABLE_GPIO
 # Other boards have an I2S codec IC (AC101, ES8388) that must be initialized
 # over I2C before audio output works. Select the matching driver here.
 
-choice AUDIO_DRIVER
-    prompt "Audio codec driver"
-    default AUDIO_DRIVER_NONE
-    help
-        NONE   — no codec initialization; suitable for passive DACs that work
-                 with just I2S signals (PCM5102A, MAX98357A, generic DAC modules).
-        AC101  — initialize an X-Powers AC101 codec over I2C. Used on
-                 AI-Thinker ESP32-Audio-Kit / ESP32-A1S (AC101 variant).
-                 I2C address 0x1A. PLL sourced from BCLK — no MCLK needed.
-        ES8388 — initialize an Everest Semi ES8388 codec over I2C. Used on
-                 AI-Thinker ESP32-A1S (ES8388 variant), LyraT boards, and
-                 many other ESP32 audio dev kits. I2C address 0x10. REQUIRES
-                 MCLK from the ESP32 — set CONFIG_AUDIO_I2S_MCLK_GPIO to 0
-                 (the only MCLK-capable pin on most classic ESP32 boards).
+# Phase 3 (runtime_settings_plan.md): all codec drivers are compiled into a
+# single firmware and the ACTIVE one is selected at runtime from the settings
+# store. The SUPPORT bools below decide which codec *code* is compiled in
+# (default: everything). "None" (passive DAC / raw I2S) is always available and
+# needs no support bool. The AUDIO_DEFAULT_CODEC choice only seeds the runtime
+# default on first boot; it does NOT gate any code.
 
-    config AUDIO_DRIVER_NONE
+config AUDIO_SUPPORT_AC101
+    bool "Compile in AC101 (X-Powers codec) driver"
+    default y
+    help
+        Compile the AC101 (I2C, addr 0x1A) codec driver into the firmware.
+        Used on AI-Thinker ESP32-Audio-Kit / ESP32-A1S (AC101 variant).
+        Leave enabled to allow runtime selection of this codec.
+
+config AUDIO_SUPPORT_ES8388
+    bool "Compile in ES8388 (Everest Semi codec) driver"
+    default y
+    help
+        Compile the ES8388 (I2C, addr 0x10) codec driver into the firmware.
+        Used on AI-Thinker ESP32-A1S (ES8388 variant), LyraT boards, etc.
+        REQUIRES MCLK from the ESP32 (set AUDIO_I2S_MCLK_GPIO to 0). Leave
+        enabled to allow runtime selection of this codec.
+
+choice AUDIO_DEFAULT_CODEC
+    prompt "Default audio codec (runtime seed)"
+    default AUDIO_DEFAULT_CODEC_ES8388
+    help
+        Selects the codec the runtime settings store is seeded with on first
+        boot (or after a settings reset). The active codec can be changed at
+        runtime over the web UI; this only sets the initial value.
+
+    config AUDIO_DEFAULT_CODEC_NONE
         bool "None (passive DAC / raw I2S)"
 
-    config AUDIO_DRIVER_AC101
+    config AUDIO_DEFAULT_CODEC_AC101
         bool "AC101 (X-Powers codec, I2C-controlled)"
 
-    config AUDIO_DRIVER_ES8388
+    config AUDIO_DEFAULT_CODEC_ES8388
         bool "ES8388 (Everest Semi codec, I2C-controlled)"
 
 endchoice
@@ -385,7 +427,7 @@ config AUDIO_CODEC_I2C_PORT
     int "Audio codec I2C port (0 or 1)"
     range 0 1
     default 0
-    depends on !AUDIO_DRIVER_NONE
+    depends on AUDIO_SUPPORT_AC101 || AUDIO_SUPPORT_ES8388
     help
         I2C peripheral number used to talk to the codec.
 
@@ -393,7 +435,7 @@ config AUDIO_CODEC_I2C_SDA_GPIO
     int "Audio codec I2C SDA GPIO"
     range 0 39
     default 33
-    depends on !AUDIO_DRIVER_NONE
+    depends on AUDIO_SUPPORT_AC101 || AUDIO_SUPPORT_ES8388
     help
         SDA line for the codec I2C bus. On the AC101 boards this is GPIO 33.
 
@@ -401,7 +443,7 @@ config AUDIO_CODEC_I2C_SCL_GPIO
     int "Audio codec I2C SCL GPIO"
     range 0 39
     default 32
-    depends on !AUDIO_DRIVER_NONE
+    depends on AUDIO_SUPPORT_AC101 || AUDIO_SUPPORT_ES8388
     help
         SCL line for the codec I2C bus. On the AC101 boards this is GPIO 32.
 
@@ -409,7 +451,7 @@ config AUDIO_CODEC_I2C_FREQ_HZ
     int "Audio codec I2C bus frequency (Hz)"
     range 10000 1000000
     default 100000
-    depends on !AUDIO_DRIVER_NONE
+    depends on AUDIO_SUPPORT_AC101 || AUDIO_SUPPORT_ES8388
     help
         I2C clock speed for the codec bus. Standard mode (100kHz) is safe;
         fast mode (400kHz) is usually fine but increases EMI risk on long lines.

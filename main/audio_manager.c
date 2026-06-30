@@ -1,6 +1,7 @@
 #include "audio_manager.h"
 #include "audio_config.h"
 #include "audio_driver.h"
+#include "settings.h"
 #include "audio_generator.h"  // for NUM_AUDIO_CHANNELS
 #include "lock_free_comm.h"
 #include "esp_log.h"
@@ -26,6 +27,11 @@ i2s_chan_handle_t tx_handle = NULL;
 esp_err_t audio_manager_init(void)
 {
     ESP_LOGI(TAG, "Initializing Audio Manager");
+
+    // Runtime settings (I2S pins, codec I2C, default volume). Seeded from the
+    // CONFIG_* defaults on first boot; editable over the web (reboot to apply).
+    const device_settings_t *cfg = settings_get();
+    g_audio_state.volume = cfg->default_volume;
 
     // I2S configuration. We override three fields of the default config:
     //   1. dma_desc_num and dma_frame_num — the ESP-IDF defaults (6 × 240)
@@ -63,18 +69,18 @@ esp_err_t audio_manager_init(void)
     // squeezelite-esp32 and ESP-ADF both unconditionally use APLL for the
     // same reason.
     i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_SAMPLE_RATE);
-    if (AUDIO_I2S_MCLK_GPIO != GPIO_NUM_NC) {
+    if (cfg->i2s_mclk_pin != GPIO_NUM_NC) {
         clk_cfg.clk_src = I2S_CLK_SRC_APLL;
     }
     i2s_std_config_t std_cfg = {
         .clk_cfg = clk_cfg,
         .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
-            .mclk = AUDIO_I2S_MCLK_GPIO,
-            .bclk = AUDIO_I2S_BCK_GPIO,
-            .ws = AUDIO_I2S_WS_GPIO,
-            .dout = AUDIO_I2S_DATA_GPIO,
-            .din = AUDIO_I2S_DIN_GPIO,
+            .mclk = (gpio_num_t)cfg->i2s_mclk_pin,
+            .bclk = (gpio_num_t)cfg->i2s_bck_pin,
+            .ws = (gpio_num_t)cfg->i2s_ws_pin,
+            .dout = (gpio_num_t)cfg->i2s_data_pin,
+            .din = (gpio_num_t)cfg->i2s_din_pin,
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
@@ -120,7 +126,10 @@ esp_err_t audio_manager_init(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "audio_driver_init failed: %s — running I2C diagnostic", esp_err_to_name(ret));
 
-#if !CONFIG_AUDIO_DRIVER_NONE
+        /* Phase 3: codec selection is a runtime setting. The I2C diagnostic
+         * only makes sense for an I2C-controlled codec; skip it for the
+         * passive-DAC ("none") path. */
+        if (cfg->audio_codec != AUDIO_CODEC_NONE) {
         /* Diagnostic mode — the configured codec didn't probe successfully.
          * Tear down I2S and run two I2C bus scans:
          *   1. with the current (configured) I2S pin layout
@@ -133,30 +142,30 @@ esp_err_t audio_manager_init(void)
         tx_handle = NULL;
 
         audio_driver_i2c_scan("scan #1 (configured pins)",
-                              CONFIG_AUDIO_CODEC_I2C_PORT,
-                              CONFIG_AUDIO_CODEC_I2C_SDA_GPIO,
-                              CONFIG_AUDIO_CODEC_I2C_SCL_GPIO,
-                              CONFIG_AUDIO_CODEC_I2C_FREQ_HZ);
+                              cfg->codec_i2c_port,
+                              cfg->codec_i2c_sda,
+                              cfg->codec_i2c_scl,
+                              cfg->codec_i2c_freq_hz);
 
         /* Re-create I2S with WS and DO swapped, then re-scan. */
         ESP_LOGI(TAG, "Re-initializing I2S with WS/DO swapped (was WS=%d DO=%d, now WS=%d DO=%d)",
-                 AUDIO_I2S_WS_GPIO, AUDIO_I2S_DATA_GPIO,
-                 AUDIO_I2S_DATA_GPIO, AUDIO_I2S_WS_GPIO);
+                 cfg->i2s_ws_pin, cfg->i2s_data_pin,
+                 cfg->i2s_data_pin, cfg->i2s_ws_pin);
         i2s_chan_config_t alt_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
         alt_chan_cfg.dma_desc_num = AUDIO_DMA_BUFFER_COUNT;
         alt_chan_cfg.dma_frame_num = AUDIO_DMA_FRAMES_PER_BUF;
         alt_chan_cfg.auto_clear_after_cb = true;
         if (i2s_new_channel(&alt_chan_cfg, &tx_handle, NULL) == ESP_OK) {
             i2s_std_config_t alt_std_cfg = std_cfg;
-            alt_std_cfg.gpio_cfg.ws   = AUDIO_I2S_DATA_GPIO;  /* swapped */
-            alt_std_cfg.gpio_cfg.dout = AUDIO_I2S_WS_GPIO;    /* swapped */
+            alt_std_cfg.gpio_cfg.ws   = (gpio_num_t)cfg->i2s_data_pin;  /* swapped */
+            alt_std_cfg.gpio_cfg.dout = (gpio_num_t)cfg->i2s_ws_pin;    /* swapped */
             i2s_channel_init_std_mode(tx_handle, &alt_std_cfg);
 
             audio_driver_i2c_scan("scan #2 (WS/DO swapped)",
-                                  CONFIG_AUDIO_CODEC_I2C_PORT,
-                                  CONFIG_AUDIO_CODEC_I2C_SDA_GPIO,
-                                  CONFIG_AUDIO_CODEC_I2C_SCL_GPIO,
-                                  CONFIG_AUDIO_CODEC_I2C_FREQ_HZ);
+                                  cfg->codec_i2c_port,
+                                  cfg->codec_i2c_sda,
+                                  cfg->codec_i2c_scl,
+                                  cfg->codec_i2c_freq_hz);
 
             i2s_del_channel(tx_handle);
             tx_handle = NULL;
@@ -167,7 +176,7 @@ esp_err_t audio_manager_init(void)
         ESP_LOGE(TAG, "  0x10/0x11 = ES8388 / ES8311 (try AUDIO_DRIVER_ES8388, swap WS/DO)");
         ESP_LOGE(TAG, "  0x1A      = AC101 (current driver; check power and wiring)");
         ESP_LOGE(TAG, "  no ACKs   = check SDA/SCL pins, codec power, pull-ups");
-#endif
+        }
         return ret;
     }
 
@@ -185,8 +194,8 @@ esp_err_t audio_manager_init(void)
 
     ESP_LOGI(TAG, "Audio Manager initialized successfully");
     ESP_LOGI(TAG, "I2S pins - BCK: %d, WS: %d, DATA: %d, MCLK: %d, DIN: %d",
-             AUDIO_I2S_BCK_GPIO, AUDIO_I2S_WS_GPIO, AUDIO_I2S_DATA_GPIO,
-             AUDIO_I2S_MCLK_GPIO, AUDIO_I2S_DIN_GPIO);
+             cfg->i2s_bck_pin, cfg->i2s_ws_pin, cfg->i2s_data_pin,
+             cfg->i2s_mclk_pin, cfg->i2s_din_pin);
     ESP_LOGI(TAG, "Audio format - Sample rate: %d Hz, Bits: %d, Channels: %d",
              AUDIO_SAMPLE_RATE, AUDIO_BITS_PER_SAMPLE, AUDIO_CHANNELS);
 

@@ -11,6 +11,7 @@
 #include "esp_private/periph_ctrl.h"
 #include "soc/periph_defs.h"
 #include "sdkconfig.h"
+#include "settings.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,6 +48,7 @@ typedef struct {
 // Timing configuration for the NEOPIXEL backend (WS2812/SK6812/APA106 timings
 // are identical so we collapse to a single entry).  DOTSTAR and DIRECT don't
 // use this table -- their refresh paths don't call s_neopixel_encode_data().
+#if CONFIG_LED_SUPPORT_NEOPIXEL
 static const led_timing_t s_neopixel_timing = {
     .t0h_ticks  = NS_TO_RMT_TICKS(WS2812_T0H_NS),
     .t0l_ticks  = NS_TO_RMT_TICKS(WS2812_T0L_NS),
@@ -54,6 +56,7 @@ static const led_timing_t s_neopixel_timing = {
     .t1l_ticks  = NS_TO_RMT_TICKS(WS2812_T1L_NS),
     .reset_ticks = NS_TO_RMT_TICKS(WS2812_RESET_NS),
 };
+#endif
 
 /* =========================================================================
  * Forward declarations for internal helpers
@@ -160,8 +163,9 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
 
     /* -----------------------------------------------------------------
      * Resolve backend and parameters.
-     * When backend == LED_STRIP_BACKEND_FROM_MENUCONFIG we pull everything
-     * from CONFIG_LED_TYPE_* / CONFIG_LED_DATA_PIN etc.
+     * When backend == LED_STRIP_BACKEND_FROM_MENUCONFIG we pick the active
+     * backend at runtime from settings_get()->led_backend and pull all pin /
+     * count / map values from the runtime settings store (Phase 3).
      * ----------------------------------------------------------------- */
     led_strip_backend_t backend        = config->backend;
     uint32_t            length         = config->length;
@@ -173,41 +177,51 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
     memcpy(direct_pins, config->direct_pins, sizeof(direct_pins));
 
     if (backend == LED_STRIP_BACKEND_FROM_MENUCONFIG) {
-#if defined(CONFIG_LED_TYPE_NEOPIXEL)
-        backend        = LED_STRIP_BACKEND_NEOPIXEL;
-        length         = CONFIG_LED_COUNT;
-        gpio_pin       = (gpio_num_t)CONFIG_LED_DATA_PIN;
-        clock_pin      = GPIO_NUM_NC;
-        spi_clock_hz   = 0;
-        channel_map_str = CONFIG_LED_CHANNEL_MAP;
+        /* Phase 3: all backends are compiled in (#if CONFIG_LED_SUPPORT_*); the
+         * ACTIVE backend is selected at RUNTIME from settings_get()->led_backend.
+         * Pins / count / map / clock all come from the runtime settings store. */
+        const device_settings_t *cfg = settings_get();
+        switch (cfg->led_backend) {
+#if CONFIG_LED_SUPPORT_NEOPIXEL
+        case LED_BACKEND_NEOPIXEL:
+            backend        = LED_STRIP_BACKEND_NEOPIXEL;
+            length         = cfg->led_count;
+            gpio_pin       = (gpio_num_t)cfg->led_data_pin;
+            clock_pin      = GPIO_NUM_NC;
+            spi_clock_hz   = 0;
+            channel_map_str = cfg->led_channel_map;
+            break;
+#endif
+#if CONFIG_LED_SUPPORT_DOTSTAR
+        case LED_BACKEND_DOTSTAR:
+            backend        = LED_STRIP_BACKEND_DOTSTAR;
+            length         = cfg->led_count;
+            gpio_pin       = (gpio_num_t)cfg->led_data_pin;
+            clock_pin      = (gpio_num_t)cfg->led_clock_pin;
+            spi_clock_hz   = cfg->led_dotstar_spi_clock_hz;
+            channel_map_str = cfg->led_channel_map;
+            break;
+#endif
+#if CONFIG_LED_SUPPORT_DIRECT
+        case LED_BACKEND_DIRECT:
+            backend        = LED_STRIP_BACKEND_DIRECT;
+            length         = NUM_LED_CHANNELS; /* logical channels only */
+            gpio_pin       = GPIO_NUM_NC;
+            clock_pin      = GPIO_NUM_NC;
+            spi_clock_hz   = 0;
+            channel_map_str = NULL;
+            for (int i = 0; i < NUM_LED_CHANNELS; i++) {
+                direct_pins[i] = (gpio_num_t)cfg->led_direct_pins[i];
+            }
+            break;
+#endif
+        default:
+            ESP_LOGE(TAG, "led_backend %d not compiled into this firmware",
+                     (int)cfg->led_backend);
+            return ESP_ERR_INVALID_ARG;
+        }
         (void)clock_pin;
         (void)spi_clock_hz;
-#elif defined(CONFIG_LED_TYPE_DOTSTAR)
-        backend        = LED_STRIP_BACKEND_DOTSTAR;
-        length         = CONFIG_LED_COUNT;
-        gpio_pin       = (gpio_num_t)CONFIG_LED_DATA_PIN;
-        clock_pin      = (gpio_num_t)CONFIG_LED_CLOCK_PIN;
-        spi_clock_hz   = CONFIG_LED_DOTSTAR_SPI_CLOCK_HZ;
-        channel_map_str = CONFIG_LED_CHANNEL_MAP;
-#elif defined(CONFIG_LED_TYPE_DIRECT)
-        backend        = LED_STRIP_BACKEND_DIRECT;
-        length         = NUM_LED_CHANNELS; /* logical channels only */
-        gpio_pin       = GPIO_NUM_NC;
-        clock_pin      = GPIO_NUM_NC;
-        spi_clock_hz   = 0;
-        channel_map_str = NULL;
-        direct_pins[0] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH1;
-        direct_pins[1] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH2;
-        direct_pins[2] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH3;
-        direct_pins[3] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH4;
-        direct_pins[4] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH5;
-        direct_pins[5] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH6;
-        direct_pins[6] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH7;
-        direct_pins[7] = (gpio_num_t)CONFIG_LED_DIRECT_PIN_CH8;
-#else
-        ESP_LOGE(TAG, "LED_STRIP_CONFIG_FROM_MENUCONFIG: no LED_TYPE selected in menuconfig");
-        return ESP_ERR_INVALID_ARG;
-#endif
     }
 
     /* Validate backend */
@@ -252,6 +266,7 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
      * ----------------------------------------------------------------- */
 
     if (backend == LED_STRIP_BACKEND_NEOPIXEL) {
+#if CONFIG_LED_SUPPORT_NEOPIXEL
         /* Pixel working + display buffers */
         strip->working_buffer = calloc(length, sizeof(led_color_t));
         strip->display_buffer = calloc(length, sizeof(led_color_t));
@@ -290,8 +305,10 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
 
         ESP_LOGI(TAG, "LED strip [NEOPIXEL] initialised: length=%lu, gpio=%d",
                  strip->length, strip->gpio_pin);
+#endif /* CONFIG_LED_SUPPORT_NEOPIXEL */
 
     } else if (backend == LED_STRIP_BACKEND_DOTSTAR) {
+#if CONFIG_LED_SUPPORT_DOTSTAR
         /* Pixel working + display buffers */
         strip->working_buffer = calloc(length, sizeof(led_color_t));
         strip->display_buffer = calloc(length, sizeof(led_color_t));
@@ -329,8 +346,10 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
 
         ESP_LOGI(TAG, "LED strip [DOTSTAR] initialised: length=%lu, data=%d, clk=%d, spi_hz=%lu",
                  strip->length, gpio_pin, clock_pin, spi_clock_hz);
+#endif /* CONFIG_LED_SUPPORT_DOTSTAR */
 
     } else { /* LED_STRIP_BACKEND_DIRECT */
+#if CONFIG_LED_SUPPORT_DIRECT
         /* Direct mode: NUM_LED_CHANNELS (8) logical channels, no pixel buffers,
          * no channel_map.  We do NOT allocate working_buffer / display_buffer /
          * symbol_buffer / channel_map — those are addressable-strip concepts
@@ -349,6 +368,7 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
         ESP_LOGI(TAG, "LED strip [DIRECT] initialised: pins=%d,%d,%d,%d,%d,%d,%d,%d",
                  direct_pins[0], direct_pins[1], direct_pins[2], direct_pins[3],
                  direct_pins[4], direct_pins[5], direct_pins[6], direct_pins[7]);
+#endif /* CONFIG_LED_SUPPORT_DIRECT */
     }
 
     strip->initialized = true;
@@ -364,6 +384,8 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
  * led_color_t) and the same brightness-scale + channel-map walk.  Factor
  * these into shared helpers so neither backend duplicates the logic.
  * ========================================================================= */
+
+#if CONFIG_LED_SUPPORT_NEOPIXEL || CONFIG_LED_SUPPORT_DOTSTAR
 
 /**
  * @brief Write a single pixel into working_buffer (no mutex — caller holds it
@@ -441,10 +463,14 @@ static esp_err_t s_addressable_set_channel(led_strip_handle_t *handle,
     return ESP_OK;
 }
 
+#endif /* CONFIG_LED_SUPPORT_NEOPIXEL || CONFIG_LED_SUPPORT_DOTSTAR */
+
 /* =========================================================================
  * Neopixel backend static helpers
  * (bodies moved from the old public functions; no behaviour change)
  * ========================================================================= */
+
+#if CONFIG_LED_SUPPORT_NEOPIXEL
 
 /* Thin wrappers that delegate to the shared addressable helpers. */
 
@@ -529,6 +555,10 @@ static esp_err_t s_neopixel_set_all(led_strip_handle_t *handle,
     xSemaphoreGive(handle->access_mutex);
     return s_neopixel_refresh(handle);
 }
+
+#endif /* CONFIG_LED_SUPPORT_NEOPIXEL */
+
+#if CONFIG_LED_SUPPORT_NEOPIXEL || CONFIG_LED_SUPPORT_DOTSTAR
 
 /**
  * @brief Fill the working_buffer with a stereo VU meter pattern (backend-agnostic).
@@ -619,6 +649,10 @@ static esp_err_t s_addressable_spectrum_fill(led_strip_handle_t *handle,
     return ESP_OK;
 }
 
+#endif /* CONFIG_LED_SUPPORT_NEOPIXEL || CONFIG_LED_SUPPORT_DOTSTAR */
+
+#if CONFIG_LED_SUPPORT_NEOPIXEL
+
 static esp_err_t s_neopixel_vu_meter(led_strip_handle_t *handle,
                                       uint8_t level_left, uint8_t level_right,
                                       uint8_t brightness, uint8_t color_mode)
@@ -675,6 +709,8 @@ static esp_err_t s_neopixel_deinit(led_strip_handle_t *handle)
     return ESP_OK;
 }
 
+#endif /* CONFIG_LED_SUPPORT_NEOPIXEL */
+
 /* =========================================================================
  * 5.1  s_dotstar_init — SPI3 bus + device + pre-allocated DMA buffer
  *
@@ -686,6 +722,8 @@ static esp_err_t s_neopixel_deinit(led_strip_handle_t *handle)
  *
  * Full frame size = 4 + 4*pixel_count + (pixel_count + 15) / 16.
  * ========================================================================= */
+
+#if CONFIG_LED_SUPPORT_DOTSTAR
 
 static esp_err_t s_dotstar_init(led_strip_handle_t *handle, gpio_num_t data_pin,
                                  gpio_num_t clock_pin, uint32_t pixel_count,
@@ -904,6 +942,8 @@ static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle)
     return ESP_OK;
 }
 
+#endif /* CONFIG_LED_SUPPORT_DOTSTAR */
+
 /* =========================================================================
  * Step 6 — Direct (LEDC PWM) backend implementation
  *
@@ -916,6 +956,8 @@ static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle)
  * R/G/B are wire-protocol details for addressable strips; they are irrelevant
  * for discrete LEDs whose physical colour is fixed by the LED itself.
  * ========================================================================= */
+
+#if CONFIG_LED_SUPPORT_DIRECT
 
 /**
  * 6.1  s_direct_init
@@ -973,7 +1015,7 @@ static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_
      * For active-low channels (bit set in CONFIG_LED_DIRECT_ACTIVE_LOW_MASK)
      * the initial duty is LED_DIRECT_DUTY_MAX so the pin is constantly HIGH
      * at boot (LED off), not blasting on until the first refresh. */
-    const uint8_t active_low_mask = (uint8_t)CONFIG_LED_DIRECT_ACTIVE_LOW_MASK;
+    const uint8_t active_low_mask = (uint8_t)settings_get()->led_direct_active_low_mask;
     for (int i = 0; i < NUM_LED_CHANNELS; i++) {
         handle->ledc_channels[i] = (ledc_channel_t)(LEDC_CHANNEL_0 + i);
         handle->direct_pins[i]   = pin_ch[i];
@@ -1067,7 +1109,7 @@ static esp_err_t s_direct_refresh(led_strip_handle_t *handle)
      * meaning "constant HIGH, no LOW pulse" for an 8-bit timer — required to
      * fully extinguish active-low LEDs. Using 255 leaves a 1/256 LOW pulse
      * per cycle that visibly lights active-low LEDs in the supposed off state. */
-    const uint8_t active_low_mask = (uint8_t)CONFIG_LED_DIRECT_ACTIVE_LOW_MASK;
+    const uint8_t active_low_mask = (uint8_t)settings_get()->led_direct_active_low_mask;
     for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (handle->direct_pins[ch] == GPIO_NUM_NC) continue;
         uint32_t duty = ((uint32_t)brightness[ch] * 256U) / 100U;
@@ -1105,7 +1147,7 @@ static esp_err_t s_direct_deinit(led_strip_handle_t *handle)
     /* idle_level on stop: 1 for active-low channels (HIGH = LED OFF),
      * 0 for active-high (LOW = LED OFF). Either way, ensure the LED is
      * dark after shutdown. */
-    const uint8_t active_low_mask = (uint8_t)CONFIG_LED_DIRECT_ACTIVE_LOW_MASK;
+    const uint8_t active_low_mask = (uint8_t)settings_get()->led_direct_active_low_mask;
     for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (handle->direct_pins[ch] == GPIO_NUM_NC) continue;
         uint32_t idle = (active_low_mask & (1u << ch)) ? 1 : 0;
@@ -1113,6 +1155,8 @@ static esp_err_t s_direct_deinit(led_strip_handle_t *handle)
     }
     return ESP_OK;
 }
+
+#endif /* CONFIG_LED_SUPPORT_DIRECT */
 
 /* =========================================================================
  * 3.3  Public API dispatchers
@@ -1127,12 +1171,18 @@ esp_err_t led_strip_set_pixel_rgb(led_strip_handle_t *handle, uint32_t pixel_num
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_set_pixel_rgb(handle, pixel_num, red, green, blue);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         return s_dotstar_set_pixel_rgb(handle, pixel_num, red, green, blue);
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT:
         return s_direct_set_pixel_rgb(handle, pixel_num, red, green, blue);
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1155,12 +1205,18 @@ esp_err_t led_strip_get_pixel_color(led_strip_handle_t *handle, uint32_t pixel_n
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_get_pixel_color(handle, pixel_num, color);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         return s_dotstar_get_pixel_color(handle, pixel_num, color);
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT:
         return ESP_ERR_NOT_SUPPORTED; /* no pixel addressing */
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1179,12 +1235,18 @@ esp_err_t led_strip_set_channel(led_strip_handle_t *handle,
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_set_channel(handle, channel_idx, brightness, red, green, blue);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         return s_dotstar_set_channel(handle, channel_idx, brightness, red, green, blue);
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT:
         return s_direct_set_channel(handle, channel_idx, brightness, red, green, blue);
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1197,12 +1259,18 @@ esp_err_t led_strip_refresh(led_strip_handle_t *handle)
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_refresh(handle);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         return s_dotstar_refresh(handle);
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT:
         return s_direct_refresh(handle);
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1215,12 +1283,18 @@ esp_err_t led_strip_clear(led_strip_handle_t *handle)
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_clear(handle);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         return s_dotstar_clear(handle);
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT:
         return s_direct_clear(handle);
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1234,12 +1308,18 @@ esp_err_t led_strip_set_all(led_strip_handle_t *handle,
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_set_all(handle, red, green, blue);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         return s_dotstar_set_all(handle, red, green, blue);
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT:
         return ESP_ERR_NOT_SUPPORTED; /* no pixel concept in direct mode */
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1256,8 +1336,11 @@ esp_err_t led_strip_vu_meter(led_strip_handle_t *handle,
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_vu_meter(handle, level_left, level_right, brightness, color_mode);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         /* vu_meter pixel-fill logic is backend-agnostic (works on working_buffer).
          * Use the shared fill helper then the DotStar-specific refresh. */
@@ -1267,6 +1350,8 @@ esp_err_t led_strip_vu_meter(led_strip_handle_t *handle,
             if (_ret != ESP_OK) return _ret;
             return s_dotstar_refresh(handle);
         }
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT: {
         static bool s_vu_warned = false;
         if (!s_vu_warned) {
@@ -1275,6 +1360,7 @@ esp_err_t led_strip_vu_meter(led_strip_handle_t *handle,
         }
         return ESP_ERR_NOT_SUPPORTED;
     }
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1289,8 +1375,11 @@ esp_err_t led_strip_spectrum(led_strip_handle_t *handle,
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         return s_neopixel_spectrum(handle, spectrum_data, data_length, brightness, style);
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         /* spectrum pixel-fill logic is backend-agnostic; use shared fill + dotstar refresh. */
         {
@@ -1299,6 +1388,8 @@ esp_err_t led_strip_spectrum(led_strip_handle_t *handle,
             if (_ret != ESP_OK) return _ret;
             return s_dotstar_refresh(handle);
         }
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT: {
         static bool s_spectrum_warned = false;
         if (!s_spectrum_warned) {
@@ -1307,6 +1398,7 @@ esp_err_t led_strip_spectrum(led_strip_handle_t *handle,
         }
         return ESP_ERR_NOT_SUPPORTED;
     }
+    #endif
     default:
         return ESP_ERR_INVALID_ARG;
     }
@@ -1319,15 +1411,21 @@ esp_err_t led_strip_deinit(led_strip_handle_t *handle)
     }
 
     switch (handle->backend) {
+    #if CONFIG_LED_SUPPORT_NEOPIXEL
     case LED_STRIP_BACKEND_NEOPIXEL:
         s_neopixel_deinit(handle);
         break;
+    #endif
+    #if CONFIG_LED_SUPPORT_DOTSTAR
     case LED_STRIP_BACKEND_DOTSTAR:
         s_dotstar_deinit(handle);
         break;
+    #endif
+    #if CONFIG_LED_SUPPORT_DIRECT
     case LED_STRIP_BACKEND_DIRECT:
         s_direct_deinit(handle);
         break;
+    #endif
     default:
         break;
     }
@@ -1380,6 +1478,8 @@ bool led_strip_supports_pixel_addressing(const led_strip_handle_t *handle)
 /* =========================================================================
  * Internal RMT helpers (neopixel only)
  * ========================================================================= */
+
+#if CONFIG_LED_SUPPORT_NEOPIXEL
 
 static esp_err_t s_neopixel_setup_rmt(led_strip_handle_t *handle)
 {
@@ -1465,3 +1565,5 @@ static esp_err_t s_neopixel_encode_data(led_strip_handle_t *handle,
 
     return ESP_OK;
 }
+
+#endif /* CONFIG_LED_SUPPORT_NEOPIXEL */

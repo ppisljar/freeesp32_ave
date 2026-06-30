@@ -18,6 +18,7 @@
 #include "isr_profiling.h"
 #include "memory_pool.h"
 #include "bg_player.h"
+#include "settings.h"
 
 static const char* TAG = "main";
 
@@ -123,6 +124,10 @@ static void IRAM_ATTR snapshot_button_isr(void *arg)
     }
 }
 
+// Active button GPIO, resolved from settings at init (was the fixed
+// SNAPSHOT_BTN_GPIO #define). -1 = no button configured.
+static int s_btn_gpio = SNAPSHOT_BTN_GPIO;
+
 static void snapshot_button_task(void *pv)
 {
     (void)pv;
@@ -151,7 +156,7 @@ static void snapshot_button_task(void *pv)
          * bug_stop_click_bg_i2s_state_2026-06-17.md. */
         uint64_t press_start_us = esp_timer_get_time();
         bool stop_fired = false;
-        while (gpio_get_level(SNAPSHOT_BTN_GPIO) == 0) {
+        while (s_btn_gpio >= 0 && gpio_get_level(s_btn_gpio) == 0) {
             vTaskDelay(pdMS_TO_TICKS(SNAPSHOT_BTN_POLL_MS));
             if (!stop_fired &&
                 (esp_timer_get_time() - press_start_us) >= SNAPSHOT_BTN_LONG_PRESS_US) {
@@ -189,8 +194,15 @@ static void snapshot_button_task(void *pv)
 
 static esp_err_t snapshot_button_init(void)
 {
+    // Resolve the button GPIO from runtime settings (-1 = disabled).
+    s_btn_gpio = settings_get()->button_gpio;
+    if (s_btn_gpio < 0) {
+        ESP_LOGI(TAG, "Snapshot button disabled (button_gpio = -1)");
+        return ESP_OK;
+    }
+
     gpio_config_t cfg = {
-        .pin_bit_mask = 1ULL << SNAPSHOT_BTN_GPIO,
+        .pin_bit_mask = 1ULL << s_btn_gpio,
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -203,7 +215,7 @@ static esp_err_t snapshot_button_init(void)
     esp_err_t isr_ret = gpio_install_isr_service(0);
     if (isr_ret != ESP_OK && isr_ret != ESP_ERR_INVALID_STATE) return isr_ret;
 
-    return gpio_isr_handler_add(SNAPSHOT_BTN_GPIO, snapshot_button_isr, NULL);
+    return gpio_isr_handler_add(s_btn_gpio, snapshot_button_isr, NULL);
 }
 
 // Periodic logger: every 15 s, dump current value + progress for every
@@ -223,9 +235,10 @@ static void sweep_progress_task(void *pv)
     }
 }
 
-// WiFi configuration
-#define WIFI_SSID "Teltonika_Router"
-#define WIFI_PASSWORD "secpass123"
+// WiFi credentials are runtime settings now (settings_get()->wifi_ssid /
+// ->wifi_password), seeded from the former hardcoded defaults in settings.c.
+// On STA failure or an empty SSID the device falls back to a SoftAP so the web
+// UI stays reachable (see wifi_manager_start_ap()).
 
 void app_main(void)
 {
@@ -238,6 +251,13 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // Load runtime device settings (NVS blob, seeded from CONFIG_* defaults on
+    // first boot). MUST run before any driver init reads settings_get().
+    ret = settings_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "settings_init returned %s — using in-RAM defaults", esp_err_to_name(ret));
+    }
 
     // Initialize timing engine (hardware-precision timing)
     ret = timing_engine_init();
@@ -320,10 +340,10 @@ void app_main(void)
     esp_err_t btn_ret = snapshot_button_init();
     if (btn_ret != ESP_OK) {
         ESP_LOGW(TAG, "Snapshot button on GPIO %d not available: %s",
-                 SNAPSHOT_BTN_GPIO, esp_err_to_name(btn_ret));
-    } else {
+                 s_btn_gpio, esp_err_to_name(btn_ret));
+    } else if (s_btn_gpio >= 0) {
         ESP_LOGI(TAG, "Snapshot button ready on GPIO %d (press for live state log)",
-                 SNAPSHOT_BTN_GPIO);
+                 s_btn_gpio);
     }
 
     // Audio generation startup tests — disabled during soak validation.
@@ -371,14 +391,33 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize WiFi manager: %s", esp_err_to_name(ret));
     } else {
-        ESP_LOGI(TAG, "Connecting to WiFi...");
-        ret = wifi_manager_connect(WIFI_SSID, WIFI_PASSWORD);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to connect to WiFi: %s", esp_err_to_name(ret));
+        const device_settings_t *cfg = settings_get();
+        bool wifi_ok = false;
+        if (cfg->wifi_ssid[0] != '\0') {
+            ESP_LOGI(TAG, "Connecting to WiFi SSID '%s'...", cfg->wifi_ssid);
+            ret = wifi_manager_connect(cfg->wifi_ssid, cfg->wifi_password);
+            if (ret == ESP_OK) {
+                wifi_ok = true;
+                char ip_str[16];
+                if (wifi_manager_get_ip_string(ip_str, sizeof(ip_str)) == ESP_OK) {
+                    ESP_LOGI(TAG, "Connected to WiFi! IP address: %s", ip_str);
+                }
+            } else {
+                ESP_LOGE(TAG, "Failed to connect to WiFi: %s", esp_err_to_name(ret));
+            }
         } else {
-            char ip_str[16];
-            if (wifi_manager_get_ip_string(ip_str, sizeof(ip_str)) == ESP_OK) {
-                ESP_LOGI(TAG, "Connected to WiFi! IP address: %s", ip_str);
+            ESP_LOGW(TAG, "No WiFi SSID configured in settings");
+        }
+
+        if (!wifi_ok) {
+            // STA association failed or no SSID — bring up the SoftAP so the
+            // user can still reach the web UI and enter credentials.
+            ESP_LOGW(TAG, "Falling back to SoftAP for setup");
+            if (wifi_manager_start_ap() == ESP_OK) {
+                ESP_LOGI(TAG, "SoftAP '%s' ready — connect and browse to http://%s",
+                         WIFI_AP_SSID, WIFI_AP_IP_STR);
+            } else {
+                ESP_LOGE(TAG, "SoftAP fallback failed to start");
             }
         }
     }

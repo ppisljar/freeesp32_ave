@@ -10,6 +10,7 @@ const CTRL_THROTTLE_MS = 250;   // min gap between patches per control
 const CTRL_POLL_MS = 1000;      // /api/state polling interval
 const CTRL_LOCK_AFTER_MS = 1000; // after last input, how long to keep poll-paused
 let ctrlState = null;           // most recent /api/state response
+let ctrlPrevTlRunning = false;  // prior timeline.running, for edge detection
 const ctrlInteracting = new Set(); // keys currently being dragged → poll-paused
 const ctrlLastPatchAt = new Map(); // control key → last-send timestamp
 const ctrlPending = new Map();  // control key → pending value (throttle queue)
@@ -50,14 +51,16 @@ function ctrlPopulateLockSelect(domain, idx, count) {
     const cur = ctrlLocks[domain][idx];
     sel.value = (cur == null) ? '' : String(cur);
 }
-// Enable/disable a channel's controls to reflect its lock state.
+// Enable/disable a channel's controls to reflect its lock state. Disables both
+// the slider and its number input ("-v") for each affected field.
 function ctrlApplyLockUI(domain, idx) {
     const locked = ctrlLocks[domain][idx] != null;
+    const dis = (id) => { const e = document.getElementById(id); if (e) e.disabled = locked; };
     if (domain === 'aud') {
-        const f = document.getElementById('aud-' + idx + '-freq'); if (f) f.disabled = locked;
+        dis('aud-' + idx + '-freq'); dis('aud-' + idx + '-freq-v');
         const row = document.getElementById('ctrl-aud-' + idx); if (row) row.classList.toggle('locked', locked);
     } else {
-        ['freq', 'duty', 'bright'].forEach(fld => { const e = document.getElementById('led-' + idx + '-' + fld); if (e) e.disabled = locked; });
+        ['freq', 'duty', 'bright'].forEach(fld => { dis('led-' + idx + '-' + fld); dis('led-' + idx + '-' + fld + '-v'); });
         const c = document.getElementById('led-' + idx + '-col'); if (c) c.disabled = locked;
         const row = document.getElementById('ctrl-led-' + idx); if (row) row.classList.toggle('locked', locked);
     }
@@ -94,6 +97,74 @@ function ctrlPatch(line) {
     }).catch(err => console.warn('patch failed:', err));
 }
 
+// ---- Per-field modulation (the ∿ icon) -----------------------------------
+// Last-applied modulation settings per field, keyed 'aud-<idx>-<field>' /
+// 'led-<idx>-<field>', so reopening the popup pre-fills what you last set.
+const ctrlModState = {};
+const MOD_WAVES = [
+    ['none', 'None (off)'], ['triangle', 'Triangle'], ['sine', 'Sine'],
+    ['sawup', 'Saw up'], ['sawdown', 'Saw down'], ['square', 'Square'],
+];
+
+// Current device value of a field, used as a sensible default for "from".
+function ctrlFieldValue(domain, idx, field) {
+    if (domain === 'aud') {
+        const a = ctrlState && ctrlState.audio && ctrlState.audio[idx + 1];
+        return a ? (a[field] || 0) : 0;
+    }
+    const l = ctrlState && ctrlState.led && ctrlState.led[idx];
+    return l ? (l[field] || 0) : 0;
+}
+
+function ctrlSendMod(body) {
+    return fetch('/api/mod', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
+      .catch(err => showMessage('Modulation failed: ' + err, 'error'));
+}
+
+// Popup to set/change/clear the modulation on one field.
+function ctrlOpenModPopup(domain, idx, field) {
+    const key = domain + '-' + idx + '-' + field;
+    const label = (domain === 'aud' ? 'A' + (idx + 1) : 'L' + (idx + 1)) + ' ' + field;
+    const cur = ctrlFieldValue(domain, idx, field);
+    const st = ctrlModState[key] || { wave: 'sine', from: cur, to: cur, period: 1000 };
+
+    const back = document.createElement('div');
+    back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;padding:20px;border-radius:8px;min-width:280px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-size:14px;';
+    box.innerHTML =
+        '<h3 style="margin:0 0 12px 0;">Modulation — ' + label + '</h3>'
+      + '<div style="margin-bottom:8px;"><label>Type<br><select id="modWave" style="width:100%;padding:6px;">'
+      + MOD_WAVES.map(w => '<option value="' + w[0] + '"' + (w[0] === st.wave ? ' selected' : '') + '>' + w[1] + '</option>').join('')
+      + '</select></label></div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+      + '<label style="flex:1;">From<br><input id="modFrom" type="number" step="any" value="' + st.from + '" style="width:100%;padding:6px;"></label>'
+      + '<label style="flex:1;">To<br><input id="modTo" type="number" step="any" value="' + st.to + '" style="width:100%;padding:6px;"></label>'
+      + '</div>'
+      + '<div style="margin-bottom:14px;"><label>Period (ms)<br><input id="modPeriod" type="number" min="1" step="1" value="' + st.period + '" style="width:100%;padding:6px;"></label></div>'
+      + '<div style="text-align:right;"><button id="modCancel">Cancel</button> <button id="modApply" style="background:#28a745;">Apply</button></div>';
+    back.appendChild(box);
+    document.body.appendChild(back);
+    const close = () => document.body.removeChild(back);
+    back.addEventListener('click', (e) => { if (e.target === back) close(); });
+    box.querySelector('#modCancel').addEventListener('click', close);
+    box.querySelector('#modApply').addEventListener('click', () => {
+        const wave = box.querySelector('#modWave').value;
+        const from = parseFloat(box.querySelector('#modFrom').value) || 0;
+        const to = parseFloat(box.querySelector('#modTo').value) || 0;
+        const period = parseInt(box.querySelector('#modPeriod').value, 10) || 1000;
+        ctrlModState[key] = { wave, from, to, period };
+        const ch = (domain === 'aud') ? (idx + 1) : idx;   // audio: generator ch = idx+1
+        ctrlSendMod({ domain: (domain === 'aud') ? 'audio' : 'led', ch, field, wave, from, to, period_ms: period })
+            .then(() => showMessage(wave === 'none'
+                ? 'Modulation cleared on ' + label
+                : 'Modulation set on ' + label + ' (' + wave + ')', 'success'));
+        close();
+    });
+}
+
 // Build a one-line audio patch. Reads CURRENT values for non-changed
 // fields from ctrlState so the patch's animation sweeps only the
 // changed field (other fields' current=target → no-op animation).
@@ -111,7 +182,7 @@ function ctrlBuildAudioPatch(chIdx, field, value) {
     const v = (field === 'vol')  ? value : ch.vol;
     const m = (field === 'mod')  ? value : ch.mod;
     // A time freq pan vol mod channel
-    return 'A ' + CTRL_ANIMATE_MS + ' ' + f.toFixed(2) + ' ' + p.toFixed(1)
+    return 'A ' + CTRL_ANIMATE_MS + ' ' + f.toFixed(3) + ' ' + p.toFixed(1)
          + ' ' + v.toFixed(1) + ' ' + m.toFixed(2) + ' ' + (chIdx + 1);
 }
 
@@ -171,10 +242,10 @@ function ctrlRenderAudioRow(idx) {
     div.id = 'ctrl-aud-' + idx;
     div.innerHTML =
         '<div class="label"><span class="active-dot" id="aud-' + idx + '-dot"></span> A' + (idx+1) + '</div>'
-      + '<div class="field"><label>freq</label><input type="range" min="0" max="2000" step="0.1" id="aud-' + idx + '-freq"><span class="val" id="aud-' + idx + '-freq-v"></span><span class="mod-badge" id="aud-' + idx + '-freq-m">mod</span></div>'
-      + '<div class="field"><label>pan</label><input type="range" min="-100" max="100" step="1" id="aud-' + idx + '-pan"><span class="val" id="aud-' + idx + '-pan-v"></span><span class="mod-badge" id="aud-' + idx + '-pan-m">mod</span></div>'
-      + '<div class="field"><label>vol</label><input type="range" min="0" max="100" step="1" id="aud-' + idx + '-vol"><span class="val" id="aud-' + idx + '-vol-v"></span><span class="mod-badge" id="aud-' + idx + '-vol-m">mod</span></div>'
-      + '<div class="field"><label>mod-f</label><input type="range" min="0" max="40" step="0.01" id="aud-' + idx + '-mod"><span class="val" id="aud-' + idx + '-mod-v"></span><span class="mod-badge" id="aud-' + idx + '-mod-m">mod</span></div>'
+      + '<div class="field"><label>freq</label><input type="range" min="0" max="20000" step="0.1" id="aud-' + idx + '-freq"><input type="number" class="val numv" min="0" max="20000" step="any" id="aud-' + idx + '-freq-v"><span class="mod-ico" id="aud-' + idx + '-freq-m" title="Modulation — click to edit">∿</span></div>'
+      + '<div class="field"><label>pan</label><input type="range" min="-100" max="100" step="1" id="aud-' + idx + '-pan"><input type="number" class="val numv" min="-100" max="100" step="any" id="aud-' + idx + '-pan-v"><span class="mod-ico" id="aud-' + idx + '-pan-m" title="Modulation — click to edit">∿</span></div>'
+      + '<div class="field"><label>vol</label><input type="range" min="0" max="100" step="1" id="aud-' + idx + '-vol"><input type="number" class="val numv" min="0" max="100" step="any" id="aud-' + idx + '-vol-v"><span class="mod-ico" id="aud-' + idx + '-vol-m" title="Modulation — click to edit">∿</span></div>'
+      + '<div class="field"><label>mod-f</label><input type="range" min="0" max="40" step="0.01" id="aud-' + idx + '-mod"><input type="number" class="val numv" min="0" max="40" step="any" id="aud-' + idx + '-mod-v"><span class="mod-ico" id="aud-' + idx + '-mod-m" title="Modulation — click to edit">∿</span></div>'
       + '<div class="field"><label>lock</label><select class="lockSel" id="aud-' + idx + '-lock" title="Follow another channel\'s frequency changes"></select></div>';
     return div;
 }
@@ -187,9 +258,9 @@ function ctrlRenderLedRow(idx, hasColor) {
     div.id = 'ctrl-led-' + idx;
     let html =
         '<div class="label"><span class="active-dot" id="led-' + idx + '-dot"></span> L' + (idx+1) + '</div>'
-      + '<div class="field"><label>freq</label><input type="range" min="0" max="30" step="0.1" id="led-' + idx + '-freq"><span class="val" id="led-' + idx + '-freq-v"></span></div>'
-      + '<div class="field"><label>duty</label><input type="range" min="0" max="100" step="1" id="led-' + idx + '-duty"><span class="val" id="led-' + idx + '-duty-v"></span></div>'
-      + '<div class="field"><label>bright</label><input type="range" min="0" max="100" step="1" id="led-' + idx + '-bright"><span class="val" id="led-' + idx + '-bright-v"></span></div>';
+      + '<div class="field"><label>freq</label><input type="range" min="0" max="30" step="0.1" id="led-' + idx + '-freq"><input type="number" class="val numv" min="0" max="30" step="any" id="led-' + idx + '-freq-v"><span class="mod-ico" id="led-' + idx + '-freq-m" title="Modulation — click to edit">∿</span></div>'
+      + '<div class="field"><label>duty</label><input type="range" min="0" max="100" step="1" id="led-' + idx + '-duty"><input type="number" class="val numv" min="0" max="100" step="any" id="led-' + idx + '-duty-v"><span class="mod-ico" id="led-' + idx + '-duty-m" title="Modulation — click to edit">∿</span></div>'
+      + '<div class="field"><label>bright</label><input type="range" min="0" max="100" step="1" id="led-' + idx + '-bright"><input type="number" class="val numv" min="0" max="100" step="any" id="led-' + idx + '-bright-v"><span class="mod-ico" id="led-' + idx + '-bright-m" title="Modulation — click to edit">∿</span></div>';
     if (hasColor) {
         html += '<div class="field"><label>colour</label><input type="color" id="led-' + idx + '-col"></div>';
     }
@@ -228,6 +299,29 @@ function ctrlBindColor(el, key, onChange) {
     el.addEventListener('change', () => onChange(el.value));
 }
 
+// Wire an editable number input (precise typing, e.g. 50.243). Shares the same
+// poll-pause key as its slider so /api/state doesn't overwrite the field while
+// typing; mirrors the typed value onto the slider (which clamps to its range).
+function ctrlBindNumber(numEl, sliderEl, key, onChange) {
+    if (!numEl) return;
+    const pauseFor = () => {
+        ctrlInteracting.add(key);
+        clearTimeout(numEl._ctrlReleaseTimer);
+        numEl._ctrlReleaseTimer = setTimeout(() => ctrlInteracting.delete(key), CTRL_LOCK_AFTER_MS);
+    };
+    numEl.addEventListener('input', () => {
+        const v = parseFloat(numEl.value);
+        if (isNaN(v)) return;
+        pauseFor();
+        if (sliderEl) sliderEl.value = v;
+        onChange(v);
+    });
+    numEl.addEventListener('change', () => {
+        const v = parseFloat(numEl.value);
+        if (!isNaN(v)) onChange(v);
+    });
+}
+
 // First-paint: fetch capabilities, render channel rows, attach handlers.
 export async function ctrlInit() {
     let st;
@@ -248,17 +342,31 @@ export async function ctrlInit() {
         audDiv.appendChild(row);
         const idx = i;
         // Freq change: patch this channel, then push the relative target
-        // to every follower locked (directly or transitively) to it.
-        ctrlBindSlider(document.getElementById('aud-' + idx + '-freq'), 'aud-' + idx + '-freq', (v) => {
-            ctrlSendThrottled('aud-' + idx + '-freq', () => ctrlBuildAudioPatch(idx, 'freq', v));
+        // to every follower locked (directly or transitively) to it. Bound to
+        // BOTH the slider (coarse) and the number input (precise typing).
+        const freqKey = 'aud-' + idx + '-freq';
+        const onFreq = (v) => {
+            ctrlSendThrottled(freqKey, () => ctrlBuildAudioPatch(idx, 'freq', v));
             ctrlFollowers('aud', idx).forEach(f => {
                 const tf = ctrlAudResolvedFreq(f, v, idx);
                 ctrlSendThrottled('aud-' + f + '-freq', () => ctrlBuildAudioPatch(f, 'freq', tf));
             });
+        };
+        ctrlBindSlider(document.getElementById(freqKey), freqKey, onFreq);
+        ctrlBindNumber(document.getElementById(freqKey + '-v'), document.getElementById(freqKey), freqKey, onFreq);
+        // pan / vol / mod: bind both the slider and its number input.
+        const bindAud = (field) => {
+            const key = 'aud-' + idx + '-' + field;
+            const on = (v) => ctrlSendThrottled(key, () => ctrlBuildAudioPatch(idx, field, v));
+            ctrlBindSlider(document.getElementById(key), key, on);
+            ctrlBindNumber(document.getElementById(key + '-v'), document.getElementById(key), key, on);
+        };
+        bindAud('pan'); bindAud('vol'); bindAud('mod');
+        // Modulation icon per field → opens the mod popup.
+        ['freq', 'pan', 'vol', 'mod'].forEach(field => {
+            const ico = document.getElementById('aud-' + idx + '-' + field + '-m');
+            if (ico) ico.addEventListener('click', () => ctrlOpenModPopup('aud', idx, field));
         });
-        ctrlBindSlider(document.getElementById('aud-' + idx + '-pan'),  'aud-' + idx + '-pan',  (v) => ctrlSendThrottled('aud-' + idx + '-pan',  () => ctrlBuildAudioPatch(idx, 'pan',  v)));
-        ctrlBindSlider(document.getElementById('aud-' + idx + '-vol'),  'aud-' + idx + '-vol',  (v) => ctrlSendThrottled('aud-' + idx + '-vol',  () => ctrlBuildAudioPatch(idx, 'vol',  v)));
-        ctrlBindSlider(document.getElementById('aud-' + idx + '-mod'),  'aud-' + idx + '-mod',  (v) => ctrlSendThrottled('aud-' + idx + '-mod',  () => ctrlBuildAudioPatch(idx, 'mod',  v)));
         ctrlPopulateLockSelect('aud', idx, audN);
         if (ctrlLocks.aud[idx] != null) ctrlAudOffset[idx] = ctrlAudFreq(idx) - ctrlAudFreq(ctrlLocks.aud[idx]);
         document.getElementById('aud-' + idx + '-lock').addEventListener('change', (e) => ctrlOnLockChange('aud', idx, e.target));
@@ -272,7 +380,7 @@ export async function ctrlInit() {
       +   '<div class="field"><label>type</label><select id="noise-type">'
       +     '<option value="0">Off</option><option value="4">White</option>'
       +     '<option value="5">Pink</option><option value="6">Brown</option></select></div>'
-      +   '<div class="field"><label>vol</label><input type="range" min="0" max="100" step="1" id="noise-vol"><span class="val" id="noise-vol-v"></span></div>'
+      +   '<div class="field"><label>vol</label><input type="range" min="0" max="100" step="1" id="noise-vol"><input type="number" class="val numv" min="0" max="100" step="any" id="noise-vol-v"></div>'
       + '</div>';
     // Noise type change: send a patch on ch9 with wave_type set
     document.getElementById('noise-type').addEventListener('change', (e) => {
@@ -284,12 +392,14 @@ export async function ctrlInit() {
         const line = 'A ' + CTRL_ANIMATE_MS + ' 0 0 ' + v.toFixed(1) + ' 0 9 0 ' + wt;
         ctrlPatch(line);
     });
-    ctrlBindSlider(document.getElementById('noise-vol'), 'noise-vol', (v) => {
+    const onNoiseVol = (v) => {
         const wt = parseInt(document.getElementById('noise-type').value || '0');
-        if (wt === 0) return;  // type Off — slider has no effect
+        if (wt === 0) return;  // type Off — vol has no effect
         const line = 'A ' + CTRL_ANIMATE_MS + ' 0 0 ' + v.toFixed(1) + ' 0 9 0 ' + wt;
         ctrlSendThrottled('noise-vol', () => line);
-    });
+    };
+    ctrlBindSlider(document.getElementById('noise-vol'), 'noise-vol', onNoiseVol);
+    ctrlBindNumber(document.getElementById('noise-vol-v'), document.getElementById('noise-vol'), 'noise-vol', onNoiseVol);
 
     const ledDiv = document.getElementById('ctrl-led');
     ledDiv.innerHTML = '<h3>LED Channels' + (caps.led_color ? '' : ' (no colour — direct GPIO backend)') + '</h3>';
@@ -297,9 +407,19 @@ export async function ctrlInit() {
         const row = ctrlRenderLedRow(i, caps.led_color);
         ledDiv.appendChild(row);
         const idx = i;
-        ctrlBindSlider(document.getElementById('led-' + idx + '-freq'),   'led-' + idx + '-freq',   (v) => ctrlSendThrottled('led-' + idx + '-freq',   () => ctrlBuildLedPatch(idx, 'freq',   v)));
-        ctrlBindSlider(document.getElementById('led-' + idx + '-duty'),   'led-' + idx + '-duty',   (v) => ctrlSendThrottled('led-' + idx + '-duty',   () => ctrlBuildLedPatch(idx, 'duty',   v)));
-        ctrlBindSlider(document.getElementById('led-' + idx + '-bright'), 'led-' + idx + '-bright', (v) => ctrlSendThrottled('led-' + idx + '-bright', () => ctrlBuildLedPatch(idx, 'bright', v)));
+        // freq / duty / bright: bind both the slider and its number input.
+        const bindLed = (field) => {
+            const key = 'led-' + idx + '-' + field;
+            const on = (v) => ctrlSendThrottled(key, () => ctrlBuildLedPatch(idx, field, v));
+            ctrlBindSlider(document.getElementById(key), key, on);
+            ctrlBindNumber(document.getElementById(key + '-v'), document.getElementById(key), key, on);
+        };
+        bindLed('freq'); bindLed('duty'); bindLed('bright');
+        // Modulation icon per field → opens the mod popup.
+        ['freq', 'duty', 'bright'].forEach(field => {
+            const ico = document.getElementById('led-' + idx + '-' + field + '-m');
+            if (ico) ico.addEventListener('click', () => ctrlOpenModPopup('led', idx, field));
+        });
         if (caps.led_color) {
             ctrlBindColor(document.getElementById('led-' + idx + '-col'), 'led-' + idx + '-col', (hex) => {
                 const r = parseInt(hex.substr(1, 2), 16);
@@ -327,7 +447,11 @@ function ctrlSetSliderIfNotInteracting(id, key, value, fmt) {
     if (!el) return;
     el.value = value;
     const v = document.getElementById(id + '-v');
-    if (v) v.textContent = fmt ? fmt(value) : value;
+    if (v) {
+        const txt = fmt ? fmt(value) : value;
+        // The "-v" element may be a read-only <span> or an editable <input>.
+        if (v.tagName === 'INPUT') v.value = txt; else v.textContent = txt;
+    }
 }
 
 // Poll /api/state and update every slider not currently being dragged.
@@ -337,18 +461,27 @@ async function ctrlPoll() {
     catch (e) { return; }
     ctrlState = st;
     const stat = document.getElementById('ctrl-status');
-    if (st.timeline && st.timeline.running) {
+    const tlRunning = !!(st.timeline && st.timeline.running);
+    if (tlRunning) {
         stat.textContent = 'timeline @ ' + Math.round(st.timeline.position_ms / 1000) + 's';
     } else {
         stat.textContent = 'idle';
     }
+    // Fire 'sessionended' on the running→stopped edge so config.js can fetch the
+    // report at the moment the session actually ends (natural end or early STOP)
+    // instead of guessing from the parsed duration.
+    if (ctrlPrevTlRunning && !tlRunning) {
+        window.dispatchEvent(new CustomEvent('sessionended',
+            { detail: { position_ms: (st.timeline && st.timeline.position_ms) || 0 } }));
+    }
+    ctrlPrevTlRunning = tlRunning;
     // Audio sliders A1..A8 correspond to state.audio[1..8] — the .ledc
     // convention is 1-indexed and channel 0 is unused, so we offset by
     // +1 when reading state. Slider DOM IDs stay 0..7 internally; only
     // the state lookup is offset.
     for (let i = 0; i < 8 && (i + 1) < (st.audio || []).length; i++) {
         const a = st.audio[i + 1];
-        ctrlSetSliderIfNotInteracting('aud-' + i + '-freq', 'aud-' + i + '-freq', a.freq,    v => v.toFixed(1));
+        ctrlSetSliderIfNotInteracting('aud-' + i + '-freq', 'aud-' + i + '-freq', a.freq,    v => v.toFixed(3));
         ctrlSetSliderIfNotInteracting('aud-' + i + '-pan',  'aud-' + i + '-pan',  a.pan,     v => Math.round(v));
         ctrlSetSliderIfNotInteracting('aud-' + i + '-vol',  'aud-' + i + '-vol',  a.vol,     v => Math.round(v));
         ctrlSetSliderIfNotInteracting('aud-' + i + '-mod',  'aud-' + i + '-mod',  a.mod,     v => v.toFixed(2));
@@ -356,9 +489,10 @@ async function ctrlPoll() {
         if (dot) dot.classList.toggle('on', !!a.active);
         const row = document.getElementById('ctrl-aud-' + i);
         if (row) row.classList.toggle('inactive', !a.active);
-        ['freq','pan','vol','mod'].forEach(f => {
-            const b = document.getElementById('aud-' + i + '-' + f + '-m');
-            if (b) b.classList.toggle('active', !!(a.modf && a.modf[f]));
+        // Light the ∿ icon when that field is being modulated.
+        ['freq', 'pan', 'vol', 'mod'].forEach(f => {
+            const ico = document.getElementById('aud-' + i + '-' + f + '-m');
+            if (ico) ico.classList.toggle('active', !!(a.modf && a.modf[f]));
         });
     }
     // Noise channel — .ledc channel 9 → state.audio[9].
@@ -368,7 +502,7 @@ async function ctrlPoll() {
         if (dot) dot.classList.toggle('on', !!n.active && n.vol > 0);
         if (!ctrlInteracting.has('noise-vol')) {
             const vEl = document.getElementById('noise-vol');
-            if (vEl) { vEl.value = n.vol; const vv = document.getElementById('noise-vol-v'); if (vv) vv.textContent = Math.round(n.vol); }
+            if (vEl) { vEl.value = n.vol; const vv = document.getElementById('noise-vol-v'); if (vv) vv.value = Math.round(n.vol); }
         }
         const tEl = document.getElementById('noise-type');
         if (tEl && !ctrlInteracting.has('noise-type')) {
@@ -390,5 +524,10 @@ async function ctrlPoll() {
         if (dot) dot.classList.toggle('on', !!l.active);
         const row = document.getElementById('ctrl-led-' + i);
         if (row) row.classList.toggle('inactive', !l.active);
+        // Light the ∿ icon when that field is being modulated.
+        ['freq', 'duty', 'bright'].forEach(f => {
+            const ico = document.getElementById('led-' + i + '-' + f + '-m');
+            if (ico) ico.classList.toggle('active', !!(l.mod && l.mod[f]));
+        });
     }
 }

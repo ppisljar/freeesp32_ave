@@ -88,6 +88,7 @@ typedef struct {
     float volume;            // Volume (0 to 100)
     float modulation;        // Modulation frequency
     uint8_t wave_type;       // Waveform type (0=SINE default); see audio_wave_type_t
+    bool    has_wave_type;   // true if the line explicitly specified wave_type (8th field)
     uint8_t channel;
     config_interpolation_t freq_interp;
     config_interpolation_t pan_interp;

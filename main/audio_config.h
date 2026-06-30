@@ -27,19 +27,23 @@
 #define AUDIO_BITS_PER_SAMPLE   16           // 16-bit
 #define AUDIO_CHANNELS          2            // Stereo
 
-// LED Matrix Configuration — driven by menuconfig (see Kconfig.projbuild).
-// For neopixel and dotstar builds the values come from CONFIG_LED_DATA_PIN,
-// CONFIG_LED_COUNT, CONFIG_LED_GRID_WIDTH, CONFIG_LED_GRID_HEIGHT.
-// For direct mode there is no addressable strip; the fallback constants below
-// are valid compile-time values for any code that references these macros as
-// array sizes, but they are never used at runtime because led_strip_supports_pixel_addressing()
-// returns false and the matrix layer gates all grid-dependent paths accordingly.
-#if defined(CONFIG_LED_TYPE_NEOPIXEL) || defined(CONFIG_LED_TYPE_DOTSTAR)
+// LED Matrix Configuration — compile-time fallback constants only.
+//
+// Phase 3 (runtime_settings_plan.md): all LED backends are compiled in and the
+// active one (plus its pin/count/grid values) is chosen at RUNTIME from the
+// settings store. These macros are NO LONGER the runtime source — they only
+// provide compile-time array-size / loop-bound constants for code that still
+// references them (e.g. led_matrix_example.c). When the addressable backends
+// are compiled in (CONFIG_LED_SUPPORT_NEOPIXEL/DOTSTAR) we expose the Kconfig
+// seed defaults; otherwise (direct-only firmware) we fall back to the discrete
+// 4-channel layout. Either way runtime behaviour is governed by settings and
+// led_strip_supports_pixel_addressing().
+#if defined(CONFIG_LED_SUPPORT_NEOPIXEL) || defined(CONFIG_LED_SUPPORT_DOTSTAR)
 #define LED_STRIP_GPIO          ((gpio_num_t)CONFIG_LED_DATA_PIN)
 #define LED_STRIP_COUNT         CONFIG_LED_COUNT
 #define LED_MATRIX_WIDTH        CONFIG_LED_GRID_WIDTH
 #define LED_MATRIX_HEIGHT       CONFIG_LED_GRID_HEIGHT
-#else  // LED_TYPE_DIRECT — no addressable strip
+#else  // direct-only firmware — no addressable strip compiled in
 #define LED_STRIP_GPIO          GPIO_NUM_NC
 #define LED_STRIP_COUNT         4            // 4 logical channels (one per LEDC output)
 #define LED_MATRIX_WIDTH        2            // compile-time fallback; gated at runtime

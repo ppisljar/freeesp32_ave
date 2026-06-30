@@ -1,9 +1,35 @@
 // Test-config panel: load/edit/play .led configs, parse them client-side to
 // resolve per-press parameter snapshots, and display the session report.
 import { appConfig, showMessage } from './util.js';
-import { getCurrentLedcName } from './generator.js';
+import { getCurrentConfigName } from './configstore.js';
+import { saveReport } from './reportstore.js';
 
-let reportTimer = null;
+// Report-on-session-end. Rather than guessing when a session finishes, we
+// fetch the report when the live-control poll detects the timeline's
+// running→stopped edge (fired as a 'sessionended' window event). A generous
+// fallback timer covers the rare session shorter than one poll interval.
+let awaitingReport = false;
+let reportFallbackTimer = null;
+
+function armReport(fallbackMs) {
+    awaitingReport = true;
+    if (reportFallbackTimer) clearTimeout(reportFallbackTimer);
+    reportFallbackTimer = setTimeout(triggerReport, fallbackMs);
+    document.getElementById('reportBox').style.display = 'none';
+}
+
+function triggerReport() {
+    if (!awaitingReport) return;
+    awaitingReport = false;
+    if (reportFallbackTimer) { clearTimeout(reportFallbackTimer); reportFallbackTimer = null; }
+    fetchReport();
+}
+
+// The timeline just stopped (finished or terminated early). If we're expecting
+// a report, fetch it now — small settle delay so the device finalizes state.
+window.addEventListener('sessionended', () => {
+    if (awaitingReport) setTimeout(triggerReport, 500);
+});
 
 export function loadExample() {
     fetch('/api/example')
@@ -18,12 +44,10 @@ export function stopConfig() {
     fetch('/api/stop', { method: 'POST' })
         .then(response => response.text())
         .then(result => {
-            showMessage(result + ' — report in 5 s', 'success');
-            // Replace any pending end-of-session timer with a short
-            // post-stop one so the report reflects the truncated run.
-            if (reportTimer) { clearTimeout(reportTimer); reportTimer = null; }
-            document.getElementById('reportBox').style.display = 'none';
-            reportTimer = setTimeout(fetchReport, 5000);
+            showMessage(result + ' — report when the session ends', 'success');
+            // The stop drops the timeline; the poll's running→stopped edge will
+            // trigger the report. Fallback in case the edge is missed.
+            armReport(8000);
         })
         .catch(error => showMessage('Error: ' + error, 'error'));
 }
@@ -206,10 +230,14 @@ function fetchReport() {
             box.textContent = out;
             box.style.display = 'block';
 
+            // Persist to the configured local destination (spiffs/local/none);
+            // independent of the generator upload below.
+            saveReport(out);
+
             // Best-effort upload to the generator. Failure is
             // non-fatal — the local display always succeeds first.
             const upload = {
-                config_name: getCurrentLedcName(),
+                config_name: getCurrentConfigName(),
                 session_origin_us: rep.session_origin_us,
                 session_length_s: rep.session_origin_us > 0
                     ? (rep.now_us - rep.session_origin_us) / 1e6 : null,
@@ -251,14 +279,12 @@ export function playConfig() {
     .then(response => response.text())
     .then(result => {
         showMessage(result, 'success');
-        // Schedule auto-fetch of /api/report 5 s after the parsed
-        // session end. Cancels any previously-armed timer.
-        if (reportTimer) { clearTimeout(reportTimer); reportTimer = null; }
-        document.getElementById('reportBox').style.display = 'none';
+        // The report fires when the poll detects the timeline stop (natural end
+        // or early STOP) — no guessing. The fallback (parsed duration + 10 s)
+        // only covers a session too short for the 1 s poll to catch the edge.
         const durMs = parseConfigDurationMs(config);
-        const waitMs = durMs + 5000;
-        showMessage('Playing — report due in ' + Math.round(waitMs/1000) + ' s', 'info');
-        reportTimer = setTimeout(fetchReport, waitMs);
+        armReport(durMs + 10000);
+        showMessage('Playing — report when the session ends', 'info');
     })
     .catch(error => showMessage('Play error: ' + error, 'error'));
 }

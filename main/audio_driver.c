@@ -1,5 +1,6 @@
 #include "audio_driver.h"
 #include "audio_config.h"
+#include "settings.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -7,19 +8,20 @@
 
 static const char *TAG = "audio_driver";
 
-/* The AC101 implementation lives in audio_driver_ac101.c. When AUDIO_DRIVER_AC101
- * is NOT selected, that file compiles to an empty translation unit and the
- * functions below provide the NONE stubs. When it IS selected, audio_driver.c
- * here forwards to the AC101 implementation. */
+/* Phase 3 (runtime_settings_plan.md): all codec drivers are compiled in and the
+ * ACTIVE one is selected at RUNTIME from settings_get()->audio_codec. Each
+ * codec implementation lives in its own file (audio_driver_ac101.c /
+ * audio_driver_es8388.c), guarded at file scope by CONFIG_AUDIO_SUPPORT_*.
+ * "None" (passive DAC / raw I2S) needs no driver and is always available. */
 
-#if CONFIG_AUDIO_DRIVER_AC101
+#if CONFIG_AUDIO_SUPPORT_AC101
 esp_err_t ac101_init(uint32_t sample_rate);
 esp_err_t ac101_set_sample_rate(uint32_t sample_rate);
 esp_err_t ac101_set_volume(float volume);
 esp_err_t ac101_deinit(void);
 #endif
 
-#if CONFIG_AUDIO_DRIVER_ES8388
+#if CONFIG_AUDIO_SUPPORT_ES8388
 esp_err_t es8388_init(uint32_t sample_rate);
 esp_err_t es8388_set_sample_rate(uint32_t sample_rate);
 esp_err_t es8388_set_volume(float volume);
@@ -28,52 +30,76 @@ esp_err_t es8388_deinit(void);
 
 esp_err_t audio_driver_init(uint32_t sample_rate)
 {
-#if CONFIG_AUDIO_DRIVER_AC101
-    ESP_LOGI(TAG, "Initializing AC101 codec @ %u Hz", (unsigned)sample_rate);
-    return ac101_init(sample_rate);
-#elif CONFIG_AUDIO_DRIVER_ES8388
-    ESP_LOGI(TAG, "Initializing ES8388 codec @ %u Hz", (unsigned)sample_rate);
-    return es8388_init(sample_rate);
-#else
-    ESP_LOGI(TAG, "Audio driver: none (passive DAC / raw I2S)");
-    (void)sample_rate;
-    return ESP_OK;
+    switch (settings_get()->audio_codec) {
+#if CONFIG_AUDIO_SUPPORT_AC101
+    case AUDIO_CODEC_AC101:
+        ESP_LOGI(TAG, "Initializing AC101 codec @ %u Hz", (unsigned)sample_rate);
+        return ac101_init(sample_rate);
 #endif
+#if CONFIG_AUDIO_SUPPORT_ES8388
+    case AUDIO_CODEC_ES8388:
+        ESP_LOGI(TAG, "Initializing ES8388 codec @ %u Hz", (unsigned)sample_rate);
+        return es8388_init(sample_rate);
+#endif
+    case AUDIO_CODEC_NONE:
+    default:
+        ESP_LOGI(TAG, "Audio driver: none (passive DAC / raw I2S)");
+        (void)sample_rate;
+        return ESP_OK;
+    }
 }
 
 esp_err_t audio_driver_set_sample_rate(uint32_t sample_rate)
 {
-#if CONFIG_AUDIO_DRIVER_AC101
-    return ac101_set_sample_rate(sample_rate);
-#elif CONFIG_AUDIO_DRIVER_ES8388
-    return es8388_set_sample_rate(sample_rate);
-#else
-    (void)sample_rate;
-    return ESP_OK;
+    switch (settings_get()->audio_codec) {
+#if CONFIG_AUDIO_SUPPORT_AC101
+    case AUDIO_CODEC_AC101:
+        return ac101_set_sample_rate(sample_rate);
 #endif
+#if CONFIG_AUDIO_SUPPORT_ES8388
+    case AUDIO_CODEC_ES8388:
+        return es8388_set_sample_rate(sample_rate);
+#endif
+    case AUDIO_CODEC_NONE:
+    default:
+        (void)sample_rate;
+        return ESP_OK;
+    }
 }
 
 esp_err_t audio_driver_set_volume(float volume)
 {
-#if CONFIG_AUDIO_DRIVER_AC101
-    return ac101_set_volume(volume);
-#elif CONFIG_AUDIO_DRIVER_ES8388
-    return es8388_set_volume(volume);
-#else
-    (void)volume;
-    return ESP_OK;
+    switch (settings_get()->audio_codec) {
+#if CONFIG_AUDIO_SUPPORT_AC101
+    case AUDIO_CODEC_AC101:
+        return ac101_set_volume(volume);
 #endif
+#if CONFIG_AUDIO_SUPPORT_ES8388
+    case AUDIO_CODEC_ES8388:
+        return es8388_set_volume(volume);
+#endif
+    case AUDIO_CODEC_NONE:
+    default:
+        (void)volume;
+        return ESP_OK;
+    }
 }
 
 esp_err_t audio_driver_deinit(void)
 {
-#if CONFIG_AUDIO_DRIVER_AC101
-    return ac101_deinit();
-#elif CONFIG_AUDIO_DRIVER_ES8388
-    return es8388_deinit();
-#else
-    return ESP_OK;
+    switch (settings_get()->audio_codec) {
+#if CONFIG_AUDIO_SUPPORT_AC101
+    case AUDIO_CODEC_AC101:
+        return ac101_deinit();
 #endif
+#if CONFIG_AUDIO_SUPPORT_ES8388
+    case AUDIO_CODEC_ES8388:
+        return es8388_deinit();
+#endif
+    case AUDIO_CODEC_NONE:
+    default:
+        return ESP_OK;
+    }
 }
 
 static const char *i2c_addr_hint(uint8_t addr)
@@ -142,11 +168,19 @@ esp_err_t audio_driver_i2c_scan(const char *label,
 
 void audio_driver_amp_enable(bool enable)
 {
-#if CONFIG_AUDIO_AMP_ENABLE_GPIO >= 0
+    /* Runtime amp-enable pin (settings_get()->amp_enable_pin, seeded from
+     * CONFIG_AUDIO_AMP_ENABLE_GPIO). -1 means "no amp enable line" — do
+     * nothing. Previously a compile-time #if guard; now a runtime check so the
+     * pin can be configured over the web without rebuilding. */
+    int amp_pin = settings_get()->amp_enable_pin;
+    if (amp_pin < 0) {
+        (void)enable;
+        return;
+    }
     static bool s_amp_pin_configured = false;
     if (!s_amp_pin_configured) {
         gpio_config_t io = {
-            .pin_bit_mask = 1ULL << CONFIG_AUDIO_AMP_ENABLE_GPIO,
+            .pin_bit_mask = 1ULL << amp_pin,
             .mode = GPIO_MODE_OUTPUT,
             .pull_up_en = GPIO_PULLUP_DISABLE,
             .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -155,9 +189,6 @@ void audio_driver_amp_enable(bool enable)
         gpio_config(&io);
         s_amp_pin_configured = true;
     }
-    gpio_set_level((gpio_num_t)CONFIG_AUDIO_AMP_ENABLE_GPIO, enable ? 1 : 0);
-    ESP_LOGI(TAG, "Amp enable GPIO %d -> %d", CONFIG_AUDIO_AMP_ENABLE_GPIO, enable ? 1 : 0);
-#else
-    (void)enable;
-#endif
+    gpio_set_level((gpio_num_t)amp_pin, enable ? 1 : 0);
+    ESP_LOGI(TAG, "Amp enable GPIO %d -> %d", amp_pin, enable ? 1 : 0);
 }
