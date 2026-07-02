@@ -77,6 +77,18 @@ config BG_SUPPORT_MP3
         sample rates are rejected with a log message, matching the WAV policy.
         Adds ~20-30 KB flash. Disable to save space on WAV-only deployments.
 
+config BG_SUPPORT_PUSH
+    bool "Accept browser-pushed BG audio via /api/bg-stream"
+    default y
+    help
+        Compile in the HTTP endpoint (/api/bg-stream) plus the bg_player push
+        API so the web UI can generate / load and STREAM background audio into
+        the device, instead of the device pulling it from an external URL. The
+        browser sends canonical 44.1 kHz 16-bit stereo WAV; TCP flow control
+        paces the upload to playback rate. Works in SoftAP-only mode (no
+        internet needed). Additive — the existing BG http(s):// pull path is
+        unaffected. Adds a few KB flash. Disable if only pull sources are used.
+
 
 # ---------------------------------------------------------------------------
 # LED Backend Selection (Step 1 of Plan 008)

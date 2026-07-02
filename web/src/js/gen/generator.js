@@ -18,6 +18,7 @@ import { initTextView } from './views/text.js';
 import { initTableView } from './views/table.js';
 import { initLaneView } from './views/lane.js';
 import { initWizardView } from './views/wizard.js';
+import { initBgPanel } from './views/bg_panel.js';
 
 // ---- Shared model + event bus ---------------------------------------------
 let doc = emptyDoc();
@@ -30,6 +31,7 @@ let textView = null;
 let tableView = null;
 let laneView = null;
 let wizardView = null;
+let bgPanel = null;
 
 export function getDoc() { return doc; }
 
@@ -223,7 +225,12 @@ function saveAs() {
 function onPlay() {
     if (!doc.rows.length) { showMessage('Nothing to play', 'error'); return; }
     playDoc(doc)
-        .then(res => showMessage(res || 'Playing', 'success'))
+        .then(res => {
+            showMessage(res || 'Playing', 'success');
+            // If the session's BG is a browser clip (push://), stream it now —
+            // AFTER play-config (which auto-stops any prior BG) has started.
+            if (bgPanel && bgPanel.pushForDoc) bgPanel.pushForDoc(doc);
+        })
         .catch(err => showMessage('Play error: ' + err, 'error'));
 }
 function onStop() {
@@ -278,6 +285,12 @@ export function generatorInit() {
     // sessionFromDoc on incoming model changes. Same ctx contract.
     wizardView = initWizardView({ getDoc, setDoc });
     onModelChanged(d => { if (wizardView) wizardView.refresh(d); });
+
+    // BG panel (bg_browser_push_plan.md): browser-generated / loaded / bounced
+    // background audio streamed to the device. Independent of the doc model
+    // except when the user clicks "Set as BG" (which writes a push:// row).
+    bgPanel = initBgPanel({ getDoc, setDoc });
+    onModelChanged(d => { if (bgPanel) bgPanel.refresh(d); });
 
     switchView('text');
     setDoc(emptyDoc());     // initial empty preview/meter + text view

@@ -120,4 +120,64 @@ bool bg_player_is_active(void);
  */
 void bg_player_mix_into(float *output_buffer, size_t samples);
 
+#if CONFIG_BG_SUPPORT_PUSH
+/* ---------------------------------------------------------------------------
+ * Browser-push producer API (bg_browser_push_plan.md, Phase 1).
+ *
+ * Instead of the device PULLING BG audio from a URL (bg_player_start +
+ * bg_streamer_task), the browser PUSHES already-decoded PCM into the same ring
+ * over the /api/bg-stream HTTP endpoint. The caller's thread (the HTTP request
+ * handler) becomes the sole producer; bg_streamer_task is NOT spawned.
+ *
+ * Single-producer invariant: bg_player_start_push() stops any active pull
+ * first, and the consumer / mixer / I2S path is byte-identical to the pull
+ * path — only the producer changes.
+ * --------------------------------------------------------------------------- */
+
+/**
+ * @brief Arm push mode.
+ *
+ * Stops any active BG (pull or push), resets the ring, arms the fade-in ramp,
+ * and marks the player active+streaming WITHOUT spawning a producer task. The
+ * WiFi-connected gate is skipped (push works in SoftAP-only mode). After this
+ * returns ESP_OK the caller feeds audio via bg_player_push_pcm().
+ *
+ * @param pan       [-1.0, +1.0]; 0 = centre.
+ * @param loudness  [0.0, 1.0] gain multiplier.
+ * @return ESP_OK, or ESP_ERR_INVALID_STATE if not initialised / no ring.
+ */
+esp_err_t bg_player_start_push(float pan, float loudness);
+
+/**
+ * @brief Feed interleaved 16-bit PCM into the ring (blocking / backpressured).
+ *
+ * Converts `frames` int16 frames (channels 1 or 2) to 44.1 kHz stereo float via
+ * the shared decode tail and pushes to the ring. Paces itself against a high
+ * watermark: when the ring is near-full it yields (10 ms) and retries, which —
+ * because the HTTP handler thread is not calling recv() meanwhile — throttles
+ * the browser upload to playback rate via TCP flow control.
+ *
+ * @param pcm          Interleaved int16 samples, `frames * channels` long.
+ * @param frames       Number of input frames.
+ * @param channels     1 (mono, duplicated L=R) or 2 (stereo).
+ * @param upsample_2x  true for 22050 Hz source (sample-and-hold to 44100).
+ * @return Number of INPUT frames consumed. A value < `frames` means push mode
+ *         was ended (stop / supersede) mid-call — the caller should stop reading.
+ */
+size_t bg_player_push_pcm(const int16_t *pcm, size_t frames,
+                          unsigned channels, bool upsample_2x);
+
+/**
+ * @brief End a push stream on natural completion (browser closed the body).
+ *
+ * Lets the already-buffered ring audio play out (up to ~a few seconds), then
+ * performs the same clean fade-out + teardown as bg_player_stop(). Blocks in
+ * the caller's (HTTP handler) thread until drained. For an immediate, tail-
+ * dropping stop (user Stop / a superseding POST), call bg_player_stop() instead.
+ *
+ * @return ESP_OK.
+ */
+esp_err_t bg_player_end_push(void);
+#endif // CONFIG_BG_SUPPORT_PUSH
+
 #endif // BG_PLAYER_H

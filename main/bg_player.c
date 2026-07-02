@@ -212,10 +212,21 @@ static const char *TAG = "bg_player";
  * Internal state (single static instance — one BG track per session)
  * --------------------------------------------------------------------------- */
 
+/* Which producer is feeding the ring. PULL (default, .bss zero) = bg_streamer_task
+ * fetching a URL; PUSH = the /api/bg-stream HTTP handler pushing decoded PCM.
+ * The consumer/mixer is identical either way; this only affects start/stop
+ * (PUSH never spawns/joins a producer task). */
+typedef enum {
+    BG_PRODUCER_PULL = 0,
+    BG_PRODUCER_PUSH = 1,
+} bg_producer_kind_t;
+
 typedef struct {
     StreamBufferHandle_t ring;          /* 32 KB stream buffer (producer→consumer) */
-    TaskHandle_t         producer_task; /* bg_streamer_task handle                 */
+    TaskHandle_t         producer_task; /* bg_streamer_task handle (NULL in PUSH)  */
     SemaphoreHandle_t    state_mutex;   /* protects start/stop/active transitions   */
+
+    bg_producer_kind_t   producer_kind; /* PULL (url fetch) or PUSH (browser feed) */
 
     volatile bool active;               /* consumer gate: true → mix_into is live   */
     volatile bool streaming;            /* producer gate: true → keep producing      */
@@ -243,6 +254,14 @@ static bg_player_t s_bg;   /* zero-initialised by the linker (.bss)             
 /* Ring buffer: 1 MB storage in PSRAM, control struct in DRAM .bss. */
 static uint8_t *s_bg_ring_storage = NULL;
 static StaticStreamBuffer_t s_bg_ring_ctrl;
+
+#if CONFIG_BG_SUPPORT_PUSH
+/** Push-mode conversion scratch: bg_player_push_pcm() processes input in
+ *  batches of this many int16 frames so a single PSRAM buffer covers any caller
+ *  chunk size. Worst-case float output = BATCH * 2 (upsample) * 2 ch = 4× floats. */
+#define BG_PUSH_BATCH_FRAMES  2048u
+static float *s_bg_push_scratch = NULL;   /* BG_PUSH_BATCH_FRAMES*4 floats, PSRAM */
+#endif
 
 /* ---------------------------------------------------------------------------
  * Forward declarations
@@ -295,6 +314,15 @@ static esp_err_t bg_dispatch_url(const char *url)
         /* HTTP/HTTPS streaming — primary URL scheme for Plan 006.              */
         ESP_LOGI(TAG, "BG dispatch: HTTP/HTTPS '%s'", url);
         return bg_stream_from_http(url);
+
+    } else if (strncmp(url, "push://", 7) == 0) {
+        /* Browser-driven source: never fetched. bg_player_start() short-circuits
+         * push:// before spawning the streamer task, so this branch should be
+         * unreachable — return ESP_ERR_NOT_SUPPORTED so that, if it ever IS
+         * reached, the outer retry loop bails out rather than spinning on a
+         * spurious "EOF → re-open" (ESP_OK) forever.                            */
+        ESP_LOGW(TAG, "BG dispatch: push:// reached streamer (unexpected) '%s'", url);
+        return ESP_ERR_NOT_SUPPORTED;
 
     } else if (strncmp(url, "sdcard://", 9) == 0) {
 
@@ -1130,6 +1158,23 @@ esp_err_t bg_player_start(const config_bg_entry_t *bg)
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* push:// is a browser-sourced clip: the device does NOT fetch it. Playback
+     * is driven separately by the web UI via POST /api/bg-stream (which calls
+     * bg_player_start_push). So a timeline pre-rolling a push:// BG is a no-op
+     * here — never spawn a pull task for it. The play flow's own auto-stop
+     * already tears down any prior BG, so we don't need to stop here.          */
+    if (strncmp(bg->url, "push://", 7) == 0) {
+#if CONFIG_BG_SUPPORT_PUSH
+        ESP_LOGI(TAG, "bg_player_start: '%s' is browser-driven (push://) — "
+                 "awaiting POST /api/bg-stream, no pull task spawned", bg->url);
+        return ESP_OK;
+#else
+        ESP_LOGW(TAG, "bg_player_start: push:// BG requested but "
+                 "CONFIG_BG_SUPPORT_PUSH=n — ignoring '%s'", bg->url);
+        return ESP_ERR_NOT_SUPPORTED;
+#endif
+    }
+
     /* Serialize concurrent start/stop calls.                                  */
     if (s_bg.state_mutex == NULL) {
         ESP_LOGE(TAG, "bg_player_start: not initialised — call bg_player_init first");
@@ -1191,6 +1236,10 @@ esp_err_t bg_player_start(const config_bg_entry_t *bg)
         return ESP_ERR_INVALID_STATE;
     }
     xStreamBufferReset(s_bg.ring);
+
+    /* This is a URL-pull session (the default producer). Explicit for clarity
+     * and so a prior push session's kind can't leak in.                       */
+    s_bg.producer_kind = BG_PRODUCER_PULL;
 
     /* Set streaming flag BEFORE spawning the task so the task's first check
      * of s_bg.streaming sees true.                                            */
@@ -1343,6 +1392,18 @@ static esp_err_t bg_player_stop_impl(uint32_t producer_join_timeout_ms)
         xStreamBufferReset(s_bg.ring);
     }
 
+#if CONFIG_BG_SUPPORT_PUSH
+    /* Free the push-mode scratch (allocated per session by bg_player_start_push)
+     * and revert to the default PULL producer kind so a subsequent URL play
+     * behaves exactly as before push was ever used. Harmless for a pull stop
+     * (scratch is NULL, kind already PULL). */
+    if (s_bg_push_scratch != NULL) {
+        heap_caps_free(s_bg_push_scratch);
+        s_bg_push_scratch = NULL;
+    }
+#endif
+    s_bg.producer_kind = BG_PRODUCER_PULL;
+
     ESP_LOGI(TAG,
              "bg_player_stop: done (underruns=%u, bytes_streamed=%u)",
              s_bg.underrun_count, s_bg.bytes_streamed);
@@ -1369,6 +1430,156 @@ esp_err_t bg_player_stop_async(void)
      * snappy "PLAY replaces PLAY" UX. */
     return bg_player_stop_impl(200u);
 }
+
+#if CONFIG_BG_SUPPORT_PUSH
+/* ---------------------------------------------------------------------------
+ * Browser-push producer (bg_browser_push_plan.md, Phase 1)
+ * --------------------------------------------------------------------------- */
+
+esp_err_t bg_player_start_push(float pan, float loudness)
+{
+    if (s_bg.state_mutex == NULL) {
+        ESP_LOGE(TAG, "bg_player_start_push: not initialised — call bg_player_init first");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTake(s_bg.state_mutex, portMAX_DELAY);
+
+    /* Enforce the single-producer invariant: tear down any active BG (pull OR
+     * push) before arming a new push session. bg_player_stop() joins/kills a
+     * pull producer task and resets the ring, guaranteeing no other producer
+     * touches s_bg.ring once we return.                                       */
+    if (s_bg.active) {
+        xSemaphoreGive(s_bg.state_mutex);
+        bg_player_stop();
+        xSemaphoreTake(s_bg.state_mutex, portMAX_DELAY);
+    }
+
+    if (s_bg.ring == NULL) {
+        ESP_LOGE(TAG, "bg_player_start_push: ring not allocated — bg_player_init failed at boot?");
+        xSemaphoreGive(s_bg.state_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Allocate the per-session conversion scratch (PSRAM; freed in stop). */
+    if (s_bg_push_scratch == NULL) {
+        s_bg_push_scratch = heap_caps_malloc(BG_PUSH_BATCH_FRAMES * 4u * sizeof(float),
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_bg_push_scratch == NULL) {
+            /* PSRAM exhausted (very rare) — fall back to any heap. */
+            s_bg_push_scratch = heap_caps_malloc(BG_PUSH_BATCH_FRAMES * 4u * sizeof(float),
+                                                 MALLOC_CAP_8BIT);
+        }
+        if (s_bg_push_scratch == NULL) {
+            ESP_LOGE(TAG, "bg_player_start_push: scratch malloc failed");
+            xSemaphoreGive(s_bg.state_mutex);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    /* Mark this a push session. Note: no URL fetch, no WiFi gate (works on
+     * SoftAP), and no producer task — the HTTP handler thread is the producer. */
+    s_bg.producer_kind = BG_PRODUCER_PUSH;
+    s_bg.producer_task = NULL;
+    snprintf(s_bg.url, sizeof(s_bg.url), "push://");
+    s_bg.pan      = pan;
+    s_bg.loudness = loudness;
+
+    /* Arm the 220-sample fade-in ramp — identical to bg_player_start. */
+    s_bg.current_loudness        = 0.0f;
+    s_bg.target_loudness         = loudness;
+    s_bg.loudness_step           = loudness / (float)BG_AMP_RAMP_SAMPLES;
+    __sync_synchronize();   /* release: step+target visible before remaining */
+    s_bg.loudness_ramp_remaining = BG_AMP_RAMP_SAMPLES;
+
+    s_bg.underrun_count = 0u;
+    s_bg.bytes_streamed = 0u;
+
+    xStreamBufferReset(s_bg.ring);
+    s_bg.streaming = true;
+    s_bg.active    = true;
+
+    xSemaphoreGive(s_bg.state_mutex);
+
+    ESP_LOGI(TAG, "bg_player_start_push: OK — pan=%.2f loudness=%.2f (push producer)",
+             pan, loudness);
+    return ESP_OK;
+}
+
+size_t bg_player_push_pcm(const int16_t *pcm, size_t frames,
+                          unsigned channels, bool upsample_2x)
+{
+    if (pcm == NULL || frames == 0u) return 0u;
+    if (s_bg.producer_kind != BG_PRODUCER_PUSH) return 0u;
+
+    /* Same watermark as the pull path: never issue a ring send that could
+     * block for long. When the ring is near-full we yield and retry the SAME
+     * batch; because the HTTP handler thread is parked here (not calling
+     * recv()), TCP flow control throttles the browser upload to playback rate. */
+    const size_t WATERMARK_FREE_BYTES = BG_HTTP_CHUNK_BYTES * 16u;  /* 256 KB */
+    size_t off = 0u;   /* input frames consumed */
+
+    while (off < frames) {
+        if (!s_bg.streaming || s_bg.ring == NULL) {
+            break;   /* push mode ended (stop / supersede) — tell caller via off<frames */
+        }
+        if (xStreamBufferSpacesAvailable(s_bg.ring) < WATERMARK_FREE_BYTES) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        size_t batch = frames - off;
+        if (batch > BG_PUSH_BATCH_FRAMES) batch = BG_PUSH_BATCH_FRAMES;
+
+        size_t out_frames = bg_convert_to_stereo_float(pcm + off * channels,
+                                                       batch, channels,
+                                                       upsample_2x, s_bg_push_scratch);
+        size_t bytes_to_send = out_frames * 2u * sizeof(float);
+        if (bytes_to_send > 0u) {
+            /* Post-watermark the ring has >=256 KB free and one batch tops out
+             * at 32 KB, so this completes in microseconds. The 100 ms bound is
+             * a safety net (consumer momentarily starved), matching the WAV path. */
+            size_t sent = xStreamBufferSend(s_bg.ring, s_bg_push_scratch,
+                                            bytes_to_send, pdMS_TO_TICKS(100));
+            s_bg.bytes_streamed += (uint32_t)sent;
+            if (sent < bytes_to_send) {
+                ESP_LOGW(TAG, "BG push: ring send short write (wanted %zu, sent %zu)",
+                         bytes_to_send, sent);
+            }
+        }
+        off += batch;
+    }
+    return off;
+}
+
+esp_err_t bg_player_end_push(void)
+{
+    /* Natural completion: the browser closed the request body. Let the audio
+     * already buffered in the ring play out before the clean fade-out, so we
+     * don't clip the tail. We poll from the caller's (HTTP handler) thread —
+     * blocking here is fine and, for a client-driven loop, makes the fetch
+     * promise resolve exactly when playback finishes.                          */
+    if (s_bg.producer_kind != BG_PRODUCER_PUSH || !s_bg.active) {
+        return ESP_OK;
+    }
+
+    /* Stop accepting/pushing more data, then wait for the ring to drain (or an
+     * external stop to flip active=false). Cap the wait at ~5 s (ring holds
+     * ≈3 s) so a stalled consumer can't hang the handler forever. */
+    for (int waited_ms = 0; waited_ms < 5000; waited_ms += 20) {
+        if (!s_bg.active) break;                       /* superseded / stopped */
+        if (s_bg.ring == NULL) break;
+        if (xStreamBufferBytesAvailable(s_bg.ring) < (2u * sizeof(float) * 64u)) {
+            break;                                     /* ring effectively empty */
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    /* Clean fade-out + teardown (also frees the push scratch and reverts to
+     * PULL). Idempotent if an external stop already ran.                       */
+    return bg_player_stop();
+}
+#endif // CONFIG_BG_SUPPORT_PUSH
 
 /**
  * @brief Query whether BG playback is currently active.

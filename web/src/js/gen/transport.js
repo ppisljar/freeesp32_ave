@@ -56,3 +56,27 @@ export function getCaps() {
             led_color:    true,
         }));
 }
+
+// ---- BG browser-push (bg_browser_push_plan.md) -----------------------------
+
+// Stream a canonical WAV Blob to the device as the active background track.
+// The POST body is fixed-length (a Blob), so it works over the device's
+// HTTP/1.1 server; TCP flow control paces the upload to playback rate. The
+// returned promise resolves when the device has finished consuming the clip
+// (natural completion) — which is when a client-driven loop should re-POST.
+export function pushBg(wavBlob, { pan = 0, loudness = 50 } = {}) {
+    const q = '?pan=' + encodeURIComponent(pan) + '&loudness=' + encodeURIComponent(loudness);
+    return fetch('/api/bg-stream' + q, {
+        method: 'POST',
+        headers: { 'Content-Type': 'audio/wav' },
+        body: wavBlob,
+    }).then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    });
+}
+
+// Stop ONLY the background track (leaves any running timeline/audio untouched).
+export function stopBg() {
+    return fetch('/api/bg-stream?stop=1', { method: 'POST' }).then(r => r.json());
+}

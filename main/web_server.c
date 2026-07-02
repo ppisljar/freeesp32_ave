@@ -7,6 +7,7 @@
 #include "cJSON.h"               // POST /api/mod body parsing
 #include "led_matrix_example.h"
 #include "bg_player.h"
+#include "wav_parser.h"          // POST /api/bg-stream — parse browser-sent WAV header
 #include "settings.h"            // runtime device settings (GET/POST /api/settings)
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -65,6 +66,9 @@ static esp_err_t stop_handler(httpd_req_t *req);
 static esp_err_t example_handler(httpd_req_t *req);
 static esp_err_t play_config_handler(httpd_req_t *req);
 static esp_err_t patch_config_handler(httpd_req_t *req);
+#if CONFIG_BG_SUPPORT_PUSH
+static esp_err_t bg_stream_handler(httpd_req_t *req);
+#endif
 static esp_err_t state_handler(httpd_req_t *req);
 static esp_err_t report_handler(httpd_req_t *req);
 static esp_err_t settings_get_handler(httpd_req_t *req);
@@ -192,6 +196,16 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &patch_config_uri);
+
+#if CONFIG_BG_SUPPORT_PUSH
+    httpd_uri_t bg_stream_uri = {
+        .uri = "/api/bg-stream",
+        .method = HTTP_POST,
+        .handler = bg_stream_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &bg_stream_uri);
+#endif
 
     httpd_uri_t state_uri = {
         .uri = "/api/state",
@@ -1158,6 +1172,206 @@ static esp_err_t patch_config_handler(httpd_req_t *req)
     httpd_resp_send(req, "Patch applied", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
+
+#if CONFIG_BG_SUPPORT_PUSH
+// ---------------------------------------------------------------------------
+// POST /api/bg-stream — browser-pushed background audio
+// ---------------------------------------------------------------------------
+// The browser (bg_browser_push_plan.md) generates or loads audio, conforms it
+// to the device's canonical 44.1 kHz / 16-bit / stereo WAV, and streams it here
+// as a normal fixed-Content-Length POST body. We parse the WAV header, then feed
+// the PCM into bg_player's ring via bg_player_push_pcm(); that call self-paces
+// against the ring watermark, so TCP flow control throttles the browser upload
+// to real-time playback rate (no app-level pacing needed).
+//
+// Query params:
+//   ?pan=<-100..100>&loudness=<0..100>   (defaults: 0, 50)
+//   ?stop=1                              BG-only stop (does not touch the timeline)
+//
+// Only one push stream may run at a time (guarded); a second concurrent POST
+// gets 409. A superseding play is achieved by the browser stopping first.
+#define BG_STREAM_RECV_BYTES 8192u
+static volatile int s_bg_stream_busy = 0;
+
+// Push a run of PCM bytes into bg_player, maintaining a 0..3 byte frame carry
+// across calls so a chunk boundary never splits a 4-byte stereo frame. `stage`
+// is a caller-provided aligned scratch of BG_STREAM_RECV_BYTES+4 bytes so the
+// int16 pointer handed to bg_player is always 2-byte aligned. Returns false if
+// push mode ended mid-feed (stop / supersede) — the caller should stop reading.
+static bool bg_stream_feed_pcm(const uint8_t *buf, size_t len,
+                               uint8_t *stage, uint8_t *carry, size_t *carry_len)
+{
+    size_t off = 0;
+    while (off < len) {
+        memcpy(stage, carry, *carry_len);
+        size_t chunk = len - off;
+        if (chunk > BG_STREAM_RECV_BYTES) chunk = BG_STREAM_RECV_BYTES;
+        memcpy(stage + *carry_len, buf + off, chunk);
+        size_t total  = *carry_len + chunk;
+        size_t frames = total / 4u;                 // 4 bytes = one 16-bit stereo frame
+        if (frames > 0u) {
+            size_t consumed = bg_player_push_pcm((const int16_t *)stage, frames,
+                                                 2u, false);
+            if (consumed < frames) return false;     // push ended
+        }
+        size_t used = frames * 4u;
+        *carry_len = total - used;                   // 0..3 leftover bytes
+        memcpy(carry, stage + used, *carry_len);
+        off += chunk;
+    }
+    return true;
+}
+
+static esp_err_t bg_stream_handler(httpd_req_t *req)
+{
+    // ----- Parse query string (pan / loudness / stop) -----------------------
+    float pan = 0.0f, loudness = 50.0f;
+    bool  do_stop = false;
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 128) {
+        char q[128];
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
+            char val[32];
+            if (httpd_query_key_value(q, "stop", val, sizeof(val)) == ESP_OK &&
+                atoi(val) != 0) do_stop = true;
+            if (httpd_query_key_value(q, "pan", val, sizeof(val)) == ESP_OK)
+                pan = strtof(val, NULL);
+            if (httpd_query_key_value(q, "loudness", val, sizeof(val)) == ESP_OK)
+                loudness = strtof(val, NULL);
+        }
+    }
+
+    // ----- BG-only stop -----------------------------------------------------
+    if (do_stop) {
+        bg_player_stop();
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"stopped\":true}");
+        return ESP_OK;
+    }
+
+    // ----- Single-stream guard (409 on overlap) -----------------------------
+    if (!__sync_bool_compare_and_swap(&s_bg_stream_busy, 0, 1)) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"bg-stream busy\"}");
+        return ESP_OK;
+    }
+
+    // Clamp to bg_player's expected ranges: pan [-100,100]->[-1,1], loud [0,100]->[0,1].
+    if (pan < -100.0f) pan = -100.0f; else if (pan > 100.0f) pan = 100.0f;
+    if (loudness < 0.0f) loudness = 0.0f; else if (loudness > 100.0f) loudness = 100.0f;
+    pan /= 100.0f;
+    loudness /= 100.0f;
+
+    esp_err_t status = ESP_OK;
+    const char *err_msg = NULL;
+    int http_err = 0;
+
+    uint8_t *stage = heap_caps_malloc(BG_STREAM_RECV_BYTES + 4u,
+                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint8_t *rb    = heap_caps_malloc(BG_STREAM_RECV_BYTES,
+                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!stage || !rb) {
+        free(stage); free(rb);
+        s_bg_stream_busy = 0;
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "bg-stream OOM");
+        return ESP_FAIL;
+    }
+
+    if (bg_player_start_push(pan, loudness) != ESP_OK) {
+        free(stage); free(rb);
+        s_bg_stream_busy = 0;
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "bg-stream start failed");
+        return ESP_FAIL;
+    }
+
+    // ----- Streaming state --------------------------------------------------
+    uint8_t hdr[512]; size_t hdr_len = 0; bool parsed = false;
+    wav_format_t fmt;
+    uint8_t carry[4]; size_t carry_len = 0;
+    size_t remaining = req->content_len;
+    bool ended = false;   // push mode ended mid-stream (stop / supersede)
+
+    while (remaining > 0 && !ended) {
+        size_t want = remaining > BG_STREAM_RECV_BYTES ? BG_STREAM_RECV_BYTES : remaining;
+        int r = httpd_req_recv(req, (char *)rb, want);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;   // transient — retry
+        if (r <= 0) { status = ESP_FAIL; err_msg = "recv error"; http_err = 1; break; }
+        remaining -= (size_t)r;
+
+        if (!parsed) {
+            // Accumulate into hdr until the WAV header (through 'data') is parseable.
+            size_t take = (size_t)r;
+            if (take > sizeof(hdr) - hdr_len) take = sizeof(hdr) - hdr_len;
+            memcpy(hdr + hdr_len, rb, take);
+            hdr_len += take;
+
+            if (hdr_len >= 12 && memcmp(hdr, "RIFF", 4) != 0) {
+                status = ESP_FAIL; err_msg = "not a WAV (bad RIFF)"; http_err = 400; break;
+            }
+            size_t consumed = 0;
+            esp_err_t pe = (hdr_len >= 44)
+                         ? wav_parse_header(hdr, hdr_len, &fmt, &consumed)
+                         : ESP_ERR_INVALID_ARG;
+            if (pe == ESP_OK) {
+                parsed = true;
+                // PCM already sitting in hdr past the header:
+                if (hdr_len > fmt.data_offset) {
+                    if (!bg_stream_feed_pcm(hdr + fmt.data_offset,
+                                            hdr_len - fmt.data_offset,
+                                            stage, carry, &carry_len)) { ended = true; }
+                }
+                // PCM in this recv beyond what we copied into hdr:
+                if (!ended && (size_t)r > take) {
+                    if (!bg_stream_feed_pcm(rb + take, (size_t)r - take,
+                                            stage, carry, &carry_len)) { ended = true; }
+                }
+            } else if (pe == ESP_ERR_NOT_SUPPORTED) {
+                status = ESP_FAIL; err_msg = "unsupported WAV (need 44.1k/16/stereo)";
+                http_err = 400; break;
+            } else if (hdr_len >= sizeof(hdr)) {
+                // Buffer full and still no valid header — give up.
+                status = ESP_FAIL; err_msg = "WAV header not found"; http_err = 400; break;
+            }
+            // else: INVALID_ARG with room left — need more bytes, keep reading.
+        } else {
+            if (!bg_stream_feed_pcm(rb, (size_t)r, stage, carry, &carry_len)) {
+                ended = true;
+            }
+        }
+    }
+
+    free(stage);
+    free(rb);
+
+    // ----- Finish -----------------------------------------------------------
+    if (ended) {
+        // Push mode was already torn down by whoever stopped/superseded us.
+        ESP_LOGI(TAG, "bg-stream: ended mid-stream (stopped/superseded)");
+    } else if (status == ESP_OK) {
+        // Natural completion — let buffered audio drain, then clean fade-out.
+        bg_player_end_push();
+    } else {
+        // Error — stop immediately (no drain).
+        bg_player_stop();
+    }
+
+    s_bg_stream_busy = 0;
+
+    if (status != ESP_OK && !ended) {
+        if (http_err == 400) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err_msg ? err_msg : "bad request");
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, err_msg ? err_msg : "error");
+        }
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+#endif // CONFIG_BG_SUPPORT_PUSH
 
 // ---------------------------------------------------------------------------
 // /api/state — JSON snapshot of all current per-channel state

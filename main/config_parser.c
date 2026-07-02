@@ -1377,15 +1377,19 @@ static esp_err_t parse_bg_line(const char *tokens[], size_t token_count,
     }
 
     // ----- URL: validate scheme (shallow prefix check only) -----
+    // push:// marks a browser-sourced clip (bg_browser_push_plan.md): the
+    // device never fetches it — the audio arrives via POST /api/bg-stream.
+    // Accepting it here lets a session round-trip losslessly through save/load.
     const char *url = tokens[0];
     bool valid_scheme =
         (strncmp(url, "http://",   7) == 0) ||
         (strncmp(url, "https://",  8) == 0) ||
-        (strncmp(url, "sdcard://", 9) == 0);
+        (strncmp(url, "sdcard://", 9) == 0) ||
+        (strncmp(url, "push://",   7) == 0);
 
     if (!valid_scheme) {
         ESP_LOGW(TAG, "BG line: unsupported URL scheme in '%s' "
-                 "(must be http://, https://, or sdcard://) -- skipping", url);
+                 "(must be http://, https://, sdcard://, or push://) -- skipping", url);
         return ESP_ERR_INVALID_ARG;
     }
 
