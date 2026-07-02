@@ -1,17 +1,29 @@
 // Transport helpers — talk to the device's existing HTTP endpoints.
 // Reused/adapted from config.js's play/stop logic; no new endpoints.
 
-import { serialize } from './serialize.js';
+import { serializeForDevice } from './serialize.js';
 import { NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS } from './model.js';
 
 // Serialize the model and POST it to /api/play-config (text/plain). Stops any
-// running timeline on the device and starts this one.
+// running timeline on the device and starts this one. Speech (`S`) rows are
+// stripped by serializeForDevice — the firmware can't parse them (they're
+// browser-only, mixed into the bounced WAV).
 export function playDoc(doc) {
-    const body = serialize(doc);
+    const body = serializeForDevice(doc);
     return fetch('/api/play-config', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body,
+    }).then(r => r.text());
+}
+
+// POST raw .ledc text to /api/play-config (caller has already filtered it, e.g.
+// dropped A + S rows for a "bounce all" play where the device only runs LEDs).
+export function playConfigText(text) {
+    return fetch('/api/play-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: text,
     }).then(r => r.text());
 }
 

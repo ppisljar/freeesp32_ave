@@ -8,11 +8,17 @@
 #include "led_matrix_example.h"
 #include "bg_player.h"
 #include "wav_parser.h"          // POST /api/bg-stream — parse browser-sent WAV header
+#include "diagnostics.h"         // GET /api/logs, /api/coredump, reset reason in /api/state
+#include "esp_heap_caps.h"       // heap_caps_get_free_size (PSRAM) for /api/state diag
 #include "settings.h"            // runtime device settings (GET/POST /api/settings)
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#if CONFIG_BG_SUPPORT_PUSH
+#include "esp_http_client.h"     // GET /api/tts — outbound proxy to Google Translate TTS
+#include "esp_crt_bundle.h"      // TLS CA bundle for the TTS proxy HTTPS GET
+#endif
 #include "esp_timer.h"
 #include "esp_system.h"          // esp_restart (POST /api/reboot)
 #include "esp_ota_ops.h"         // OTA boot-slot handoff (POST /api/ota)
@@ -68,6 +74,7 @@ static esp_err_t play_config_handler(httpd_req_t *req);
 static esp_err_t patch_config_handler(httpd_req_t *req);
 #if CONFIG_BG_SUPPORT_PUSH
 static esp_err_t bg_stream_handler(httpd_req_t *req);
+static esp_err_t tts_handler(httpd_req_t *req);
 #endif
 static esp_err_t state_handler(httpd_req_t *req);
 static esp_err_t report_handler(httpd_req_t *req);
@@ -85,6 +92,9 @@ static esp_err_t reports_list_handler(httpd_req_t *req);
 static esp_err_t reports_get_handler(httpd_req_t *req);
 static esp_err_t reports_put_handler(httpd_req_t *req);
 static esp_err_t reports_delete_handler(httpd_req_t *req);
+static esp_err_t logs_handler(httpd_req_t *req);
+static esp_err_t coredump_handler(httpd_req_t *req);
+static esp_err_t coredump_erase_handler(httpd_req_t *req);
 
 esp_err_t web_server_init(void)
 {
@@ -149,7 +159,11 @@ esp_err_t web_server_init(void)
     // Configure HTTP server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
-    config.max_uri_handlers = 24;
+    // Must be >= the number of httpd_register_uri_handler() calls below. When
+    // this is too small, the LAST handlers to register (incl. the catch-all "/*"
+    // static file handler) silently fail, and every unmatched path — including
+    // "/" — returns 404. Keep headroom above the current count (~28).
+    config.max_uri_handlers = 40;
     // Enable wildcard matching so "/*" can serve arbitrary static assets.
     // Exact /api/... handlers are registered first and keep priority.
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -205,6 +219,14 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &bg_stream_uri);
+
+    httpd_uri_t tts_uri = {
+        .uri = "/api/tts",
+        .method = HTTP_GET,
+        .handler = tts_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &tts_uri);
 #endif
 
     httpd_uri_t state_uri = {
@@ -214,6 +236,30 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &state_uri);
+
+    httpd_uri_t logs_uri = {
+        .uri = "/api/logs",
+        .method = HTTP_GET,
+        .handler = logs_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &logs_uri);
+
+    httpd_uri_t coredump_uri = {
+        .uri = "/api/coredump",
+        .method = HTTP_GET,
+        .handler = coredump_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &coredump_uri);
+
+    httpd_uri_t coredump_erase_uri = {
+        .uri = "/api/coredump/erase",
+        .method = HTTP_POST,
+        .handler = coredump_erase_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &coredump_erase_uri);
 
     httpd_uri_t report_uri = {
         .uri = "/api/report",
@@ -1371,6 +1417,137 @@ static esp_err_t bg_stream_handler(httpd_req_t *req)
     httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/tts?tl=<lang>&q=<text>  — Google Translate TTS proxy
+// ---------------------------------------------------------------------------
+// The browser can't call Google's TTS directly (CORS), so the device proxies
+// it: same-origin GET here → outbound HTTPS GET to translate.google.com →
+// MP3 streamed back. The browser splits long text into <=200-char chunks
+// (Google's per-request limit), calls this once per chunk, and concatenates.
+// `tl` = language code (en, sl, de, …) — Google has one voice per language.
+// Needs the device on WiFi with internet (station mode); no free online TTS
+// works in SoftAP-only. Uses the compiled-in mbedTLS CA bundle to verify TLS.
+#define TTS_MAX_MP3_BYTES  (256 * 1024)   // one <=200-char chunk is far smaller
+
+// Percent-encode `src` (RFC 3986 unreserved kept) onto the end of `dst`.
+// Returns bytes written, or -1 if it would overflow `cap`.
+static int tts_urlencode_append(char *dst, size_t cap, size_t off, const char *src)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = off;
+    for (const unsigned char *p = (const unsigned char *)src; *p; p++) {
+        unsigned char c = *p;
+        bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                          (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+                          c == '.' || c == '~';
+        if (unreserved) {
+            if (o + 1 >= cap) return -1;
+            dst[o++] = (char)c;
+        } else {
+            if (o + 3 >= cap) return -1;
+            dst[o++] = '%'; dst[o++] = hex[c >> 4]; dst[o++] = hex[c & 0xF];
+        }
+    }
+    dst[o] = '\0';
+    return (int)o;
+}
+
+static esp_err_t tts_handler(httpd_req_t *req)
+{
+    // ----- Parse query: tl (lang, default en), q (text, required) ----------
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen <= 1 || qlen > 2048) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "tts: bad query");
+        return ESP_FAIL;
+    }
+    char *qs = malloc(qlen);
+    char *text = malloc(qlen);
+    char tl[16] = "en";
+    if (!qs || !text) { free(qs); free(text);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "tts: OOM"); return ESP_FAIL; }
+    if (httpd_req_get_url_query_str(req, qs, qlen) != ESP_OK ||
+        httpd_query_key_value(qs, "q", text, qlen) != ESP_OK || text[0] == '\0') {
+        free(qs); free(text);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "tts: missing q");
+        return ESP_FAIL;
+    }
+    { char raw[16]; if (httpd_query_key_value(qs, "tl", raw, sizeof(raw)) == ESP_OK) {
+        // Sanitize language code to [A-Za-z-] only.
+        size_t j = 0;
+        for (size_t i = 0; raw[i] && j < sizeof(tl) - 1; i++) {
+            char c = raw[i];
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-') tl[j++] = c;
+        }
+        tl[j] = '\0';
+        if (j == 0) strcpy(tl, "en");
+    } }
+    free(qs);
+
+    // ----- Build the Google Translate TTS URL ------------------------------
+    char *url = malloc(4096);
+    if (!url) { free(text);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "tts: OOM"); return ESP_FAIL; }
+    int n = snprintf(url, 4096,
+                     "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=%s&q=", tl);
+    if (n < 0 || n >= 4096 || tts_urlencode_append(url, 4096, (size_t)n, text) < 0) {
+        free(text); free(url);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "tts: text too long");
+        return ESP_FAIL;
+    }
+    free(text);
+
+    // ----- Outbound HTTPS GET ----------------------------------------------
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 8000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { free(url);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "tts: client init"); return ESP_FAIL; }
+
+    esp_err_t status = ESP_OK;
+    uint8_t *mp3 = NULL;
+    int total = 0;
+    esp_err_t oerr = esp_http_client_open(client, 0);
+    if (oerr != ESP_OK) { status = oerr; goto done; }
+    esp_http_client_fetch_headers(client);
+    int code = esp_http_client_get_status_code(client);
+    if (code != 200) {
+        ESP_LOGW(TAG, "tts: Google returned HTTP %d", code);
+        status = ESP_FAIL; goto done;
+    }
+    mp3 = heap_caps_malloc(TTS_MAX_MP3_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!mp3) mp3 = malloc(TTS_MAX_MP3_BYTES);
+    if (!mp3) { status = ESP_ERR_NO_MEM; goto done; }
+    while (total < TTS_MAX_MP3_BYTES) {
+        int r = esp_http_client_read(client, (char *)mp3 + total, TTS_MAX_MP3_BYTES - total);
+        if (r < 0) { status = ESP_FAIL; break; }
+        if (r == 0) break;   // EOF
+        total += r;
+    }
+
+done:
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    free(url);
+
+    if (status != ESP_OK || total <= 0) {
+        free(mp3);
+        httpd_resp_set_status(req, "502 Bad Gateway");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "tts: upstream fetch failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "audio/mpeg");
+    httpd_resp_send(req, (const char *)mp3, total);
+    free(mp3);
+    ESP_LOGI(TAG, "tts: proxied %d bytes (tl=%s)", total, tl);
+    return ESP_OK;
+}
 #endif // CONFIG_BG_SUPPORT_PUSH
 
 // ---------------------------------------------------------------------------
@@ -1464,8 +1641,22 @@ static esp_err_t state_handler(httpd_req_t *req)
     APPEND("],");
 
     APPEND("\"bg\":{\"active\":%s},", bg_active ? "true" : "false");
-    APPEND("\"timeline\":{\"running\":%s,\"position_ms\":%u}}",
+    APPEND("\"timeline\":{\"running\":%s,\"position_ms\":%u},",
            tl_running ? "true" : "false", (unsigned)tl_pos);
+
+    /* Diagnostics: why the last boot happened, liveness, and whether a crash
+     * core dump is waiting to be retrieved (see diagnostics.c / GET /api/logs). */
+    size_t cd_size = 0;
+    bool cd_present = diagnostics_coredump_present(&cd_size);
+    APPEND("\"diag\":{\"reset_reason\":\"%s\",\"uptime_ms\":%llu,"
+           "\"free_heap\":%u,\"free_psram\":%u,\"log_bytes\":%u,"
+           "\"coredump\":{\"present\":%s,\"size\":%u}}}",
+           diagnostics_reset_reason_str(),
+           (unsigned long long)(esp_timer_get_time() / 1000),
+           (unsigned)esp_get_free_heap_size(),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+           (unsigned)diagnostics_logs_size(),
+           cd_present ? "true" : "false", (unsigned)cd_size);
 
     #undef APPEND
 
@@ -1478,6 +1669,89 @@ truncated:
     ESP_LOGW(TAG, "state_handler: JSON buffer truncated");
     free(buf);
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "State payload too large");
+    return ESP_FAIL;
+}
+
+// ---------------------------------------------------------------------------
+// /api/logs — the buffered ESP_LOGx output (serial parity over WiFi)
+// ---------------------------------------------------------------------------
+// GET /api/logs          → text/plain, oldest→newest. Truncated to the ring size
+//                          (newest preserved) if it has wrapped.
+// GET /api/logs?clear=1  → same, then empties the ring after sending.
+static esp_err_t logs_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+
+    size_t n = diagnostics_logs_size();
+    if (n > 0) {
+        char *buf = (char *)malloc(n);   // >8 KB routes to PSRAM; never blocks DRAM
+        if (!buf) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+            return ESP_FAIL;
+        }
+        size_t got = diagnostics_get_logs(buf, n);
+        httpd_resp_send(req, buf, got);
+        free(buf);
+    } else {
+        httpd_resp_send(req, "", 0);
+    }
+
+    // Optional ?clear=1 — reset the ring after a successful read.
+    size_t qlen = httpd_req_get_url_query_len(req);
+    if (qlen > 0 && qlen < 32) {
+        char q[32];
+        if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+            char v[4];
+            if (httpd_query_key_value(q, "clear", v, sizeof(v)) == ESP_OK && v[0] == '1') {
+                diagnostics_clear_logs();
+            }
+        }
+    }
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// /api/coredump — retrieve / erase the crash core dump stored in flash
+// ---------------------------------------------------------------------------
+// GET  /api/coredump        → application/octet-stream (the ELF core dump).
+//                             404 if none stored (or coredump not compiled in).
+// POST /api/coredump/erase  → discard the stored dump.
+// Host-side: espcoredump.py info_corefile -c coredump.bin build/<app>.elf
+static esp_err_t coredump_handler(httpd_req_t *req)
+{
+    size_t size = 0;
+    if (!diagnostics_coredump_present(&size)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no core dump stored");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=coredump.bin");
+
+    char chunk[1024];
+    size_t off = 0;
+    while (off < size) {
+        size_t want = size - off;
+        if (want > sizeof(chunk)) want = sizeof(chunk);
+        size_t got = diagnostics_coredump_read(off, chunk, want);
+        if (got == 0) break;   // short read → stop; client sees a truncated file
+        if (httpd_resp_send_chunk(req, chunk, got) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        off += got;
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t coredump_erase_handler(httpd_req_t *req)
+{
+    esp_err_t e = diagnostics_coredump_erase();
+    if (e == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"erased\":true}");
+        return ESP_OK;
+    }
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, esp_err_to_name(e));
     return ESP_FAIL;
 }
 

@@ -9,6 +9,7 @@
 #include "audio_generator.h"
 #include "audio_test.h"
 #include "mod_engine.h"
+#include "diagnostics.h"
 #include "wifi_manager.h"
 #include "web_server.h"
 #include "led_matrix_example.h"
@@ -242,6 +243,10 @@ static void sweep_progress_task(void *pv)
 
 void app_main(void)
 {
+    // FIRST: latch reset reason and install the log-capture vprintf hook so the
+    // rest of boot is mirrored into the WiFi-accessible ring (GET /api/logs).
+    diagnostics_early_init();
+
     ESP_LOGI(TAG, "ESP32 Audio Player Starting...");
 
     // Initialize NVS (required for WiFi and other components)

@@ -7,4 +7,5 @@ Chronological list of execution plans. Newest last. Mark `[DONE]` when complete.
 - `runtime_settings_plan.md` — settings moved from sdkconfig to runtime NVS store [DONE — build clean, not yet flashed]
 - `ota_dual_boot_plan.md` — field OTA via dedicated minimal updater [DONE — needs one-time wired full flash]
 - `mp3_support_plan.md` — BG MP3 decode via vendored minimp3 [Steps 1–7 done, hardware verify pending]
-- `bg_browser_push_plan.md` — browser-generated/loaded BG audio pushed to device via `/api/bg-stream` (additive; keeps existing pull path) [PLANNED]
+- `bg_browser_push_plan.md` — browser-generated/loaded BG audio pushed to device via `/api/bg-stream` (additive; keeps existing pull path) + opt-in "bounce whole session to WAV" [IMPLEMENTED Phases 1–3.5, build+tests clean, hardware verify pending]
+- `diagnostics_over_wifi_plan.md` — serial-parity over WiFi: reset reason + live log tail + crash core dumps + Diagnostics page (Layers 1-2 OTA-able, Layer 3 needs one wired flash) [PLANNED]

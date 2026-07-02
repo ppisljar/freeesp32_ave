@@ -10,6 +10,7 @@ import { refreshReportList, viewReport, deleteReport } from './reportstore.js';
 import { initTabs } from './nav.js';
 import { generatorInit } from './gen/generator.js';
 import { firmwareInit } from './firmware.js';
+import { diagnosticsInit } from './diagnostics.js';
 
 function bind(id, fn) {
     const el = document.getElementById(id);
@@ -48,6 +49,7 @@ async function boot() {
     settingsInit();        // build device-settings panel + load current values
     generatorInit();       // build the Generator tab (shared model + preview)
     firmwareInit();        // wire up the Firmware Update tab (OTA flow)
+    diagnosticsInit();     // wire up the Diagnostics tab (logs / coredump / reboot)
     refreshReportList();   // list saved reports from device + browser
 }
 

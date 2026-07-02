@@ -99,6 +99,21 @@ export function rawRow(text, error) {
 export function bgRow(bgData) {
     return { kind: 'bg', bg: bgData };
 }
+// A `S <time> <voice> <volume> "<text>"` speech line (bg_browser_push_plan.md).
+// Browser-only: TTS is synthesized in the browser and mixed into the bounced
+// WAV; these rows are FILTERED OUT before anything is sent to the device (the
+// firmware cannot parse `S`). Kept in the model + serialized so a .ledc that
+// contains speech round-trips losslessly in the editor.
+export function speechRow(opts) {
+    opts = opts || {};
+    return {
+        kind: 'speech',
+        time: opts.time || 0,
+        voice: (opts.voice === undefined || opts.voice === null) ? 'default' : opts.voice,
+        volume: (opts.volume === undefined || opts.volume === null) ? 80 : opts.volume, // 0..100
+        text: opts.text || '',
+    };
+}
 export function ledRow(opts) {
     opts = opts || {};
     return {

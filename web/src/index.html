@@ -17,6 +17,7 @@
             <button class="tab" data-tab="reports">Reports</button>
             <button class="tab" data-tab="settings">Settings</button>
             <button class="tab" data-tab="firmware">Firmware</button>
+            <button class="tab" data-tab="diagnostics">Diagnostics</button>
             <button id="btnStop" class="nav-stop" title="Stop all audio + LED">■ STOP</button>
         </nav>
 
@@ -75,6 +76,7 @@
                     <button id="btnGenPlay" style="background:#28a745;">▶ Play</button>
                     <button id="btnGenStopLocal" style="background:#dc3545;">■ Stop</button>
                     <button id="btnGenApply">⚡ Apply live</button>
+                    <button id="btnGenBounce" title="Render the whole session (BG + Speech + A) to one WAV">⭯ Bounce</button>
                     <span id="genRowMeter" class="gen-meter">0 / 100 entries</span>
                 </div>
 
@@ -108,11 +110,6 @@
                 <h3 style="margin:14px 0 4px 0;font-size:14px;color:#444;">Serialized preview (read-only)</h3>
                 <pre id="genPreview" class="gen-preview"></pre>
             </div>
-
-            <!-- Background audio (bg_browser_push_plan.md): generate / load /
-                 store clips in the browser and stream them to the device, plus
-                 an opt-in "bounce whole session to WAV". Built in JS. -->
-            <div class="section" id="genBgPanel"></div>
         </div>
 
         <!-- ================== LIVE CONTROL ================== -->
@@ -159,6 +156,17 @@
                     <input type="file" id="settingsImportFile" accept=".json,application/json" style="display:none">
                 </div>
                 <div style="font-size:12px;color:#888;margin-top:6px;">Password is not included in exports; importing preserves the device's stored password.</div>
+
+                <!-- Browser-local preferences (not stored on the device). -->
+                <h3 style="margin:18px 0 6px 0;font-size:14px;color:#444;border-top:1px solid #e0e0e0;padding-top:12px;">Browser preferences</h3>
+                <div class="bg-group">
+                  <strong>Speech (TTS) engine</strong>
+                  <select id="ttsEngineSetting" title="Used to synthesize S (speech) rows when playing/bouncing">
+                    <option value="puter">Puter.js (browser, neural — no key)</option>
+                    <option value="google">Google (proxied via the device)</option>
+                  </select>
+                  <span style="font-size:12px;color:#888;">Puter needs internet in the browser (may prompt a Puter sign-in). Google needs the device online. Stored in this browser only.</span>
+                </div>
             </div>
         </div>
         <!-- ===================== FIRMWARE ===================== -->
@@ -202,6 +210,55 @@
                 </div>
 
                 <div id="fwSoftap" class="fw-softap" style="display:none;"></div>
+            </div>
+        </div>
+
+        <div class="page" id="page-diagnostics">
+            <div class="section">
+                <h2>Diagnostics</h2>
+                <div style="font-size:12px;color:#888;margin-bottom:10px;">
+                    Serial-parity over WiFi — device health, the live log tail, and crash
+                    core dumps, no USB cable needed.
+                </div>
+
+                <div id="diagHealth" style="color:#c00;font-size:13px;margin-bottom:6px;"></div>
+
+                <div class="diag-grid">
+                    <div class="diag-stat"><span class="diag-k">Last reset</span><span id="diagReset" class="diag-reason">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Uptime</span><span id="diagUptime">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Free heap</span><span id="diagHeap">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Free PSRAM</span><span id="diagPsram">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Log buffered</span><span id="diagLogBytes">—</span></div>
+                </div>
+
+                <div class="controls" style="margin-top:10px;">
+                    <button id="diagRefresh">Refresh</button>
+                    <label style="font-size:13px;display:inline-flex;align-items:center;gap:4px;">
+                        <input type="checkbox" id="diagAuto"> Auto-refresh
+                    </label>
+                    <button id="diagReboot" style="background:#dc3545;margin-left:auto;">Reboot Device</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Device log</h3>
+                <div class="controls" style="margin-bottom:6px;">
+                    <button id="diagCopy">Copy</button>
+                    <button id="diagClear" style="background:#fd7e14;">Clear buffer</button>
+                </div>
+                <pre id="diagLog" class="diag-log">(loading…)</pre>
+            </div>
+
+            <div class="section">
+                <h3>Crash core dump</h3>
+                <div id="diagCoredump" class="diag-card">
+                    <div id="diagCdText">—</div>
+                    <div id="diagCdActions" style="display:none;margin-top:8px;">
+                        <a class="diag-dl" href="/api/coredump" download="coredump.bin">Download core dump</a>
+                        <button id="diagErase" style="background:#fd7e14;">Erase</button>
+                        <pre id="diagCdCmd" class="diag-cmd"></pre>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

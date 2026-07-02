@@ -13,12 +13,14 @@ import { emptyDoc } from './model.js';
 import { parse } from './parse.js';
 import { serialize } from './serialize.js';
 import { validate } from './validate.js';
-import { playDoc, stop, patchLine } from './transport.js';
+import { playDoc, stop, patchLine, pushBg } from './transport.js';
+import { bounceSession, pushSessionBg } from './bounce.js';
+import { getEngine } from './tts.js';
+import * as bgstore from './bgstore.js';
 import { initTextView } from './views/text.js';
 import { initTableView } from './views/table.js';
 import { initLaneView } from './views/lane.js';
 import { initWizardView } from './views/wizard.js';
-import { initBgPanel } from './views/bg_panel.js';
 
 // ---- Shared model + event bus ---------------------------------------------
 let doc = emptyDoc();
@@ -31,7 +33,6 @@ let textView = null;
 let tableView = null;
 let laneView = null;
 let wizardView = null;
-let bgPanel = null;
 
 export function getDoc() { return doc; }
 
@@ -222,16 +223,56 @@ function saveAs() {
 }
 
 // ---- Transport bar ---------------------------------------------------------
-function onPlay() {
-    if (!doc.rows.length) { showMessage('Nothing to play', 'error'); return; }
-    playDoc(doc)
+// Play the session as-is: run the timeline on the device (speech stripped), then
+// stream the session's push:// BG clip (if any) so it plays underneath.
+function playNormal() {
+    return playDoc(doc)
         .then(res => {
             showMessage(res || 'Playing', 'success');
-            // If the session's BG is a browser clip (push://), stream it now —
-            // AFTER play-config (which auto-stops any prior BG) has started.
-            if (bgPanel && bgPanel.pushForDoc) bgPanel.pushForDoc(doc);
+            const p = pushSessionBg(doc);   // null if BG isn't a push:// clip
+            if (p) p.catch(err => showMessage('Session BG: ' + err.message, 'error'));
         })
         .catch(err => showMessage('Play error: ' + err, 'error'));
+}
+
+async function onPlay() {
+    if (!doc.rows.length) { showMessage('Nothing to play', 'error'); return; }
+    const hasSpeech = doc.rows.some(r => r.kind === 'speech');
+    if (!hasSpeech) { playNormal(); return; }
+
+    // Session has speech: auto-merge BG + Speech into one WAV (no prompt), push
+    // it as the background, and play the timeline so the device synthesizes the
+    // A tones live. TTS phrases are cached, so repeat plays are fast.
+    try {
+        showMessage('Preparing speech…', 'info');
+        const res = await bounceSession(doc, {
+            scope: 'bgspeech', engine: getEngine(), onProgress: m => showMessage(m, 'info'),
+        });
+        await playDoc(doc);                          // A kept, S stripped by serializeForDevice
+        await pushBg(res.blob, { pan: 0, loudness: 100 });
+        showMessage('Playing (speech merged into background)', 'success');
+    } catch (err) {
+        showMessage('Play error: ' + (err.message || err), 'error');
+    }
+}
+
+// Bounce the whole session (BG + Speech + A) to a WAV → save to library + download.
+async function onBounce() {
+    if (!doc.rows.length) { showMessage('Nothing to bounce', 'error'); return; }
+    try {
+        const engine = getEngine();
+        const res = await bounceSession(doc, { scope: 'all', engine, onProgress: m => showMessage(m, 'info') });
+        if (res.note) showMessage(res.note, 'info');
+        await bgstore.put({ name: res.name, wavBlob: res.blob, durationMs: res.durationMs, sourceKind: 'bounce' }).catch(() => {});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(res.blob);
+        a.download = res.name + '.wav';
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        showMessage('Bounced → saved to library + downloaded (' + res.name + ')', 'success');
+    } catch (err) {
+        showMessage('Bounce error: ' + (err.message || err), 'error');
+    }
 }
 function onStop() {
     stop().then(res => showMessage(res || 'Stopped', 'info'))
@@ -262,6 +303,7 @@ export function generatorInit() {
     bind('btnGenPlay', onPlay);
     bind('btnGenStopLocal', onStop);
     bind('btnGenApply', onApplyLive);
+    bind('btnGenBounce', onBounce);
 
     // Text view (Phase 2): owns its textarea, parses input into the shared doc,
     // and re-renders from the model on every change (when not focused).
@@ -285,12 +327,6 @@ export function generatorInit() {
     // sessionFromDoc on incoming model changes. Same ctx contract.
     wizardView = initWizardView({ getDoc, setDoc });
     onModelChanged(d => { if (wizardView) wizardView.refresh(d); });
-
-    // BG panel (bg_browser_push_plan.md): browser-generated / loaded / bounced
-    // background audio streamed to the device. Independent of the doc model
-    // except when the user clicks "Set as BG" (which writes a push:// row).
-    bgPanel = initBgPanel({ getDoc, setDoc });
-    onModelChanged(d => { if (bgPanel) bgPanel.refresh(d); });
 
     switchView('text');
     setDoc(emptyDoc());     // initial empty preview/meter + text view

@@ -211,6 +211,47 @@ export function renderSession(channels, opts = {}) {
     return { left, right, sampleRate: sr };
 }
 
+// ---- Mixing helpers (pure) for the bounce ----------------------------------
+
+// Allocate zeroed stereo buffers for a given duration.
+export function zeroBuffers(totalMs, sr = SAMPLE_RATE) {
+    const N = Math.max(1, Math.ceil((totalMs / 1000) * sr));
+    return { left: new Float32Array(N), right: new Float32Array(N), sampleRate: sr };
+}
+
+// Add src (stereo Float32 channels) into dst at `offsetSamples`, scaled by gain.
+// Overruns past dst are truncated. `loopToFill` (BG use) repeats src to cover
+// [offsetSamples, dst.length). No clamping here — call clampBuffers() at the end.
+export function mixInto(dstL, dstR, srcL, srcR, offsetSamples, gain = 1, loopToFill = false) {
+    const N = dstL.length;
+    const S = srcL.length;
+    if (S === 0) return;
+    if (loopToFill) {
+        for (let i = Math.max(0, offsetSamples); i < N; i++) {
+            const s = (i - offsetSamples) % S;
+            dstL[i] += srcL[s] * gain;
+            dstR[i] += (srcR ? srcR[s] : srcL[s]) * gain;
+        }
+    } else {
+        for (let s = 0; s < S; s++) {
+            const i = offsetSamples + s;
+            if (i < 0) continue;
+            if (i >= N) break;
+            dstL[i] += srcL[s] * gain;
+            dstR[i] += (srcR ? srcR[s] : srcL[s]) * gain;
+        }
+    }
+}
+
+// Hard-clamp stereo buffers to [-1,1] in place.
+export function clampBuffers(left, right) {
+    for (let i = 0; i < left.length; i++) {
+        let l = left[i], r = right[i];
+        left[i] = l > 1 ? 1 : (l < -1 ? -1 : l);
+        right[i] = r > 1 ? 1 : (r < -1 ? -1 : r);
+    }
+}
+
 // ---- Convenience: doc -> canonical WAV bytes -------------------------------
 // opts: { tailMs (extra time after last entry), masterGain, minMs }
 export function bounceSessionToWav(doc, opts = {}, encodeWav16) {

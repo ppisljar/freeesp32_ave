@@ -8,6 +8,7 @@
 // info icon (ⓘ) with hover help. The LED-backend / audio-codec selectors are
 // capability-driven: options not compiled into this firmware are greyed out.
 import { showMessage } from './util.js';
+import { getEngine, setEngine } from './gen/tts.js';
 
 // Current settings object as last fetched/applied (used as the partial-update
 // base — we POST the whole object, but only edited fields will differ).
@@ -359,5 +360,16 @@ export function settingsInit() {
     bind('btnSettingsImport', importSettings);
     const fileEl = document.getElementById('settingsImportFile');
     if (fileEl) fileEl.addEventListener('change', onImportFile);
+
+    // Browser-local TTS engine preference (not a device setting).
+    const ttsEl = document.getElementById('ttsEngineSetting');
+    if (ttsEl) {
+        ttsEl.value = getEngine();
+        ttsEl.addEventListener('change', () => {
+            setEngine(ttsEl.value);
+            showMessage('TTS engine set to ' + ttsEl.value + ' (this browser)', 'success');
+        });
+    }
+
     loadSettings();
 }

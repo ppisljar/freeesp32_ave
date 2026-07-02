@@ -283,7 +283,7 @@ BG  <url>  <pan>  <loudness>
 
 | Field | Range | Meaning |
 |---|---|---|
-| `url` | string | Source location. Three schemes: `http://host:port/path`, `https://...`, or `sdcard://path`. The stream may be **WAV or MP3** — the container is detected from the stream's magic bytes, not the file extension. Both must be **44.1 kHz (or 22.05 kHz) stereo or mono**; other sample rates are rejected with a log message. WAV must be 16-bit PCM. MP3 support requires `CONFIG_BG_SUPPORT_MP3=y` (default on; uses the built-in minimp3 decoder). The generator server can also auto-transcode MP3 → WAV when you request a `.wav` URL whose source is an `.mp3` file (i.e. `wav/river.wav` works even if only `wav/river.mp3` exists on disk). |
+| `url` | string | Source location. Four schemes: `http://host:port/path`, `https://...`, `sdcard://path`, or `push://<name>` (browser-pushed, see below). For pull schemes the stream may be **WAV or MP3** — the container is detected from the stream's magic bytes, not the file extension. Both must be **44.1 kHz (or 22.05 kHz) stereo or mono**; other sample rates are rejected with a log message. WAV must be 16-bit PCM. MP3 support requires `CONFIG_BG_SUPPORT_MP3=y` (default on; uses the built-in minimp3 decoder). The generator server can also auto-transcode MP3 → WAV when you request a `.wav` URL whose source is an `.mp3` file (i.e. `wav/river.wav` works even if only `wav/river.mp3` exists on disk). |
 | `pan` | -100..+100 | Stereo position. |
 | `loudness` | 0..100 % | Background mix level. Typical values: 20-40 for ambient sound under binaural tracks. |
 
@@ -291,6 +291,51 @@ Example:
 
 ```
 BG  http://10.0.0.213:8000/wav/river.wav  0  30
+```
+
+#### Browser-pushed BG (`push://`) — `CONFIG_BG_SUPPORT_PUSH=y` (default on)
+
+Instead of the device fetching a URL, the **browser** can generate, load, or
+"bounce" audio and stream it *into* the device over `POST /api/bg-stream`. This
+works even in SoftAP-only mode (no internet), and the browser does all decoding
+so the device only ever receives its canonical 44.1 kHz / 16-bit / stereo WAV.
+
+- A `BG push://<name>` line is a **no-op pull** on the device — it just marks the
+  session's BG as a browser clip named `<name>` so the `.ledc` round-trips. The
+  Generator's **Background audio** panel drives the actual audio: pick a clip,
+  **Set as BG**, then **Play** (the panel streams the clip after the timeline
+  starts). Looping re-POSTs the clip client-side.
+- `POST /api/bg-stream?pan=<-100..100>&loudness=<0..100>` with a WAV body streams
+  a clip as the active BG (TCP flow control paces it to playback rate).
+  `POST /api/bg-stream?stop=1` stops just the BG.
+- **Bounce session → WAV**: an opt-in button renders the session's audio to one
+  WAV in the browser, which can be downloaded, saved to the library, or pushed.
+  A **scope** selector chooses *BG + Speech* (leave A entries for the device to
+  synthesize live) or *All* (BG + Speech + A entrainment mix).
+
+#### Speech command (`S` prefix) — browser-only
+
+```
+S  <time_ms>  <voice>  <volume>  "text to speak"
+```
+
+Text-to-speech narration/cues. **The device never sees `S` lines** — they are
+stripped before anything is sent to the firmware and are instead TTS-synthesized
+in the browser and mixed into the bounced WAV (so they reach the device as part
+of the audio, not as a command). `voice` is a TTS voice / language code
+(e.g. `en-US`, `Joanna`, `sl`); `volume` is 0..100; the text is double-quoted
+(may contain spaces and `#`).
+
+Two TTS engines (both free, no API key), selectable in the Background-audio panel:
+- **Puter.js** (default) — AWS Polly neural voices entirely in the browser
+  (`js.puter.com`); needs internet in the browser; may prompt a Puter sign-in.
+- **Google (via device)** — the ESP32 proxies Google Translate TTS at
+  `GET /api/tts?tl=<lang>&q=<text>` (same-origin, so no CORS; the device makes
+  the outbound HTTPS GET). Needs the device on Wi-Fi with internet.
+
+Example:
+```
+S  30000  en-US  85  "Let your attention settle on the breath"
 ```
 
 ### Interpolation prefixes — animate-on-start convention

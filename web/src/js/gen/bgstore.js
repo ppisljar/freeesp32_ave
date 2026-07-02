@@ -12,8 +12,10 @@
 // pulling every blob into memory.
 
 const DB_NAME = 'ave-bg';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'bgclips';
+const CACHE = 'ttsphrases';          // hidden LRU cache of synthesized speech
+const CACHE_MAX = 200;               // evict oldest beyond this many phrases
 
 let _dbPromise = null;
 
@@ -30,6 +32,9 @@ function openDB() {
             if (!db.objectStoreNames.contains(STORE)) {
                 db.createObjectStore(STORE, { keyPath: 'name' });
             }
+            if (!db.objectStoreNames.contains(CACHE)) {
+                db.createObjectStore(CACHE, { keyPath: 'key' });
+            }
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error || new Error('indexedDB.open failed'));
@@ -39,6 +44,9 @@ function openDB() {
 
 function tx(db, mode) {
     return db.transaction(STORE, mode).objectStore(STORE);
+}
+function ctx(db, mode) {
+    return db.transaction(CACHE, mode).objectStore(CACHE);
 }
 
 // Strip the (large) blob for list views.
@@ -104,6 +112,49 @@ export async function remove(name) {
         r.onsuccess = () => resolve(true);
         r.onerror = () => reject(r.error);
     });
+}
+
+// ---- Hidden TTS phrase cache (LRU) -----------------------------------------
+// Keyed by an opaque string (engine|voice|text). Stores the synthesized WAV so
+// repeat plays of a session don't re-hit the TTS engine. Not user-facing.
+
+export async function cacheGet(key) {
+    const db = await openDB();
+    const rec = await new Promise((resolve, reject) => {
+        const r = ctx(db, 'readonly').get(key);
+        r.onsuccess = () => resolve(r.result || null);
+        r.onerror = () => reject(r.error);
+    });
+    if (rec) {
+        // Touch lastUsed (best-effort; ignore errors).
+        rec.lastUsed = Date.now();
+        try { ctx(db, 'readwrite').put(rec); } catch (e) { /* ignore */ }
+    }
+    return rec ? rec.wavBlob : null;
+}
+
+export async function cachePut(key, wavBlob, durationMs) {
+    const db = await openDB();
+    await new Promise((resolve, reject) => {
+        const r = ctx(db, 'readwrite').put({ key, wavBlob, durationMs: durationMs || 0, lastUsed: Date.now() });
+        r.onsuccess = () => resolve();
+        r.onerror = () => reject(r.error);
+    });
+    // Evict oldest beyond the cap.
+    try {
+        const all = await new Promise((resolve, reject) => {
+            const out = [];
+            const cur = ctx(db, 'readonly').openCursor();
+            cur.onsuccess = () => { const c = cur.result; if (c) { out.push({ key: c.value.key, lastUsed: c.value.lastUsed || 0 }); c.continue(); } else resolve(out); };
+            cur.onerror = () => reject(cur.error);
+        });
+        if (all.length > CACHE_MAX) {
+            all.sort((a, b) => a.lastUsed - b.lastUsed);
+            const victims = all.slice(0, all.length - CACHE_MAX);
+            const store = ctx(db, 'readwrite');
+            for (const v of victims) store.delete(v.key);
+        }
+    } catch (e) { /* eviction is best-effort */ }
 }
 
 export async function exists(name) {

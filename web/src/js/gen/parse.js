@@ -14,6 +14,7 @@
 
 import {
     emptyDoc, cell, blankRow, commentRow, rawRow, ledRow, audioRow, bgRow, bg,
+    speechRow,
     GLYPH_TO_INTERP, isModInterp, DEFAULT_MOD_PERIOD_MS, NYQUIST, WAVE_COUNT,
 } from './model.js';
 
@@ -143,13 +144,44 @@ function parseBg(tokens) {
     const url = tokens[0];
     const validScheme = url.indexOf('http://') === 0 ||
                         url.indexOf('https://') === 0 ||
-                        url.indexOf('sdcard://') === 0;
+                        url.indexOf('sdcard://') === 0 ||
+                        url.indexOf('push://') === 0;
     if (!validScheme) {
-        return { error: 'BG url scheme must be http://, https://, or sdcard://' };
+        return { error: 'BG url scheme must be http://, https://, sdcard://, or push://' };
     }
     const pan = parseFloat(tokens[1]) || 0;
     const loudness = parseFloat(tokens[2]) || 0;
     return { bg: bg(url, pan, loudness) };
+}
+
+// Parse the text AFTER the leading 'S' keyword: `<time> <voice> <volume> "text"`.
+// The text is a quoted string (may contain spaces and '#'); we take everything
+// between the FIRST and LAST double-quote so embedded quotes survive. If there
+// are no quotes, the 4th token onward is treated as the (unquoted) text.
+// Returns { row } or { error }.
+function parseSpeech(rest) {
+    const q1 = rest.indexOf('"');
+    let head, text;
+    if (q1 >= 0) {
+        const q2 = rest.lastIndexOf('"');
+        head = rest.slice(0, q1);
+        text = (q2 > q1) ? rest.slice(q1 + 1, q2) : rest.slice(q1 + 1);
+    } else {
+        head = rest;
+        text = '';
+    }
+    const htokens = tokenize(head);
+    if (htokens.length < 3) {
+        return { error: 'S line needs: S <time> <voice> <volume> "text"' };
+    }
+    if (q1 < 0) {
+        // No quotes — reconstruct text from the 4th token onward.
+        text = htokens.slice(3).join(' ');
+    }
+    const time = parseInt(htokens[0], 10) || 0;
+    const voice = htokens[1];
+    const volume = parseFloat(htokens[2]) || 0;
+    return { row: speechRow({ time, voice, volume, text }) };
 }
 
 export function parse(text) {
@@ -192,6 +224,21 @@ export function parse(text) {
             if (res.bg) {
                 doc.rows.push(bgRow(res.bg));
                 doc.bg = res.bg; // last-wins
+            } else {
+                doc.rows.push(rawRow(line, res.error));
+                diagnostics.push({ line: lineNo, severity: 'error', msg: res.error });
+            }
+            continue;
+        }
+
+        // Speech line: "S" followed by ws. Handled BEFORE inline-comment
+        // splitting because the quoted text may legitimately contain '#'.
+        if ((trimmedLead[0] === 'S' || trimmedLead[0] === 's') &&
+            (trimmedLead.length === 1 || /\s/.test(trimmedLead[1]))) {
+            const rest = trimmedLead.replace(/^[Ss][ \t]*/, '');
+            const res = parseSpeech(rest);
+            if (res.row) {
+                doc.rows.push(res.row);
             } else {
                 doc.rows.push(rawRow(line, res.error));
                 diagnostics.push({ line: lineNo, severity: 'error', msg: res.error });

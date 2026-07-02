@@ -155,10 +155,12 @@ static const char *TAG = "bg_player";
 #define BG_AMP_RAMP_SAMPLES     220u
 
 /** Producer task stack depth in bytes.
- *  Raised from 4 KB to 12 KB for MP3 support: mp3dec_decode_frame() uses a few
- *  KB of stack for its IMDCT / synthesis scratch. The WAV path needs only ~4 KB;
- *  the extra headroom is harmless when CONFIG_BG_SUPPORT_MP3=n.                 */
-#define BG_STREAMER_STACK_BYTES 12288u
+ *  minimp3's mp3dec_decode_frame() declares a mp3dec_scratch_t as a LOCAL — that
+ *  single struct is ~16 KB on the stack (grbuf 4.6 KB + syn 8.4 KB + maindata +
+ *  gr_info). 12 KB overflowed it (observed panic). 24 KB covers the scratch plus
+ *  the surrounding HTTP/decode frames. The WAV path needs only ~4 KB; the extra
+ *  is reserved whenever BG is active but harmless (one task).                    */
+#define BG_STREAMER_STACK_BYTES 24576u
 
 /** Producer task FreeRTOS priority.
  *  LED task = 23, timing dispatch = 22, audio output = 5.
@@ -651,14 +653,16 @@ static bool bg_looks_like_mp3(const uint8_t *buf, size_t len)
 static void bg_stream_http_mp3(esp_http_client_handle_t client,
                                const uint8_t *seed, size_t seed_len)
 {
-    /* Decoder state (~7 KB) tolerates PSRAM; the carry buffer and PCM output are
-     * touched every decode so they stay in fast INTERNAL DRAM. flt_buf (float
-     * scratch, written once per frame) goes to PSRAM like the WAV path.        */
+    /* ALL decode buffers live in PSRAM. Internal DRAM is scarce (WiFi/LWIP) and
+     * an 18 KB carry alloc there fails intermittently; MP3 decode is CPU-bound
+     * (IMDCT), not memory-bandwidth-bound like the WAV per-sample loop, so PSRAM
+     * is plenty fast here and keeps internal DRAM free for the task stack (which
+     * must hold minimp3's ~16 KB stack-resident scratch — see stack sizing).    */
     mp3dec_t *dec     = heap_caps_malloc(sizeof(mp3dec_t), MALLOC_CAP_SPIRAM);
     uint8_t  *carry   = heap_caps_malloc(BG_MP3_CARRY_BYTES,
-                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     int16_t  *pcm     = heap_caps_malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t),
-                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     /* Worst case per frame: 1152 samples/ch, 2x upsample, stereo = 4608 floats. */
     const size_t flt_floats = 1152u * 2u /*upsample*/ * 2u /*stereo*/;
     float    *flt_buf = heap_caps_malloc(flt_floats * sizeof(float),

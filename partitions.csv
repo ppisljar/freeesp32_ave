@@ -8,3 +8,7 @@ ota_0,     app,  ota_0,   0x10000,   0x200000,
 ota_1,     app,  ota_1,   ,          0xB0000,
 storage,   data, spiffs,  ,          0x80000,
 cfgfs,     data, spiffs,  ,          0x80000,
+# Crash core dumps (registers + task stacks) written on panic, retrieved over
+# WiFi via GET /api/coredump. Uses the previously-unused 4 MB flash tail
+# (0x3C0000..0x400000); adding it moves NO existing partition offset.
+coredump,  data, coredump, ,         0x40000,

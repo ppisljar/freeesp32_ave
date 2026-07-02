@@ -36,16 +36,37 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # ---- args -------------------------------------------------------------------
+# Usage: ./ota_flash.sh <ip> [--part app|storage|cfgfs] [path-to.bin]
+#   app     (default) → the main firmware (ota_0); updater auto-reboots.
+#   storage           → web UI SPIFFS image; updater needs an explicit reboot.
+#   cfgfs             → config SPIFFS image;    updater needs an explicit reboot.
 HOST="${DEVICE_HOST:-}"
-BIN="build/esp32_audioplayer.bin"
-if [ $# -ge 1 ]; then HOST="$1"; fi
-if [ $# -ge 2 ]; then BIN="$2"; fi
+BIN=""
+PART="app"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --part) PART="${2:-}"; shift 2 ;;
+    -*)     echo "Unknown option: $1" >&2; exit 2 ;;
+    *)      if [ -z "$HOST" ]; then HOST="$1"; else BIN="$1"; fi; shift ;;
+  esac
+done
 
 if [ -z "$HOST" ]; then
-  echo "Usage: ./ota_flash.sh <device-host-or-ip> [path-to.bin]" >&2
+  echo "Usage: ./ota_flash.sh <device-host-or-ip> [--part app|storage|cfgfs] [path-to.bin]" >&2
   echo "  (or set \$DEVICE_HOST). Example: ./ota_flash.sh 10.0.0.162" >&2
   exit 2
 fi
+
+# Default image per target if none given explicitly.
+if [ -z "$BIN" ]; then
+  case "$PART" in
+    app)     BIN="build/esp32_audioplayer.bin" ;;
+    storage) BIN="build/storage.bin" ;;
+    cfgfs)   BIN="build/cfgfs.bin" ;;
+    *) echo "Unknown --part '$PART' (use app|storage|cfgfs)" >&2; exit 2 ;;
+  esac
+fi
+IS_APP=0; [ "$PART" = "app" ] && IS_APP=1
 # strip any scheme / trailing slash the user may have pasted
 HOST="${HOST#http://}"; HOST="${HOST#https://}"; HOST="${HOST%/}"
 BASE="http://$HOST"
@@ -63,8 +84,9 @@ POLL=2               # s — poll interval
 # ---- 0. hash + reachability -------------------------------------------------
 SIZE=$(stat -f%z "$BIN" 2>/dev/null || stat -c%s "$BIN")
 HEX=$(shasum -a 256 "$BIN" | awk '{print $1}')
-echo "=== OTA app update ==="
+echo "=== OTA update ($PART) ==="
 echo "Device : $BASE"
+echo "Target : $PART"
 echo "Image  : $BIN ($SIZE bytes)"
 echo "SHA-256: $HEX"
 echo ""
@@ -122,16 +144,19 @@ fi
 echo ""
 
 # ---- 3. upload + flash ------------------------------------------------------
-echo "--- [3/4] Uploading image (POST /update?sha256=…) ---"
-# The updater may reboot the instant the hash verifies, dropping the connection
-# before it can send an HTTP response — so a curl transport failure here, AFTER
-# the body was sent, most likely means "verified & flashing". We distinguish
-# that from a real HTTP error by inspecting the captured status code.
+# App target resolves to the next app slot (no `part`); data targets pass it.
+Q="sha256=$HEX"
+[ "$IS_APP" -eq 1 ] || Q="part=$PART&$Q"
+echo "--- [3/4] Uploading image (POST /update?$Q) ---"
+# For an APP target the updater may reboot the instant the hash verifies,
+# dropping the connection before it can respond — so a transport failure AFTER
+# the body was sent most likely means "verified & flashing". A DATA target never
+# reboots on its own, so a dropped connection there is a genuine failure.
 set +e
 code=$(curl -s -o /tmp/ota_resp -w '%{http_code}' \
             --connect-timeout 5 --max-time 120 \
             -X POST --data-binary @"$BIN" \
-            "$BASE/update?sha256=$HEX")
+            "$BASE/update?$Q")
 curl_rc=$?
 set -e
 resp=$(cat /tmp/ota_resp 2>/dev/null || true); rm -f /tmp/ota_resp
@@ -140,20 +165,30 @@ echo "  curl_rc=$curl_rc  http_code=$code  body=${resp:-<none>}"
 case "$code" in
   200) echo "  ✓ Updater accepted and verified the image." ;;
   400) echo "  ✗ 400: missing/malformed SHA-256 (app slot requires a valid hash)." >&2; exit 1 ;;
-  413) echo "  ✗ 413: image larger than the ota_0 partition." >&2; exit 1 ;;
+  413) echo "  ✗ 413: image larger than the target partition." >&2; exit 1 ;;
   422) echo "  ✗ 422: SHA-256 mismatch — image NOT flashed. Re-run to retry." >&2; exit 1 ;;
   500) echo "  ✗ 500: updater could not write the partition. Nothing committed." >&2; exit 1 ;;
   000)
-    # No HTTP response. If the whole body went out (curl_rc != couldn't-connect),
-    # the updater probably rebooted mid-verify → proceed to wait for the app.
     if [ "$curl_rc" -eq 7 ]; then
       echo "  ✗ Could not connect to the updater to upload." >&2; exit 1
     fi
-    echo "  ! Connection dropped after upload — updater is likely flashing & rebooting."
+    if [ "$IS_APP" -eq 1 ]; then
+      echo "  ! Connection dropped after upload — updater is likely flashing & rebooting."
+    else
+      echo "  ✗ Connection dropped on a data upload (updater does not reboot itself here)." >&2
+      exit 1
+    fi
     ;;
   *) echo "  ✗ Unexpected HTTP $code." >&2; exit 1 ;;
 esac
 echo ""
+
+# A data target does NOT auto-reboot — the updater stays put, so tell it to boot
+# back into the main app before we poll for it.
+if [ "$IS_APP" -ne 1 ]; then
+  echo "  Data partition written — asking the updater to reboot into the app…"
+  curl -s --max-time 5 "$BASE/reboot" >/dev/null 2>&1 || true
+fi
 
 # ---- 4. wait for the new main app -------------------------------------------
 echo "--- [4/4] Waiting for the new firmware to boot (up to ${APP_TIMEOUT}s) ---"
@@ -179,4 +214,8 @@ echo "  ✓ Main app is back."
 VER=$(curl -s --max-time 5 "$BASE/api/version" 2>/dev/null || true)
 [ -n "$VER" ] && echo "  version: $VER"
 echo ""
-echo "=== OTA complete — device is running the new firmware. ==="
+if [ "$IS_APP" -eq 1 ]; then
+  echo "=== OTA complete — device is running the new firmware. ==="
+else
+  echo "=== OTA complete — '$PART' partition updated; device booted back into the app. ==="
+fi

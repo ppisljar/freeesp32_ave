@@ -1,6 +1,18 @@
 # BG Browser-Push Audio — Plan & Contract
 
-> **STATUS (2026-07-02): PLANNED, not started.** New feature, purely additive.
+> **STATUS (2026-07-02): IMPLEMENTED (Phases 1–3.5), build clean both flag
+> states + web tests green (141) + web bundle builds. NOT yet flashed / hardware-
+> verified — that step is the orchestrator's/user's.** Firmware: `bg_player.c/.h`
+> (start_push/push_pcm/end_push + producer_kind + push:// short-circuit),
+> `web_server.c` (`POST /api/bg-stream` streaming handler + `?stop=1`),
+> `config_parser.c` (push:// accepted), `Kconfig.projbuild`
+> (`CONFIG_BG_SUPPORT_PUSH`, default y; app +~3.5 KB when on). Web: `gen/bgaudio.js`
+> (WAV encoder + resample + noise/drone gen + decode), `gen/bgstore.js` (IndexedDB
+> library), `gen/synth.js` (offline session bounce), `gen/views/bg_panel.js` (UI),
+> `gen/transport.js` (pushBg/stopBg), wired into `generator.js` + `index.html` +
+> `style.css`. See report `reports/non_planned_reports/bg_browser_push_report.md`.
+>
+> **Original status: PLANNED, not started.** New feature, purely additive.
 > Lets the **browser** generate, load-from-disk, store, and **push** background
 > audio directly into the device instead of the device pulling it from an
 > external HTTP(S) URL. The existing `BG <http(s)://…>` pull path is **kept
@@ -357,6 +369,83 @@ Reproduce the device's audio path (`audio_generator.c`) offline with Web Audio
 
 **Success:** bouncing a known session produces a WAV that, played in the browser
 and pushed to the device, sounds equivalent to the device synthesizing it live.
+
+---
+
+# Phase 3.6 — Speech (`S`) rows + TTS + bounce-scope choice — ADDED 2026-07-02
+
+User request: a new `S <time> <voice> <volume> "text"` entry type. TTS-synthesized
+in the browser and mixed into the bounced WAV; **filtered out before the device**
+(firmware can't parse `S`). Bounce gains a scope choice: *BG + Speech* (leave A to
+the device) vs *All* (BG + Speech + A).
+
+## Implemented
+- **Model/parse/serialize** (`model.js` `speechRow`, `parse.js` `S` line w/ quoted
+  text incl. `#`, `serialize.js` `serializeSpeech` + `serializeForDevice` which
+  strips `S`). `transport.playDoc` uses `serializeForDevice`. Config *storage*
+  keeps `S` for round-trip.
+- **TTS** (`tts.js`), two free/no-key engines, selectable:
+  - **Puter.js** (default) — `puter.ai.txt2speech` (AWS Polly neural), lazy-loaded
+    from `js.puter.com`, browser-only. May prompt Puter sign-in.
+  - **Google via device** — new firmware `GET /api/tts?tl=&q=` proxy
+    (`web_server.c`, under `CONFIG_BG_SUPPORT_PUSH`) does the outbound HTTPS GET to
+    `translate.google.com/translate_tts` (esp_http_client + esp_crt_bundle),
+    returns MP3; browser splits text ≤180 chars, decodes+concatenates.
+  - `previewSpeech` uses the browser's `speechSynthesis` for local audition only.
+- **Synth mixing** (`synth.js` `mixInto`/`zeroBuffers`/`clampBuffers`) + panel
+  `onBounce`: synth each `S` line, mix at its time; scope `bgspeech` (silence base
+  + speech + BG clip) vs `all` (A render + speech + BG clip); 3 outputs.
+- **Table view** (`table.js`): `S` row type (add `+ S`, voice/volume/text + 🔊
+  preview), grid + card branches.
+- Firmware note: TTS proxy pulls the mbedTLS CA bundle into the app (~+90 KB app).
+
+**Decision:** ESP32 proxies **Google** TTS (edge-tts needs WSS + rotating token +
+NTP — too heavy for the device); **Puter.js** covers browser-native neural voices.
+
+---
+
+# Phase 3.7 — UI reorganization — ADDED 2026-07-02
+
+Per user feedback the browser UI was restructured:
+- **"Background Audio" is now its own top-level tab** (`#page-bgaudio`, nav +
+  `nav.js` TABS). It holds ONLY the TTS engine config (Puter/Google, persisted via
+  `tts.js` getEngine/setEngine → localStorage) and the clip **library**
+  (generate / load-file to populate; download / delete). `bg_panel.js` rewritten
+  to this slim form; `#genBgPanel` removed from the Generator page.
+- **Generator "Bounce" button** next to Apply Live (`#btnGenBounce`) — bounces the
+  whole session (scope 'all') → saves to library + downloads.
+- **Play with speech**: if the session has `S` rows, a modal (`util.chooseModal`)
+  asks: *Bounce BG+Speech (device plays A)* / *Bounce all (device plays LEDs only)*
+  / *Ignore speech*. 'bgspeech' → playDoc (A kept) + push the BG+speech WAV;
+  'all' → play LED-only config (`serializeForDevice` of non-audio rows via new
+  `transport.playConfigText`) + push the full-mix WAV.
+- **BG row** (`table.js`) now offers URL **or** a "📁" local-file load (decodes →
+  library → sets `push://name`) **or** a library dropdown.
+- Bounce/push orchestration extracted to `gen/bounce.js` (`bounceSession`,
+  `pushSessionBg`) so the Generator owns it (not the BG tab). `parse.js` now
+  accepts the `push://` BG scheme.
+
+---
+
+# Phase 3.8 — Simplify: no BG page, auto-merge, hidden phrase cache — ADDED 2026-07-02
+
+Per user (after weighing IndexedDB limits — large on desktop, but WAV is
+~10.6 MB/min so only full 'all' bounces are heavy):
+- **TTS engine config moved to the Settings page** ("Browser preferences" block,
+  `#ttsEngineSetting`, bound to `tts.getEngine/setEngine`, browser-local).
+- **Background Audio tab REMOVED** (`bg_panel.js` deleted, nav/index/generator
+  references removed). No user-facing library UI.
+- **Hidden LRU TTS phrase cache** (`bgstore.js` v2 `ttsphrases` store, cap 200,
+  evict oldest by lastUsed). `tts.synthSpeech` checks it (key engine|voice|text)
+  → decode on hit, store on miss. Gives fast replay without caching big WAVs.
+- **Play with `S` = no prompt.** Auto-merge BG+Speech (`bounceSession` scope
+  'bgspeech'), `playDoc` (A kept, device synths A live), `pushBg` the merged WAV.
+- **http/https BG is now fetched in-browser** to bake speech onto it; on CORS/
+  fetch failure `bounceSession` throws a clear error suggesting the user download
+  the file and upload it via the BG row 📁 (sdcard:// similarly can't be baked).
+  For plain playback (no speech) an http BG is still device-pulled, untouched.
+- **Generator "Bounce"** (scope 'all') still saves to the hidden clip store
+  (selectable later via the BG row library dropdown) + downloads.
 
 ---
 

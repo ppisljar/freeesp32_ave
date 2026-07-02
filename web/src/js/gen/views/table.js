@@ -19,10 +19,14 @@
 // 8-field RGB, wave_type + freq_r placeholder, noise, all 7 prefixes).
 
 import {
-    ledRow, audioRow, commentRow, bgRow, bg, cell,
+    ledRow, audioRow, commentRow, bgRow, bg, speechRow, cell,
     WAVE_TYPES, NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS,
 } from '../model.js';
 import { createCompoundCell, closeOpenPopover, openPopover, cellLabel } from './cell.js';
+import { previewSpeech } from '../tts.js';
+import { decodeFile, audioBufferToWav16, wavBlob } from '../bgaudio.js';
+import * as bgstore from '../bgstore.js';
+import { showMessage } from '../../util.js';
 
 // ---- Pure helpers (unit-tested) -------------------------------------------
 
@@ -83,6 +87,7 @@ function cloneRow(r) {
         });
         case 'comment': return commentRow(r.text);
         case 'bg': return bgRow(bg(r.bg.url, r.bg.pan, r.bg.loudness));
+        case 'speech': return speechRow({ time: r.time, voice: r.voice, volume: r.volume, text: r.text });
         case 'blank': return { kind: 'blank' };
         default: return { kind: 'raw', text: r.text, error: r.error };
     }
@@ -93,6 +98,7 @@ function newRowOfKind(kind, time) {
         case 'led':     return ledRow({ time: time || 0 });
         case 'audio':   return audioRow({ time: time || 0, channel: 1 });
         case 'bg':      return bgRow(bg('', 0, 50));
+        case 'speech':  return speechRow({ time: time || 0, voice: 'en-US', volume: 80, text: '' });
         case 'comment': return commentRow('# ');
         default:        return ledRow({ time: time || 0 });
     }
@@ -167,18 +173,15 @@ export function initTableView(ctx) {
     function typeSelect(row, idx) {
         const sel = document.createElement('select');
         sel.className = 'gen-type-select';
-        for (const [val, label] of [['led', 'LED'], ['audio', 'A'], ['bg', 'BG'], ['comment', '#']]) {
+        for (const [val, label] of [['led', 'LED'], ['audio', 'A'], ['bg', 'BG'], ['speech', 'S'], ['comment', '#']]) {
             const o = document.createElement('option');
             o.value = val; o.textContent = label;
-            if ((val === 'led' && row.kind === 'led') ||
-                (val === 'audio' && row.kind === 'audio') ||
-                (val === 'bg' && row.kind === 'bg') ||
-                (val === 'comment' && row.kind === 'comment')) o.selected = true;
+            if (val === row.kind) o.selected = true;
             sel.appendChild(o);
         }
         sel.addEventListener('change', () => {
             const d = ctx.getDoc();
-            const t = (row.kind === 'led' || row.kind === 'audio') ? row.time : 0;
+            const t = (row.kind === 'led' || row.kind === 'audio' || row.kind === 'speech') ? row.time : 0;
             d.rows[idx] = newRowOfKind(sel.value, t);
             recomputeBg();
             commitStructure();
@@ -420,10 +423,62 @@ export function initTableView(ctx) {
     function bgUrlInput(row) {
         const url = document.createElement('input');
         url.type = 'text'; url.className = 'gen-bg-url';
-        url.placeholder = 'http(s):// or sdcard://';
+        url.placeholder = 'http(s):// · sdcard:// · push://name';
         url.value = row.bg.url;
         url.addEventListener('input', () => { row.bg.url = url.value; recomputeBg(); commitValue(); });
         return url;
+    }
+    // Full BG source control: URL text + "📁 file" (loads a local file into the
+    // library and points the row at push://name) + a library dropdown. A URL, a
+    // local file, or an existing clip all end up as row.bg.url.
+    function bgSourceControls(row) {
+        const wrap = document.createElement('span');
+        wrap.className = 'gen-bg-inputs';
+        const url = bgUrlInput(row);
+
+        const fileBtn = document.createElement('button');
+        fileBtn.type = 'button'; fileBtn.className = 'gen-bg-filebtn'; fileBtn.textContent = '📁';
+        fileBtn.title = 'Load a local audio file into the library and use it as BG';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file'; fileInput.accept = 'audio/*'; fileInput.style.display = 'none';
+        fileBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', async () => {
+            const f = fileInput.files && fileInput.files[0];
+            if (!f) return;
+            showMessage('Decoding ' + f.name + '…', 'info');
+            try {
+                const abuf = await decodeFile(f);
+                const name = f.name.replace(/\.[^.]+$/, '');
+                await bgstore.put({ name, wavBlob: wavBlob(audioBufferToWav16(abuf)),
+                                    durationMs: Math.round(abuf.duration * 1000), sourceKind: 'file' });
+                row.bg.url = 'push://' + name;
+                recomputeBg(); commitStructure();
+                showMessage('Loaded "' + name + '" → BG set to push://' + name, 'success');
+            } catch (e) { showMessage('Load failed: ' + e.message, 'error'); }
+            fileInput.value = '';
+        });
+
+        const lib = document.createElement('select');
+        lib.className = 'gen-bg-lib'; lib.title = 'Pick a clip from the library';
+        const none = document.createElement('option');
+        none.value = ''; none.textContent = 'library…';
+        lib.appendChild(none);
+        bgstore.list().then(items => {
+            for (const m of items) {
+                const o = document.createElement('option');
+                o.value = m.name; o.textContent = m.name;
+                if (row.bg.url === 'push://' + m.name) o.selected = true;
+                lib.appendChild(o);
+            }
+        }).catch(() => {});
+        lib.addEventListener('change', () => {
+            if (!lib.value) return;
+            row.bg.url = 'push://' + lib.value;
+            recomputeBg(); commitStructure();
+        });
+
+        wrap.append(url, fileBtn, fileInput, lib);
+        return wrap;
     }
     function bgPanInput(row) {
         const pan = document.createElement('input');
@@ -443,7 +498,7 @@ export function initTableView(ctx) {
     function bgInputs(row) {
         const wrap = document.createElement('span');
         wrap.className = 'gen-bg-inputs';
-        wrap.append('url ', bgUrlInput(row), ' pan ', bgPanInput(row), ' vol ', bgVolInput(row));
+        wrap.append(bgSourceControls(row), ' pan ', bgPanInput(row), ' vol ', bgVolInput(row));
         return wrap;
     }
 
@@ -459,6 +514,31 @@ export function initTableView(ctx) {
             }
         });
         return inp;
+    }
+
+    // Speech (`S`) row: voice + volume + text + a local Preview button. These
+    // are browser-only (TTS-synthesized into the bounce, never sent to device).
+    function speechInputs(row) {
+        const wrap = document.createElement('span');
+        wrap.className = 'gen-speech-inputs';
+        const voice = document.createElement('input');
+        voice.type = 'text'; voice.className = 'gen-speech-voice'; voice.title = 'voice / language (e.g. en-US, Joanna, sl)';
+        voice.value = row.voice; voice.placeholder = 'voice';
+        voice.addEventListener('input', () => { row.voice = voice.value; commitValue(); });
+        const vol = document.createElement('input');
+        vol.type = 'number'; vol.className = 'gen-num'; vol.title = 'volume 0..100';
+        vol.value = String(row.volume);
+        vol.addEventListener('input', () => { const v = parseFloat(vol.value); row.volume = Number.isFinite(v) ? v : 0; commitValue(); });
+        const text = document.createElement('input');
+        text.type = 'text'; text.className = 'gen-speech-text'; text.placeholder = 'text to speak…';
+        text.value = row.text;
+        text.addEventListener('input', () => { row.text = text.value; commitValue(); });
+        const prev = document.createElement('button');
+        prev.type = 'button'; prev.className = 'gen-speech-preview'; prev.textContent = '🔊';
+        prev.title = 'Preview aloud (browser voice; the bounce uses the selected TTS engine)';
+        prev.addEventListener('click', () => { previewSpeech(row.text, row.voice); });
+        wrap.append('voice ', voice, ' vol ', vol, ' ', text, prev);
+        return wrap;
     }
 
     // Should a row be shown given the current filter?
@@ -516,6 +596,7 @@ export function initTableView(ctx) {
         add('led', '+ LED');
         add('audio', '+ A');
         add('bg', '+ BG');
+        add('speech', '+ S');
     }
 
     // ---- Grid (desktop) ---------------------------------------------------
@@ -546,7 +627,7 @@ export function initTableView(ctx) {
             tr.className = 'gen-grid-row gen-grid-' + row.kind;
 
             const tdType = document.createElement('td');
-            if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'comment') {
+            if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'speech' || row.kind === 'comment') {
                 tdType.appendChild(typeSelect(row, idx));
             } else {
                 tdType.textContent = row.kind;
@@ -576,13 +657,20 @@ export function initTableView(ctx) {
                 // land in the shared Duty/Pan and Bright/Vol columns like audio.
                 const tdUrl = document.createElement('td');
                 tdUrl.colSpan = 3;
-                tdUrl.appendChild(bgUrlInput(row));
+                tdUrl.appendChild(bgSourceControls(row));
                 tr.appendChild(tdUrl);
                 const tdPan = blankCell(); tdPan.appendChild(bgPanInput(row)); tr.appendChild(tdPan);   // Duty / Pan
                 const tdVol = blankCell(); tdVol.appendChild(bgVolInput(row)); tr.appendChild(tdVol);   // Bright / Vol
                 tr.appendChild(blankCell()); // Color / Mod
                 tr.appendChild(blankCell()); // FreqR
                 tr.appendChild(blankCell()); // Wave
+            } else if (row.kind === 'speech') {
+                // Time in its own column; voice+volume+text span the rest.
+                const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
+                const td = document.createElement('td');
+                td.colSpan = COLS.length - 3;
+                td.appendChild(speechInputs(row));
+                tr.appendChild(td);
             } else if (row.kind === 'comment') {
                 const td = document.createElement('td');
                 td.colSpan = COLS.length - 2;
@@ -635,7 +723,7 @@ export function initTableView(ctx) {
 
             const head = document.createElement('div');
             head.className = 'gen-card-head';
-            if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'comment') {
+            if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'speech' || row.kind === 'comment') {
                 head.appendChild(typeSelect(row, idx));
             } else {
                 const k = document.createElement('span'); k.textContent = row.kind; head.appendChild(k);
@@ -679,6 +767,9 @@ export function initTableView(ctx) {
                 card.appendChild(more);
             } else if (row.kind === 'bg') {
                 card.appendChild(field('BG', bgInputs(row)));
+            } else if (row.kind === 'speech') {
+                card.appendChild(field('Time', timeCell(row)));
+                card.appendChild(field('Speech', speechInputs(row)));
             } else if (row.kind === 'comment') {
                 card.appendChild(field('Comment', commentInput(row)));
             } else {

@@ -77,6 +77,15 @@ function serializeBg(b) {
     return 'BG ' + b.url + ' ' + fmt(b.pan) + ' ' + fmt(b.loudness);
 }
 
+// `S <time> <voice> <volume> "<text>"`. The text is quoted so it may contain
+// spaces; embedded double-quotes survive a round-trip because the parser takes
+// everything between the first and last quote. Browser-only (filtered before
+// the device — see serializeForDevice).
+function serializeSpeech(row) {
+    const voice = (row.voice && String(row.voice).trim()) ? String(row.voice).trim() : 'default';
+    return 'S ' + fmt(row.time) + ' ' + voice + ' ' + fmt(row.volume) + ' "' + (row.text || '') + '"';
+}
+
 export function serialize(doc) {
     if (!doc || !doc.rows) return '';
     const out = [];
@@ -88,10 +97,19 @@ export function serialize(doc) {
             case 'led':     out.push(serializeLed(row)); break;
             case 'audio':   out.push(serializeAudio(row)); break;
             case 'bg':      out.push(serializeBg(row.bg)); break;
+            case 'speech':  out.push(serializeSpeech(row)); break;
             default: break;
         }
     }
     // Join with newlines; add a trailing newline so files end cleanly (and so
     // parse(serialize(x)) does not see the last line glued to nothing).
     return out.join('\n') + '\n';
+}
+
+// Serialize for the DEVICE: drop speech (`S`) rows — the firmware cannot parse
+// them (they're browser-only, mixed into the bounced WAV). Everything else,
+// including BG push:// lines, is kept. Use this for /api/play-config etc.
+export function serializeForDevice(doc) {
+    if (!doc || !doc.rows) return '';
+    return serialize({ rows: doc.rows.filter(r => r.kind !== 'speech'), bg: doc.bg });
 }
