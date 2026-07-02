@@ -136,11 +136,13 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .gen-time-hint { font-size: 10px; color: #999; font-family: monospace; }
 .gen-num { width: 64px; font-size: 12px; padding: 2px 4px; }
 
-.gen-mask-chips { display: inline-flex; gap: 2px; flex-wrap: wrap; }
+/* 8 channel buttons in a fixed 4-wide grid => 2 compact rows, not 8.
+   Presets ('4' / 'all') span the full width on a third row. */
+.gen-mask-chips { display: inline-grid; grid-template-columns: repeat(4, 22px); gap: 2px; width: max-content; }
 .gen-mask-chips.invalid { outline: 1px solid #dc3545; border-radius: 4px; }
-.gen-chip { width: 22px; height: 24px; min-height: 24px; padding: 0; font-size: 11px; background: #eee; color: #777; border: 1px solid #ccc; border-radius: 4px; }
+.gen-chip { width: 22px; height: 22px; min-height: 22px; padding: 0; font-size: 11px; background: #eee; color: #777; border: 1px solid #ccc; border-radius: 4px; }
 .gen-chip.on { background: #28a745; color: #fff; border-color: #28a745; }
-.gen-chip-preset { width: auto; padding: 0 6px; background: #e6eefc; color: #345; }
+.gen-chip-preset { grid-column: span 2; width: auto; padding: 0 6px; background: #e6eefc; color: #345; }
 
 .gen-cell-trigger { font-size: 12px; padding: 2px 8px; min-width: 44px; min-height: 26px; background: #fff; border: 1px solid #ccc; border-radius: 4px; color: #222; }
 .gen-cell-trigger.is-ramp { border-color: #0a84ff; color: #0a5ad0; }
@@ -155,6 +157,8 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 
 .gen-bg-inputs { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; flex-wrap: wrap; }
 .gen-bg-url { width: 220px; font-size: 12px; padding: 2px 4px; }
+/* In the table, the URL cell spans 3 columns — let the input fill it. */
+.gen-grid-bg .gen-bg-url { width: 100%; box-sizing: border-box; }
 .gen-comment-input { width: 100%; font-size: 12px; font-family: monospace; padding: 2px 4px; box-sizing: border-box; }
 
 .gen-table-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

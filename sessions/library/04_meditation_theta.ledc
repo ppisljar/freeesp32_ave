@@ -1,0 +1,49 @@
+# Meditation (Theta) — ~35 min — alpha 10->8 induction -> theta 6.5 long flat plateau -> return to alpha 10
+# Goal: seated meditator sinking into a long, flat theta plateau; gentle alpha induction,
+#       slow descent to theta, 22-min stable hold, soft return to alpha (calm-alert, not sleep).
+# Bands: induction alpha 10->8 Hz; theta plateau 6.5 Hz (6-7 core); return alpha 10 Hz.
+# Driver: binaural. freq_r FIXED at 260 Hz; the beat slides by ramping the carrier
+#         frequency 250->253.5 Hz (beat = freq_r - carrier), per guidelines 5a
+#         (freq_r is NOT interpolatable). Carrier shift is an inaudible <4 Hz move.
+# LED: dim blue/violet flicker tracks the beat 1:1 (all <=10 Hz, safe), breathing
+#      brightness LFO (sine 10<->30% over 10 s), four zones (mask 15).
+# SAFETY (guidelines 4): every rate <=10 Hz (below the 15-25 Hz photosensitive band);
+#   binaural carrier 250 Hz (<1000), L/R offset = beat <=10 Hz (<35); brightness capped
+#   <=30% with a 10% floor; light ramps in 15 s and fades out 30 s (both >=10 s),
+#   never stopped abruptly; blue/violet only (no saturated red, no red<->blue flicker).
+#
+# 7.83 Hz "Schumann" variant [W]: for the plateau, swap carrier 253.5 -> 252.17
+#   (= 260 - 7.83) and LED freq 6.5 -> 7.83 on the 540000/1860000 rows (still <15 Hz);
+#   freq_r stays fixed 260. Everything else identical. Default is 6.5 Hz (evidence-leaning).
+#
+# Ramp convention = animate-on-start (5a): the > prefix sits on the row where a
+# segment BEGINS; its value is the start; the target is the next same-channel/field
+# row's value, swept over the gap.
+
+# --- Settling / induction start (00:00-01:00, beat 10 Hz): vol + light fade in ---
+0 10 50 >0 90 0 200 15           # LED 10 Hz flicker, violet, brightness ramps 0->20% over 15 s
+A 0 250 0 >0 0 1 260 0           # ch1 binaural: carrier 250 / freq_r 260 => 10 Hz beat; vol fades 0->50 over 60 s; sine
+15000 10 50 20 90 0 200 15       # brightness reaches 20% (ramp-in >=10 s done)
+30000 10 50 ~10:30:10000 90 0 200 15   # breathing LFO engages: brightness sine 10<->30% over 10 s
+
+# --- Descent to theta (01:00-05:00, beat 10->8 Hz) ---
+A 60000 >250 0 50 0 1 260 0      # carrier ramps 250->252 => beat 10->8; vol holds 50
+60000 >10 50 ~10:30:10000 90 0 200 15  # LED flicker tracks beat 10->8, breathing LFO continues
+
+# --- Descent into plateau (05:00-09:00, beat 8->6.5 Hz) ---
+A 300000 >252 0 50 0 1 260 0     # carrier ramps 252->253.5 => beat 8->6.5 over 4 min (~0.375 Hz/min)
+300000 >8 50 ~10:30:10000 90 0 200 15  # LED 8->6.5 lockstep
+
+# --- Theta plateau: long flat hold (09:00-31:00 = 22 min, beat 6.5 Hz) ---
+A 540000 253.5 0 50 0 1 260 0    # carrier fixed 253.5 => beat 6.5 Hz held flat (dwell >> 6 min)
+540000 6.5 50 ~10:30:10000 60 0 180 15  # deep violet-blue, 6.5 Hz, breathing LFO
+
+# --- Return to alpha (31:00-34:30, beat 6.5->10 Hz, soft) ---
+A 1860000 >253.5 0 50 0 1 260 0  # plateau anchor; carrier ramps 253.5->250 => beat 6.5->10 over 3.5 min
+1860000 >6.5 50 ~10:30:10000 60 0 180 15  # LED 6.5->10 lockstep
+
+# --- Soft close (34:30-35:00): vol + brightness fade to 0 over 30 s ---
+A 2070000 250 0 >50 0 1 260 0    # beat back at alpha 10 Hz; vol ramps 50->0 over final 30 s
+2070000 10 50 >20 90 0 200 15    # back to violet; brightness fades 20->0 (>=10 s), preempts LFO
+A 2100000 250 0 0 0 1 260 0      # end: volume 0
+2100000 10 50 0 90 0 200 15      # end: brightness 0

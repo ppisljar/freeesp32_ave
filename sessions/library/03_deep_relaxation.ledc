@@ -1,0 +1,43 @@
+# Deep Relaxation / Stress Melt — ~30 min — isochronic 14 -> alpha 10 -> theta 6 (hold) -> exit alpha 10
+# Goal: decompress a keyed-up, stressed user to a theta "melt", then return to calm-alert alpha (relaxed, not groggy).
+# Driver: AUDIO isochronic (modulation) — the entrainment beat is carried by ch1 audio; LED is a dim cool->warm wash.
+# SAFETY (guidelines §4): the 14 Hz start is adjacent to the 15-25 Hz photosensitive band, so the LED does NOT
+#   flicker (frequency 0 = steady light) until the beat has descended to <=10 Hz at t=5:00. Brightness capped at 30%,
+#   ramps IN over 15 s and fades OUT over 30 s; LED flicker is only ever 6-10 Hz; no red strobe, no flicker-rate color alt.
+# Ramp convention (§5a animate-on-start): the '>' prefix sits on the EARLIER entry and its value is the ramp START;
+#   the target is the next same-channel entry's value, swept across the gap. (Putting '>' on the last/later entry never fires.)
+# LED: mask 15 (all 4 legacy zones), duty 50%. Audio: ch1, carrier 200 Hz, pan 0 (center), sine wave, no binaural.
+
+# --- t=0:00  Induction start: beat 14 Hz (audio only); LED steady and dark; cool blue ---
+0 0 50 >0 0 80 180 15          # LED steady (freq 0); brightness ramps 0->30 over 15 s; cool blue; all 4 zones
+A 0 200 0 >0 14 1 0 0          # ch1 carrier 200 Hz, isochronic mod 14 Hz; volume ramps 0->55 over 45 s; sine
+
+# --- t=0:15  brightness ramp-in complete; light holds dim, still steady (no flicker) ---
+15000 0 50 30 0 80 180 15      # LED brightness 30% (hold); freq still 0 — no flicker during the 14 Hz portion
+
+# --- t=0:45  volume fade-in done; begin gliding the isochronic beat 14 -> 10 Hz ---
+A 45000 200 0 55 >14 1 0 0     # volume 55 (held); isochronic mod ramps 14->10 across the induction (-> t=5:00)
+
+# --- t=5:00  Alpha reached: beat now <=10 Hz, so LED flicker safely begins at 10 Hz ---
+300000 >10 50 30 0 80 180 15   # LED flicker starts at 10 Hz and ramps 10->6 lockstep with the beat (-> t=12:00); dim blue
+A 300000 200 0 55 >10 1 0 0    # isochronic mod ramps 10->6 Hz (deepening toward theta) over 5:00-12:00
+
+# --- t=12:00  Theta core reached: hold beat 6 Hz; slow cool-blue -> warm-amber color shift begins ---
+720000 6 50 30 >0 >80 >180 15  # LED flicker 6 Hz (hold); RGB ramps blue(0,80,180)->amber(255,140,30) across the hold
+A 720000 200 0 55 6 1 0 0      # isochronic mod 6 Hz — theta hold begins (12:00-24:00 = 12 min dwell)
+
+# --- t=24:00  Hold-end anchor (amber reached); begin the gentle exit beat 6 -> 10 Hz ---
+1440000 >6 50 30 255 140 30 15 # LED flicker ramps 6->10 Hz (exit to calm-alert alpha); amber held
+A 1440000 200 0 55 >6 1 0 0    # isochronic mod ramps 6->10 Hz over 24:00-27:00 (exit to alpha, NOT beta)
+
+# --- t=27:00  Alpha exit reached: hold 10 Hz; slightly dimmer, warm amber ---
+1620000 10 50 28 255 160 60 15 # LED flicker 10 Hz (hold); brightness 28%; warm amber
+A 1620000 200 0 55 10 1 0 0    # isochronic mod 10 Hz (calm-alert alpha, held)
+
+# --- t=29:30  Settle anchor: begin the gentle close (volume + brightness fade to 0 over the final 30 s) ---
+1770000 10 50 >28 255 160 60 15 # brightness ramps 28->0 over the final 30 s; flicker stays 10 Hz (never stopped abruptly)
+A 1770000 200 0 >55 10 1 0 0    # volume ramps 55->0 over the final 30 s; beat held at alpha 10 Hz
+
+# --- t=30:00  End: light dark, audio silent; the beat stayed in alpha to the very end ---
+1800000 10 50 0 255 160 60 15  # brightness 0 (fade target)
+A 1800000 200 0 0 10 1 0 0      # volume 0 (fade target)

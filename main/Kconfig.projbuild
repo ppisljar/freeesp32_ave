@@ -66,6 +66,17 @@ config BG_SDCARD_CLK_GPIO
     help
         SPI clock line for the SD card. Set to -1 if not wired.
 
+config BG_SUPPORT_MP3
+    bool "Compile in MP3 decoder (minimp3) for BG audio"
+    default y
+    help
+        Compile the minimp3 decoder so the BG player can stream MP3 URLs in
+        addition to WAV. The container is detected from the stream's magic
+        bytes (RIFF -> WAV, ID3/frame-sync -> MP3), not the file extension.
+        Only 44.1 kHz and 22.05 kHz MP3s (mono or stereo) are accepted; other
+        sample rates are rejected with a log message, matching the WAV policy.
+        Adds ~20-30 KB flash. Disable to save space on WAV-only deployments.
+
 
 # ---------------------------------------------------------------------------
 # LED Backend Selection (Step 1 of Plan 008)

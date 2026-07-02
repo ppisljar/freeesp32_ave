@@ -1,0 +1,59 @@
+# ============================================================================
+# 09 Lucid / Hypnagogic   *** EXPERIMENTAL [W]-tier ***
+# ----------------------------------------------------------------------------
+# Goal:     Long, dim, mostly audio-driven THETA PLATEAU (~6 Hz) at sleep onset,
+#           with gentle ambient "dream cues" to encourage hypnagogic imagery /
+#           lucid-dream onset. Ends in a SOFT OFF so the user drifts into sleep.
+# Duration: 60:00 (3,600,000 ms)
+# Band:     theta, hold ~6 Hz (4-7 Hz) -- one long plateau, no exit/wake ramp.
+# Light:    very dim warm amber (255,120,30), <=15% brightness, 6 Hz flicker
+#           (1:1 with the beat, <12 Hz, dim => within safety caution band).
+#
+# SAFETY (guidelines section 4):
+#   - Only theta (6 Hz) + alpha (10 Hz) content, both <12 Hz -- nowhere near the
+#     15-25 Hz danger band. Brightness ramps in 0->12% over 15 s (>=10 s rule),
+#     capped <=15%, and fades to 0 over the final 5 min (Soft Off, never abrupt).
+#   - Binaural carrier 250 Hz (<1000), L/R offset 6 Hz (<35). Audio vol <=40.
+#
+# *** EXPERIMENTAL: lucid / REM-cueing is NOT validated on this device. True
+# REM-triggered light flashes need EEG / eye detection (out of scope). The
+# brightness-breathing and slow pan LFOs here are ambient mood approximations
+# only -- a theta substrate, not a proven lucidity trigger. ***
+#
+# LED:   time freq duty bright R G B mask
+# Audio: A time freq pan vol mod channel [freq_r] [wave]   (wave 0=sine 6=brown)
+# Ramp convention: '>' on the EARLIER entry (value=start); target = next
+# same-channel entry. LFOs are self-contained: ~start:end:period_ms (sine).
+# ============================================================================
+
+# ---- LED: dim warm amber, 10 Hz -> 6 Hz, breathing brightness cue, Soft Off --
+0       10 50 >0 255 120 30 15          # t=0:00  10 Hz flicker, brightness fade-in from 0
+15000   10 50 12 255 120 30 15          # t=0:15  brightness 12% (15 s ramp-in, >=10 s rule)
+120000  >10 50 12 255 120 30 15         # t=2:00  flicker descend START 10 Hz (1:1 with beat)
+480000  6 50 ~6:15:10000 255 120 30 15  # t=8:00  6 Hz hold; brightness sine LFO 6<->15% /10s = breathing cue
+3300000 6 50 >15 255 120 30 15          # t=55:00 Soft Off START: brightness 15 -> 0
+3600000 6 50 0 255 120 30 15            # t=60:00 fully off (no wake ramp)
+
+# ---- ch1: isochronic theta driver (carrier 220 Hz, beat via modulation) ------
+A 0       220 0 >0 10 1                  # t=0:00  vol fade-in from 0; beat (mod) 10 Hz
+A 60000   220 0 40 10 1                  # t=1:00  vol fade-in complete (40); beat 10 Hz
+A 120000  220 0 40 >10 1                 # t=2:00  beat descend START 10 Hz ...
+A 480000  220 0 38 6 1                   # t=8:00  ... TARGET 6 Hz (theta plateau)
+A 3300000 220 0 >38 6 1                  # t=55:00 Soft Off START: vol 38 -> 0, beat held 6 Hz
+A 3600000 220 0 0 6 1                    # t=60:00 silent
+
+# ---- ch2: binaural theta layer (FIXED 6 Hz beat), joins at plateau -----------
+A 480000  250 0 >0 0 2 256 0             # t=8:00  fade-in from 0; 250 Hz L / 256 Hz R = 6 Hz beat (fixed)
+A 540000  250 0 25 0 2 256 0             # t=9:00  vol 25 (gentle, headphone-expected)
+A 3300000 250 0 >25 0 2 256 0            # t=55:00 Soft Off START: vol 25 -> 0
+A 3600000 250 0 0 0 2 256 0             # t=60:00 silent
+
+# ---- ch3: brown-noise ambiance + slow auto-pan (REM-ish drift), at plateau ---
+A 480000  200 ~-60:60:30000 >0 0 3 0 6   # t=8:00  brown noise; pan sine LFO -60<->+60 /30s; vol fade-in from 0
+A 540000  200 ~-60:60:30000 18 0 3 0 6   # t=9:00  vol 18; pan LFO continues
+A 3300000 200 ~-60:60:30000 >18 0 3 0 6  # t=55:00 Soft Off START: vol 18 -> 0; pan LFO continues
+A 3600000 200 0 0 0 3 0 6                # t=60:00 silent
+
+# Soft Off: 55:00-60:00 LED brightness and ALL audio volumes ramp to 0 together.
+# No alpha/SMR exit ramp -- the user drifts into sleep undisturbed.
+# (Optional ambient dream-bed: add `BG <url> 0 25` -- needs a user-supplied URL.)

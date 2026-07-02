@@ -283,7 +283,7 @@ BG  <url>  <pan>  <loudness>
 
 | Field | Range | Meaning |
 |---|---|---|
-| `url` | string | Source location. Three schemes: `http://host:port/path`, `https://...`, or `sdcard://path`. The URL **must point to a WAV file** — the ESP32 has no MP3 decoder. The generator server auto-transcodes MP3 → WAV when you request a `.wav` URL whose source is an `.mp3` file (i.e. `wav/river.wav` works even if only `wav/river.mp3` exists on disk). |
+| `url` | string | Source location. Three schemes: `http://host:port/path`, `https://...`, or `sdcard://path`. The stream may be **WAV or MP3** — the container is detected from the stream's magic bytes, not the file extension. Both must be **44.1 kHz (or 22.05 kHz) stereo or mono**; other sample rates are rejected with a log message. WAV must be 16-bit PCM. MP3 support requires `CONFIG_BG_SUPPORT_MP3=y` (default on; uses the built-in minimp3 decoder). The generator server can also auto-transcode MP3 → WAV when you request a `.wav` URL whose source is an `.mp3` file (i.e. `wav/river.wav` works even if only `wav/river.mp3` exists on disk). |
 | `pan` | -100..+100 | Stereo position. |
 | `loudness` | 0..100 % | Background mix level. Typical values: 20-40 for ambient sound under binaural tracks. |
 

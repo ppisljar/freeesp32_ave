@@ -108,10 +108,15 @@ esp_err_t web_server_init(void)
     }
 
     // Mount the dedicated "cfgfs" SPIFFS partition for user .ledc configs at
-    // /configs. This partition has no flashed image (it's not in CMake's
-    // spiffs_create_partition_image), so format_if_mount_failed=true formats it
-    // on first boot. It is separate from "storage" so reflashing the web UI /
-    // app does not erase saved configs.
+    // /configs. A full wired flash (flash_all.sh / idf.py flash) seeds this with
+    // the built-in session library image (main/CMakeLists.txt
+    // spiffs_create_partition_image(cfgfs ...)). On a unit that has never been
+    // seeded — or if the image is ever absent — format_if_mount_failed=true
+    // formats it empty on first boot. It is separate from "storage" so
+    // reflashing the web UI / app (or an OTA app update) does not erase saved
+    // configs. Configs are also pushable over the network via PUT /api/configs/*
+    // (additive — preserves existing files), so the library can be delivered
+    // without a wired flash.
     esp_vfs_spiffs_conf_t cfg_conf = {
         .base_path = WEB_CFG_BASE,
         .partition_label = "cfgfs",

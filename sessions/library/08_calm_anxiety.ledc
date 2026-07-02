@@ -1,0 +1,40 @@
+# Calm / Anxiety — ~25 min — settle beat 12 Hz -> alpha 10 Hz hold -> soft fade (stays calm-alert)
+# Goal: short, reliable "panic-button" alpha preset. Gentle binaural driver; light is calming
+#   ambient only (NOT a driver). Effects often felt within 10-15 min.
+# Bands: alpha ~10 Hz emphasis, brief 12 Hz settle. Binaural for anxiety g~=0.45 [E].
+# Duration: 1,500,000 ms (~25 min). Audio ch1 binaural; LED mask 15 (four zones), steady.
+# SAFETY (guidelines 4): NO visual flicker — LED held steady (freq 0), dim blue only, brightness
+#   <=28% with a slow breathing LFO floored at 12% (never full black<->white), ramps in/out >=10 s.
+#   Binaural carrier 370->372 Hz (<1000), L/R offset = beat <=12 Hz (<35). No red, no strobe.
+# Technique (guidelines 5a): freq_r is NOT interpolatable -> hold freq_r = 382 FIXED and ramp the
+#   carrier frequency 370 -> 372 Hz, so beat = freq_r - frequency slides 12 -> 10 Hz smoothly.
+# Ramp convention = animate-on-start: '>' lives on the EARLIER entry (its value = start); the
+#   target is the next same-channel entry's value, swept over the gap.
+
+# --- t=0: session start -------------------------------------------------------
+0 0 50 >0 0 60 180 15            # LED steady (freq 0); brightness >0 ramps toward next entry (->22%); dim blue
+A 0 >370 0 >0 0 1 382 0          # ch1: carrier >370 ramps toward next freq; vol >0 fades toward next vol; freq_r 382 (beat 12); sine
+
+# --- t=15 s: brightness ramp-in (>=10 s) complete -----------------------------
+15000 0 50 22 0 60 180 15        # brightness 22% reached; steady dim blue
+
+# --- t=30 s: breathing brightness LFO engages (sine 12<->28% / 10 s, ~6 breaths/min) ---
+30000 0 50 ~12:28:10000 0 60 180 15   # gentle breathing; the only LED motion (no strobe, freq stays 0)
+
+# --- t=45 s: volume fade-in (0->50 over 45 s) complete; carrier continues sliding ---
+A 45000 >370.5 0 50 0 1 382 0    # vol 50 reached; carrier mid-slide (>370.5 -> next 372); beat ~11.5 Hz
+
+# --- t=3:00: alpha reached — carrier 372 vs fixed freq_r 382 => beat 10 Hz -----
+A 180000 372 0 50 0 1 382 0      # carrier 372 (beat 10 Hz); steady blue + breathing; HOLD begins
+
+# --- HOLD 3:00 -> 24:30 (~21 min at alpha 10 Hz; dwell >> 6 min) ---------------
+# No entries needed: carrier 372 / beat 10 Hz, vol 50, and the breathing LED all persist unchanged.
+# Stays calm-alert alpha (no down-shift to theta) — this is not a bedtime preset.
+
+# --- t=24:30: begin soft close (gentle, stays in alpha) -----------------------
+A 1470000 372 0 >50 0 1 382 0    # carrier holds 372; vol >50 ramps toward 0 over the last 30 s
+1470000 0 50 >12 0 60 180 15     # brightness >12 (LFO floor) ramps toward 0 over the last 30 s (>=10 s)
+
+# --- t=25:00: end — audio and light at zero -----------------------------------
+A 1500000 372 0 0 0 1 382 0      # carrier 372 (beat 10 Hz), volume 0
+1500000 0 50 0 0 60 180 15       # brightness 0; session end

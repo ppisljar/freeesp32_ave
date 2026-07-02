@@ -8,7 +8,9 @@
 //   drag keyframe   -> move (t snaps to grid, v to nice values)
 //   long-press kf   -> context menu (delete / duplicate / set-curve / to-mod)
 //   midpoint handle -> cycle outgoing shape step -> '>' -> '*'
-//   wheel / pinch   -> zoom the time axis
+//   ctrl/cmd + wheel-> zoom the time axis about the cursor
+//   horiz / shift-wheel -> pan the time axis
+//   plain vert wheel-> native vertical scroll of the lane list
 //   two-finger drag -> pan the time axis
 //   ruler drag      -> scrub the playhead
 //
@@ -542,13 +544,28 @@ export function createLaneCanvas(canvas, cb) {
     function clearLong() { if (longTimer) { clearTimeout(longTimer); longTimer = null; } }
 
     function onWheel(e) {
-        e.preventDefault();
-        const p = localPt(e);
-        const tAt = xToTime(p.x);
-        const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-        msPerPx = Math.max(1, Math.min(2000, msPerPx * factor));
-        t0 = Math.max(0, tAt - (p.x - plotX) * msPerPx);
-        scheduleRender();
+        // Ctrl/Cmd + vertical wheel => zoom the time axis about the cursor.
+        if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            const p = localPt(e);
+            const tAt = xToTime(p.x);
+            const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+            msPerPx = Math.max(1, Math.min(2000, msPerPx * factor));
+            t0 = Math.max(0, tAt - (p.x - plotX) * msPerPx);
+            scheduleRender();
+            return;
+        }
+        // Horizontal wheel (trackpad) or shift+wheel (mouse) => pan the time axis.
+        // The plot has no native horizontal overflow, so we move t0 ourselves.
+        const horiz = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX
+                    : (e.shiftKey ? e.deltaY : 0);
+        if (horiz !== 0) {
+            e.preventDefault();
+            t0 = Math.max(0, t0 + horiz * msPerPx);
+            scheduleRender();
+            return;
+        }
+        // Plain vertical wheel => let .gen-lane-scroll scroll natively (no preventDefault).
     }
 
     // ---- Inspector + context menu -----------------------------------------

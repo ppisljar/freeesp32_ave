@@ -148,6 +148,12 @@
                     <button id="btnSettingsRestore" style="background:#dc3545;">Restore Defaults</button>
                     <button id="btnSettingsReload">Reload</button>
                 </div>
+                <div class="controls" style="margin-top:10px;">
+                    <button id="btnSettingsExport">⬇ Export settings</button>
+                    <button id="btnSettingsImport">⬆ Import settings</button>
+                    <input type="file" id="settingsImportFile" accept=".json,application/json" style="display:none">
+                </div>
+                <div style="font-size:12px;color:#888;margin-top:6px;">Password is not included in exports; importing preserves the device's stored password.</div>
             </div>
         </div>
         <!-- ===================== FIRMWARE ===================== -->

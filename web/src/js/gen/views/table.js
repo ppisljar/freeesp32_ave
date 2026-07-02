@@ -417,23 +417,33 @@ export function initTableView(ctx) {
         return wrap;
     }
 
-    function bgInputs(row) {
-        const wrap = document.createElement('span');
-        wrap.className = 'gen-bg-inputs';
+    function bgUrlInput(row) {
         const url = document.createElement('input');
         url.type = 'text'; url.className = 'gen-bg-url';
         url.placeholder = 'http(s):// or sdcard://';
         url.value = row.bg.url;
         url.addEventListener('input', () => { row.bg.url = url.value; recomputeBg(); commitValue(); });
+        return url;
+    }
+    function bgPanInput(row) {
         const pan = document.createElement('input');
         pan.type = 'number'; pan.className = 'gen-num'; pan.title = 'pan -100..100';
         pan.value = String(row.bg.pan);
         pan.addEventListener('input', () => { const v = parseFloat(pan.value); row.bg.pan = Number.isFinite(v) ? v : 0; recomputeBg(); commitValue(); });
+        return pan;
+    }
+    function bgVolInput(row) {
         const loud = document.createElement('input');
         loud.type = 'number'; loud.className = 'gen-num'; loud.title = 'loudness 0..100';
         loud.value = String(row.bg.loudness);
         loud.addEventListener('input', () => { const v = parseFloat(loud.value); row.bg.loudness = Number.isFinite(v) ? v : 0; recomputeBg(); commitValue(); });
-        wrap.append('url ', url, ' pan ', pan, ' loud ', loud);
+        return loud;
+    }
+    // Composite used by the mobile card (single field, all three inline).
+    function bgInputs(row) {
+        const wrap = document.createElement('span');
+        wrap.className = 'gen-bg-inputs';
+        wrap.append('url ', bgUrlInput(row), ' pan ', bgPanInput(row), ' vol ', bgVolInput(row));
         return wrap;
     }
 
@@ -509,8 +519,10 @@ export function initTableView(ctx) {
     }
 
     // ---- Grid (desktop) ---------------------------------------------------
-    const COLS = ['Type', 'Time', 'Ch / Mask', 'Freq', 'Duty', 'Bright', 'Color',
-                  'Pan', 'Vol', 'Mod', 'FreqR', 'Wave', ''];
+    // LED and Audio share the three middle knob columns:
+    //   Duty↔Pan, Bright↔Vol, Color↔Mod. FreqR/Wave are audio-only trailers.
+    const COLS = ['Type', 'Time', 'Ch / Mask', 'Freq',
+                  'Duty / Pan', 'Bright / Vol', 'Color / Mod', 'FreqR', 'Wave', ''];
 
     function blankCell() { return document.createElement('td'); }
 
@@ -545,31 +557,32 @@ export function initTableView(ctx) {
                 const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
                 const tdMask = blankCell(); tdMask.appendChild(maskChips(row)); tr.appendChild(tdMask);
                 const tdFreq = blankCell(); tdFreq.appendChild(compound(row, idx, 'freq', 'Frequency (Hz)', () => ledRampTarget(idx, row.mask, 'freq'))); tr.appendChild(tdFreq);
-                const tdDuty = blankCell(); tdDuty.appendChild(compound(row, idx, 'duty', 'Duty (%)', () => ledRampTarget(idx, row.mask, 'duty'))); tr.appendChild(tdDuty);
-                const tdBr = blankCell(); tdBr.appendChild(compound(row, idx, 'bright', 'Brightness (%)', () => ledRampTarget(idx, row.mask, 'bright'))); tr.appendChild(tdBr);
-                const tdCol = blankCell(); tdCol.appendChild(colorSwatch(row)); tr.appendChild(tdCol);
-                tr.appendChild(blankCell()); // Pan
-                tr.appendChild(blankCell()); // Vol
-                tr.appendChild(blankCell()); // Mod
+                const tdDuty = blankCell(); tdDuty.appendChild(compound(row, idx, 'duty', 'Duty (%)', () => ledRampTarget(idx, row.mask, 'duty'))); tr.appendChild(tdDuty);        // Duty / Pan
+                const tdBr = blankCell(); tdBr.appendChild(compound(row, idx, 'bright', 'Brightness (%)', () => ledRampTarget(idx, row.mask, 'bright'))); tr.appendChild(tdBr);      // Bright / Vol
+                const tdCol = blankCell(); tdCol.appendChild(colorSwatch(row)); tr.appendChild(tdCol);                                                                               // Color / Mod
                 tr.appendChild(blankCell()); // FreqR
                 tr.appendChild(blankCell()); // Wave
             } else if (row.kind === 'audio') {
                 const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
                 const tdCh = blankCell(); tdCh.appendChild(channelSelect(row)); tr.appendChild(tdCh);
                 const tdFreq = blankCell(); tdFreq.appendChild(compound(row, idx, 'freq', 'Frequency (Hz)', () => audioRampTarget(idx, row.channel, 'freq'))); tr.appendChild(tdFreq);
-                tr.appendChild(blankCell()); // Duty
-                tr.appendChild(blankCell()); // Bright
-                tr.appendChild(blankCell()); // Color
-                const tdPan = blankCell(); tdPan.appendChild(compound(row, idx, 'pan', 'Pan (-100..100)', () => audioRampTarget(idx, row.channel, 'pan'))); tr.appendChild(tdPan);
-                const tdVol = blankCell(); tdVol.appendChild(compound(row, idx, 'vol', 'Volume (%)', () => audioRampTarget(idx, row.channel, 'vol'))); tr.appendChild(tdVol);
-                const tdMod = blankCell(); tdMod.appendChild(compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))); tr.appendChild(tdMod);
+                const tdPan = blankCell(); tdPan.appendChild(compound(row, idx, 'pan', 'Pan (-100..100)', () => audioRampTarget(idx, row.channel, 'pan'))); tr.appendChild(tdPan);    // Duty / Pan
+                const tdVol = blankCell(); tdVol.appendChild(compound(row, idx, 'vol', 'Volume (%)', () => audioRampTarget(idx, row.channel, 'vol'))); tr.appendChild(tdVol);        // Bright / Vol
+                const tdMod = blankCell(); tdMod.appendChild(compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))); tr.appendChild(tdMod);          // Color / Mod
                 const tdFr = blankCell(); tdFr.appendChild(freqRInput(row)); tr.appendChild(tdFr);
                 const tdWave = blankCell(); tdWave.appendChild(waveSelect(row)); tr.appendChild(tdWave);
             } else if (row.kind === 'bg') {
-                const td = document.createElement('td');
-                td.colSpan = COLS.length - 2;
-                td.appendChild(bgInputs(row));
-                tr.appendChild(td);
+                // URL spans Time+Ch/Mask+Freq (it's the long field); pan/loudness
+                // land in the shared Duty/Pan and Bright/Vol columns like audio.
+                const tdUrl = document.createElement('td');
+                tdUrl.colSpan = 3;
+                tdUrl.appendChild(bgUrlInput(row));
+                tr.appendChild(tdUrl);
+                const tdPan = blankCell(); tdPan.appendChild(bgPanInput(row)); tr.appendChild(tdPan);   // Duty / Pan
+                const tdVol = blankCell(); tdVol.appendChild(bgVolInput(row)); tr.appendChild(tdVol);   // Bright / Vol
+                tr.appendChild(blankCell()); // Color / Mod
+                tr.appendChild(blankCell()); // FreqR
+                tr.appendChild(blankCell()); // Wave
             } else if (row.kind === 'comment') {
                 const td = document.createElement('td');
                 td.colSpan = COLS.length - 2;

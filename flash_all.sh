@@ -29,7 +29,13 @@
 #   0x10000   build/esp32_audioplayer.bin                -> ota_0 (main app)
 #   0x210000  ../esp32ota/build/esp32_minimal_ota.bin    -> ota_1 (updater)
 #   0x2c0000  build/storage.bin                          -> storage (web SPIFFS)
-#   (cfgfs at 0x340000 intentionally omitted — formatted on first mount)
+#   0x340000  build/cfgfs.bin                            -> cfgfs (session library)
+#
+# NOTE: cfgfs is seeded with the built-in session library (sessions/library/
+# *.ledc, packed by main/CMakeLists.txt). Because this is a FULL flash, it
+# OVERWRITES any user-saved configs in cfgfs with the shipped library. This is
+# expected for the one-time wired / factory flash. Routine updates do NOT touch
+# cfgfs: ./flash_web.sh writes only storage, and OTA writes only the ota_0 app.
 
 set -euo pipefail
 
@@ -100,6 +106,7 @@ part_size() {
 OTA0_OFF=$(part_off ota_0);     OTA0_SZ=$(part_size ota_0)
 OTA1_OFF=$(part_off ota_1);     OTA1_SZ=$(part_size ota_1)
 STORAGE_OFF=$(part_off storage); STORAGE_SZ=$(part_size storage)
+CFGFS_OFF=$(part_off cfgfs);     CFGFS_SZ=$(part_size cfgfs)
 OTADATA_OFF=$(part_off otadata)
 # bootloader (0x1000) and partition table (0x8000) are fixed for ESP32.
 BOOTLOADER_OFF=0x1000
@@ -115,6 +122,7 @@ F_OTADATA="$SCRIPT_DIR/build/ota_data_initial.bin"
 F_APP="$SCRIPT_DIR/build/esp32_audioplayer.bin"
 F_UPDATER="$OTA_DIR/build/esp32_minimal_ota.bin"
 F_STORAGE="$SCRIPT_DIR/build/storage.bin"
+F_CFGFS="$SCRIPT_DIR/build/cfgfs.bin"
 
 # ---- verification: existence + fit + no overlap -----------------------------
 fail=0
@@ -125,6 +133,7 @@ check_exists "$F_OTADATA"
 check_exists "$F_APP"
 check_exists "$F_UPDATER"
 check_exists "$F_STORAGE"
+check_exists "$F_CFGFS"
 [ "$fail" -eq 0 ] || { echo "Aborting: missing artifact(s)." >&2; exit 1; }
 
 sz() { stat -f%z "$1" 2>/dev/null || stat -c%s "$1"; }
@@ -133,6 +142,7 @@ hex() { printf '0x%x' "$1"; }
 APP_SZ=$(sz "$F_APP")
 UPDATER_SZ=$(sz "$F_UPDATER")
 STORAGE_FSZ=$(sz "$F_STORAGE")
+CFGFS_FSZ=$(sz "$F_CFGFS")
 
 check_fit() { # name image_size slot_offset slot_size
   local name="$1" isz="$2" off="$3" slot="$4"
@@ -151,6 +161,7 @@ echo "=== Flash map verification ==="
 check_fit ota_0   "$APP_SZ"     "$OTA0_OFF"    "$OTA0_SZ"
 check_fit ota_1   "$UPDATER_SZ" "$OTA1_OFF"    "$OTA1_SZ"
 check_fit storage "$STORAGE_FSZ" "$STORAGE_OFF" "$STORAGE_SZ"
+check_fit cfgfs   "$CFGFS_FSZ"   "$CFGFS_OFF"   "$CFGFS_SZ"
 [ "$fail" -eq 0 ] || { echo "Aborting: image does not fit its slot." >&2; exit 1; }
 
 # ---- assemble esptool command ----------------------------------------------
@@ -166,6 +177,7 @@ ESPTOOL+=(
   "$OTA0_OFF"       "$F_APP"
   "$OTA1_OFF"       "$F_UPDATER"
   "$STORAGE_OFF"    "$F_STORAGE"
+  "$CFGFS_OFF"      "$F_CFGFS"
 )
 
 echo ""
@@ -187,6 +199,8 @@ PORT_DESC="${PORT:-auto-detect}"
 if [ "$ASSUME_YES" -ne 1 ]; then
   echo "About to perform a FULL wired flash to $PORT_DESC."
   echo "This erases the existing layout and writes the dual-boot OTA table."
+  echo "NOTE: cfgfs is reseeded with the built-in session library — any"
+  echo "      user-saved configs on the device will be OVERWRITTEN."
   read -r -p "Proceed? [y/N] " ans
   case "$ans" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
 fi

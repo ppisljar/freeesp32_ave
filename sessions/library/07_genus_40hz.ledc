@@ -1,0 +1,39 @@
+# 007 40 Hz GENUS (Cognition) — flagship evidence-based gamma protocol
+#
+# Source: MIT Tsai-Lab GENUS (scientific_research_protocols.md §1, [strong]).
+#   Visual : white light flickering at 40 Hz, 50% duty (12.5 ms on / 12.5 ms off).
+#   Audio  : ~10 kHz tone train gated at 40 Hz (~60-65 dB).
+#   Combined audio + visual at the SAME 40 Hz, synchronously = best multimodal outcome.
+#   Dose: 1 h/day. Single fixed 40 Hz the whole session (no arc/descent).
+#
+# SAFETY (SESSION_DESIGN_GUIDELINES §4):
+#   40 Hz is ABOVE the 15-25 Hz photosensitive danger band (peak 16-20 Hz) -> synchronized
+#   full-field visual flicker IS allowed (the §4 GENUS exception). BUT still:
+#     - brightness CAPPED at 45% (moderate, well under strobe intensity),
+#     - light RAMPED IN over 15 s and RAMPED OUT over 30 s (never abrupt; ≥10 s rule),
+#     - 50% duty keeps a brightness floor (no full black<->white DC contrast),
+#     - neutral WHITE (255,255,255), no saturated-red strobe,
+#     - audio capped at vol 60 (~60-65 dB). PSE contraindication still gated by firmware UI.
+#
+# Duration: 60:00. Carrier choice: GENUS-strict 10 kHz sine (plan §7); optional comfort
+#   bed omitted for strict fidelity. Light 40 Hz flicker and audio 40 Hz modulation are
+#   1:1 synchronous (§3) — the defining GENUS pairing.
+#
+# LED columns  : time(ms) freq duty bright R G B mask
+# Audio columns: A time(ms) freq pan vol mod [channel] [freq_r] [wave]
+
+# --- Ramp-in (00:00 -> 00:30): 40 Hz active immediately; light + audio ease up ---
+0       40 50 >0  255 255 255 15      # LED 40 Hz flicker, 50% duty, white; brightness ramp-in from 0
+A 0     10000 0 >0 40 1               # ch1 GENUS audio: 10 kHz carrier, MODULATION 40 Hz, vol fade-in from 0
+15000   40 50 45  255 255 255 15      # LED brightness reaches 45% cap (15 s ramp-in, ≥10 s rule satisfied)
+A 30000 10000 0 60 40 1              # ch1 vol settled at 60 (~30 s fade-in); 40 Hz modulation held
+
+# --- Hold (00:30 -> 59:30 = 59 min): steady synchronous 40 Hz audio-visual ---
+#   Nothing changes — LED holds 40 Hz / 50% / 45% white; audio holds 10 kHz @ 40 Hz mod, vol 60.
+#   GENUS efficacy depends on a FIXED 40 Hz: no frequency LFO, no anti-habituation drift.
+
+# --- Ramp-out (59:30 -> 60:00): simultaneous gentle fade of light AND audio to 0 ---
+3570000 40 50 >45 255 255 255 15      # LED brightness ramp-out START 45 ...
+A 3570000 10000 0 >60 40 1            # ch1 volume ramp-out START 60 ... (parallel with light)
+3600000 40 50 0  255 255 255 15       # ... LED brightness -> 0 (light off, 30 s ramp, no abrupt stop)
+A 3600000 10000 0 0 40 1              # ... ch1 volume -> 0 (audio off, simultaneous with light)

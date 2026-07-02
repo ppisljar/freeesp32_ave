@@ -129,6 +129,10 @@
 #include "freertos/semphr.h"
 #include <string.h>
 
+#if CONFIG_BG_SUPPORT_MP3
+#include "minimp3.h"             /* prototypes/types only; impl in mp3_decoder.c */
+#endif
+
 static const char *TAG = "bg_player";
 
 /* ---------------------------------------------------------------------------
@@ -150,8 +154,11 @@ static const char *TAG = "bg_player";
  *  220 samples at 44 100 Hz = 4.99 ms.  Eliminates click on BG start/stop.  */
 #define BG_AMP_RAMP_SAMPLES     220u
 
-/** Producer task stack depth in bytes.  6 KB is the plan spec (Section 2.7).  */
-#define BG_STREAMER_STACK_BYTES 4096u
+/** Producer task stack depth in bytes.
+ *  Raised from 4 KB to 12 KB for MP3 support: mp3dec_decode_frame() uses a few
+ *  KB of stack for its IMDCT / synthesis scratch. The WAV path needs only ~4 KB;
+ *  the extra headroom is harmless when CONFIG_BG_SUPPORT_MP3=n.                 */
+#define BG_STREAMER_STACK_BYTES 12288u
 
 /** Producer task FreeRTOS priority.
  *  LED task = 23, timing dispatch = 22, audio output = 5.
@@ -244,9 +251,21 @@ static StaticStreamBuffer_t s_bg_ring_ctrl;
 static void bg_streamer_task(void *pvParameters);
 
 static esp_err_t bg_stream_from_http(const char *url);
-static void      bg_stream_http_pcm(esp_http_client_handle_t client,
+static void      bg_stream_http_wav(esp_http_client_handle_t client,
                                     const wav_format_t *fmt,
                                     const uint8_t *leftover, size_t leftover_len);
+
+/* Shared int16 -> 44.1 kHz stereo float conversion used by every BG decoder
+ * (WAV today, MP3 below). Returns the number of stereo output frames written. */
+static size_t    bg_convert_to_stereo_float(const int16_t *pcm, size_t frames,
+                                            unsigned channels, bool upsample_2x,
+                                            float *flt_buf);
+
+#if CONFIG_BG_SUPPORT_MP3
+static bool      bg_looks_like_mp3(const uint8_t *buf, size_t len);
+static void      bg_stream_http_mp3(esp_http_client_handle_t client,
+                                    const uint8_t *seed, size_t seed_len);
+#endif
 
 #ifdef CONFIG_BG_SDCARD_ENABLED
 static void __attribute__((unused)) bg_stream_from_sdcard(const char *path);
@@ -300,7 +319,43 @@ static esp_err_t bg_dispatch_url(const char *url)
 }
 
 /* ---------------------------------------------------------------------------
- * bg_stream_http_pcm — convert and stream PCM from an open HTTP connection
+ * bg_convert_to_stereo_float — the shared decode tail
+ *
+ * Converts `frames` interleaved int16 input samples (channels == 1 or 2) into
+ * interleaved 44.1 kHz stereo float in flt_buf. Mono is duplicated (L = R).
+ * When upsample_2x is set, each input frame is written twice (22050 -> 44100
+ * sample-and-hold; the spectral mirror lands above 11 kHz, inaudible for
+ * ambient BG). Returns the number of stereo output frames written; the caller
+ * sends out_frames * 2 * sizeof(float) bytes to the ring. flt_buf must hold at
+ * least frames * (upsample_2x ? 2 : 1) * 2 floats.
+ *
+ * This is the ONLY place raw PCM becomes ring-format audio, so every decoder
+ * (WAV, MP3, future formats) funnels through it and inherits mono handling,
+ * upsampling, and the /32768 normalization for free.
+ * --------------------------------------------------------------------------- */
+static size_t bg_convert_to_stereo_float(const int16_t *pcm, size_t frames,
+                                         unsigned channels, bool upsample_2x,
+                                         float *flt_buf)
+{
+    size_t out_idx = 0u;
+    for (size_t i = 0; i < frames; i++) {
+        const int16_t *p = pcm + i * channels;
+        float L = (float)p[0] / 32768.0f;
+        float R = (channels == 2u) ? (float)p[1] / 32768.0f : L;
+        flt_buf[out_idx * 2u]      = L;
+        flt_buf[out_idx * 2u + 1u] = R;
+        out_idx++;
+        if (upsample_2x) {
+            flt_buf[out_idx * 2u]      = L;
+            flt_buf[out_idx * 2u + 1u] = R;
+            out_idx++;
+        }
+    }
+    return out_idx;
+}
+
+/* ---------------------------------------------------------------------------
+ * bg_stream_http_wav — convert and stream PCM from an open HTTP connection
  *
  * Called by bg_stream_from_http after the WAV header has been parsed.
  * Receives:
@@ -312,7 +367,7 @@ static esp_err_t bg_dispatch_url(const char *url)
  * Returns when esp_http_client_read returns 0 / negative, or when
  * s_bg.streaming goes false.
  * --------------------------------------------------------------------------- */
-static void bg_stream_http_pcm(esp_http_client_handle_t client,
+static void bg_stream_http_wav(esp_http_client_handle_t client,
                                 const wav_format_t *fmt,
                                 const uint8_t *leftover,
                                 size_t leftover_len)
@@ -368,22 +423,9 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
         size_t aligned_len = (leftover_len / frame_bytes) * frame_bytes;
         size_t lo_frames   = aligned_len / frame_bytes;
 
-        size_t out_idx = 0u;
-        for (size_t i = 0; i < lo_frames; i++) {
-            const int16_t *p = (const int16_t *)(leftover + i * frame_bytes);
-            float L = (float)p[0] / 32768.0f;
-            float R = (fmt->channels == 2u) ? (float)p[1] / 32768.0f : L;
-            flt_buf[out_idx * 2u]      = L;
-            flt_buf[out_idx * 2u + 1u] = R;
-            out_idx++;
-            if (upsample_2x) {
-                /* Sample-and-hold: emit the same frame twice. Spectral
-                 * mirror lands above 11 kHz, inaudible for ambient BG. */
-                flt_buf[out_idx * 2u]      = L;
-                flt_buf[out_idx * 2u + 1u] = R;
-                out_idx++;
-            }
-        }
+        size_t out_idx = bg_convert_to_stereo_float((const int16_t *)leftover,
+                                                    lo_frames, fmt->channels,
+                                                    upsample_2x, flt_buf);
 
         size_t bytes_to_send = out_idx * 2u * sizeof(float);
         if (bytes_to_send > 0u && s_bg.ring != NULL) {
@@ -462,20 +504,9 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
          * by sample-and-hold when source is 22 kHz.                         */
         uint64_t t2 = esp_timer_get_time();
         size_t frames = (size_t)bytes_read / frame_bytes;
-        size_t out_idx = 0u;
-        for (size_t i = 0; i < frames; i++) {
-            const int16_t *p = (const int16_t *)(raw_buf + i * frame_bytes);
-            float L = (float)p[0] / 32768.0f;
-            float R = (fmt->channels == 2u) ? (float)p[1] / 32768.0f : L;
-            flt_buf[out_idx * 2u]      = L;
-            flt_buf[out_idx * 2u + 1u] = R;
-            out_idx++;
-            if (upsample_2x) {
-                flt_buf[out_idx * 2u]      = L;
-                flt_buf[out_idx * 2u + 1u] = R;
-                out_idx++;
-            }
-        }
+        size_t out_idx = bg_convert_to_stereo_float((const int16_t *)raw_buf,
+                                                    frames, fmt->channels,
+                                                    upsample_2x, flt_buf);
         uint64_t t3 = esp_timer_get_time();
         total_conv_us += (t3 - t2);
 
@@ -547,6 +578,202 @@ static void bg_stream_http_pcm(esp_http_client_handle_t client,
     free(raw_buf);
     free(flt_buf);
 }
+
+#if CONFIG_BG_SUPPORT_MP3
+/* ---------------------------------------------------------------------------
+ * bg_looks_like_mp3 — magic-byte container sniff
+ *
+ * Returns true for an 'ID3' tag (ID3v2 metadata precedes the audio) or an MPEG
+ * audio frame sync (0xFF followed by a byte whose top three bits are all set).
+ * This is deliberately loose — minimp3 does the real validation frame by frame;
+ * we only need to route away from the WAV path. Called on the first bytes read.
+ * --------------------------------------------------------------------------- */
+static bool bg_looks_like_mp3(const uint8_t *buf, size_t len)
+{
+    if (len >= 3u && buf[0] == 'I' && buf[1] == 'D' && buf[2] == '3') {
+        return true;                         /* ID3v2 tag */
+    }
+    if (len >= 2u && buf[0] == 0xFFu && (buf[1] & 0xE0u) == 0xE0u) {
+        return true;                         /* MPEG frame sync */
+    }
+    return false;
+}
+
+/* MP3 carry buffer capacity. Must hold one full HTTP read PLUS the un-consumed
+ * tail of a frame that straddles two reads (max MP3 frame ~1441 B). Sizing it a
+ * full chunk + 2 KB guarantees we can always append a fresh read to whatever
+ * partial frame is left over, so no frame is ever lost at a chunk boundary. */
+#define BG_MP3_CARRY_BYTES  (BG_HTTP_CHUNK_BYTES + 2048u)
+
+/* ---------------------------------------------------------------------------
+ * bg_stream_http_mp3 — decode and stream MP3 from an open HTTP connection
+ *
+ * Unlike WAV (fixed-size frames, byte-copy), MP3 frames are variable length and
+ * routinely straddle the 16 KB HTTP reads. The loop keeps a carry buffer: each
+ * pass appends a fresh read to the un-consumed tail, then decodes every complete
+ * frame minimp3 can find, using info.frame_bytes (bytes consumed) to memmove the
+ * remainder to the front. Decoded int16 PCM funnels through the SAME
+ * bg_convert_to_stereo_float() tail as WAV, so the ring format is identical and
+ * the consumer needs no knowledge of the source codec.
+ *
+ *   client   — open esp_http_client positioned just past the sniffed header.
+ *   seed     — header bytes already read for detection (fed into the carry buf).
+ *   seed_len — count of seed bytes (may be 0).
+ * --------------------------------------------------------------------------- */
+static void bg_stream_http_mp3(esp_http_client_handle_t client,
+                               const uint8_t *seed, size_t seed_len)
+{
+    /* Decoder state (~7 KB) tolerates PSRAM; the carry buffer and PCM output are
+     * touched every decode so they stay in fast INTERNAL DRAM. flt_buf (float
+     * scratch, written once per frame) goes to PSRAM like the WAV path.        */
+    mp3dec_t *dec     = heap_caps_malloc(sizeof(mp3dec_t), MALLOC_CAP_SPIRAM);
+    uint8_t  *carry   = heap_caps_malloc(BG_MP3_CARRY_BYTES,
+                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    int16_t  *pcm     = heap_caps_malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t),
+                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    /* Worst case per frame: 1152 samples/ch, 2x upsample, stereo = 4608 floats. */
+    const size_t flt_floats = 1152u * 2u /*upsample*/ * 2u /*stereo*/;
+    float    *flt_buf = heap_caps_malloc(flt_floats * sizeof(float),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!flt_buf) {
+        flt_buf = heap_caps_malloc(flt_floats * sizeof(float), MALLOC_CAP_8BIT);
+    }
+    if (!dec || !carry || !pcm || !flt_buf) {
+        ESP_LOGE(TAG, "BG MP3: buffer malloc failed (dec=%p carry=%p pcm=%p flt=%p)",
+                 dec, carry, pcm, flt_buf);
+        free(dec); free(carry); free(pcm); free(flt_buf);
+        return;
+    }
+    mp3dec_init(dec);
+
+    /* Seed the carry buffer with the bytes already consumed for detection. */
+    size_t carry_len = 0u;
+    if (seed != NULL && seed_len > 0u) {
+        if (seed_len > BG_MP3_CARRY_BYTES) {
+            seed_len = BG_MP3_CARRY_BYTES;
+        }
+        memcpy(carry, seed, seed_len);
+        carry_len = seed_len;
+    }
+
+    bool format_locked = false;
+    bool upsample_2x   = false;
+    bool eof           = false;
+
+    ESP_LOGI(TAG, "BG MP3: decoder ready (carry=%u B)", (unsigned)BG_MP3_CARRY_BYTES);
+
+    while (s_bg.streaming) {
+        if (s_bg.ring == NULL) {
+            break;
+        }
+
+        /* Producer pacing — identical rationale to the WAV loop: never let a
+         * full ring block esp_http_client_read (avoids the TCP zero-window
+         * cascade documented in bg_stream_http_wav).                          */
+        const size_t WATERMARK_FREE_BYTES = BG_HTTP_CHUNK_BYTES * 16u;
+        if (xStreamBufferSpacesAvailable(s_bg.ring) < WATERMARK_FREE_BYTES) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        /* 1. Refill: read into the free tail of the carry buffer. */
+        if (!eof && carry_len < BG_MP3_CARRY_BYTES) {
+            int want = (int)(BG_MP3_CARRY_BYTES - carry_len);
+            int n = esp_http_client_read(client, (char *)(carry + carry_len), want);
+            if (n > 0) {
+                carry_len += (size_t)n;
+            } else {
+                if (n < 0) {
+                    ESP_LOGW(TAG, "BG MP3: read error %d mid-stream", n);
+                } else {
+                    ESP_LOGI(TAG, "BG MP3: EOF reached");
+                }
+                eof = true;    /* stop reading; drain remaining frames, then exit */
+            }
+        }
+
+        /* 2. Decode every complete frame currently buffered. */
+        bool made_progress = false;
+        while (carry_len > 0u) {
+            mp3dec_frame_info_t info;
+            int samples = mp3dec_decode_frame(dec, carry, (int)carry_len, pcm, &info);
+
+            if (info.frame_bytes == 0) {
+                /* No complete frame at the head — need more input; go refill. */
+                break;
+            }
+            /* Consume what this call used (a real frame, or skipped ID3/junk). */
+            memmove(carry, carry + info.frame_bytes,
+                    carry_len - (size_t)info.frame_bytes);
+            carry_len -= (size_t)info.frame_bytes;
+            made_progress = true;
+
+            if (samples <= 0) {
+                continue;      /* skipped metadata / non-audio frame */
+            }
+
+            /* Lock + validate format on the first decoded frame (Step 6). */
+            if (!format_locked) {
+                if (info.hz == 44100) {
+                    upsample_2x = false;
+                } else if (info.hz == 22050) {
+                    upsample_2x = true;
+                } else {
+                    ESP_LOGE(TAG,
+                             "BG MP3: unsupported sample rate %d Hz (need 44100 or "
+                             "22050) — re-encode the source. Aborting BG stream.",
+                             info.hz);
+                    goto mp3_done;
+                }
+                if (info.channels != 1 && info.channels != 2) {
+                    ESP_LOGE(TAG, "BG MP3: unsupported channel count %d — aborting.",
+                             info.channels);
+                    goto mp3_done;
+                }
+                ESP_LOGI(TAG, "BG MP3: %d Hz / %d ch / %d kbps — upsample=%s",
+                         info.hz, info.channels, info.bitrate_kbps,
+                         upsample_2x ? "yes (22->44 kHz S&H)" : "no");
+                format_locked = true;
+            }
+
+            size_t out_frames = bg_convert_to_stereo_float(pcm, (size_t)samples,
+                                                           (unsigned)info.channels,
+                                                           upsample_2x, flt_buf);
+            size_t bytes_to_send = out_frames * 2u * sizeof(float);
+            if (bytes_to_send > 0u && s_bg.ring != NULL) {
+                size_t sent = xStreamBufferSend(s_bg.ring, flt_buf, bytes_to_send,
+                                                pdMS_TO_TICKS(100));
+                if (sent < bytes_to_send) {
+                    ESP_LOGW(TAG, "BG MP3: ring short write (%zu/%zu)",
+                             sent, bytes_to_send);
+                }
+                s_bg.bytes_streamed += (uint32_t)sent;
+            }
+        }
+
+        /* 3a. Corrupt-stream guard: a full carry buffer with no decodable frame
+         *     and no EOF would otherwise spin forever (can't refill, can't
+         *     decode). Valid MP3 frames are <1.5 KB so this never trips on good
+         *     data; abort defensively on garbage.                             */
+        if (!eof && !made_progress && carry_len >= BG_MP3_CARRY_BYTES) {
+            ESP_LOGE(TAG, "BG MP3: no frame in a full carry buffer — corrupt "
+                          "stream, aborting.");
+            break;
+        }
+        /* 3b. Normal termination: EOF reached and the tail is drained (or only a
+         *     truncated partial frame remains that can never complete).        */
+        if (eof && (!made_progress || carry_len < 4u)) {
+            break;
+        }
+    }
+
+mp3_done:
+    free(dec);
+    free(carry);
+    free(pcm);
+    free(flt_buf);
+}
+#endif /* CONFIG_BG_SUPPORT_MP3 */
 
 /* ---------------------------------------------------------------------------
  * bg_stream_from_http — open HTTP/HTTPS connection and stream WAV audio
@@ -625,6 +852,22 @@ static esp_err_t bg_stream_from_http(const char *url)
         return ESP_FAIL;
     }
 
+    /* Container detection by magic bytes (NOT file extension): the WAV path
+     * needs 'RIFF'; MP3 streams start with an 'ID3' tag or an MPEG frame sync.
+     * The header bytes are already in hand from the read above.               */
+#if CONFIG_BG_SUPPORT_MP3
+    if (bg_looks_like_mp3(hdr_buf, (size_t)hdr_bytes)) {
+        ESP_LOGI(TAG, "BG HTTP: detected MP3 stream for '%s'", url);
+        bg_stream_http_mp3(client, hdr_buf, (size_t)hdr_bytes);
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        ESP_LOGI(TAG,
+                 "BG HTTP: stream ended for '%s' (bytes_streamed=%u, streaming=%d)",
+                 url, s_bg.bytes_streamed, (int)s_bg.streaming);
+        return ESP_OK;
+    }
+#endif
+
     wav_format_t fmt;
     size_t consumed_bytes = 0u;
     esp_err_t wav_err = wav_parse_header(hdr_buf, (size_t)hdr_bytes,
@@ -650,7 +893,7 @@ static esp_err_t bg_stream_from_http(const char *url)
                                   ? (size_t)hdr_bytes - consumed_bytes
                                   : 0u;
 
-    bg_stream_http_pcm(client, &fmt, leftover, leftover_len);
+    bg_stream_http_wav(client, &fmt, leftover, leftover_len);
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);

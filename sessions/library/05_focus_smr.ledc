@@ -1,0 +1,38 @@
+# 005 Focus / Flow (SMR) — sustained calm-alert concentration, 30:00
+# Goal: knowledge-worker / student deep-work block. Hold 14 Hz SMR (calm focus).
+# Bands: induction ~10 Hz (alpha) -> deepen -> HOLD 14 Hz SMR -> exit toward 12 Hz, end ALERT.
+#
+# SAFETY DESIGN — the 14 Hz beat is AUDIO-CARRIED, the light is STEADY (no flicker):
+#   14-16 Hz sits at the lower edge of the 15-25 Hz photosensitive flicker danger band
+#   (§4). So the beat is delivered 100% by AUDIO isochronic `modulation` on ch1, and the
+#   LED `frequency` is held at 0 Hz (steady illumination) for the ENTIRE session — it
+#   NEVER pulses at the beat rate. A steady (non-pulsed) lamp cannot photically drive or
+#   trigger seizures. LED brightness is ramped up over 15 s at the start (never abrupt),
+#   capped dim/cool (<=40%), and never cut to 0 (focus end is alert, light stays on).
+#   Audio volume capped at 60/100. Sustained single target — NOT cyclic, no LFO on beat.
+#
+# Field maps:
+#   LED:   time freq duty bright R G B mask        (freq 0 = STEADY cool white, mask 15)
+#   Audio: A time freq pan vol mod ch [freq_r] [wave]   (wave 0 sine, 5 pink)
+
+# --- LED: STEADY cool-white lamp (180,200,255), freq 0 = no flicker, mask 15 ---
+0       0 100 >0 180 200 255 15      # lamp steady; brightness fade-in begins from 0
+15000   0 100 25 180 200 255 15      # brightness reaches 25% (15 s ramp-in, >=10 s safety rule)
+300000  0 100 >25 180 200 255 15     # deepening: brightness ramp START 25 ...
+600000  0 100 40 180 200 255 15      # ... TARGET 40% at 10:00 (dim/moderate, capped)
+1620000 0 100 >40 180 200 255 15     # exit: gentle brightness ease START 40 ...
+1800000 0 100 35 180 200 255 15      # ... TARGET 35% at end — light STAYS ON (alert end)
+
+# --- Audio ch1: isochronic driver — 300 Hz sine carrier, AUDIO carries the beat ---
+A 0       300 0 >0 10 1              # induction: 300 Hz, vol fade-in from 0, beat 10 Hz (alpha)
+A 45000   300 0 55 10 1             # vol settled 55 (~45 s fade-in), still 10 Hz
+A 300000  300 0 55 >10 1            # deepening: beat ramp START 10 Hz ...
+A 600000  300 0 60 14 1            # ... TARGET 14 Hz at 10:00 — HOLD begins (therapeutic core)
+A 1620000 300 0 60 >14 1           # exit: beat ramp START 14 Hz ... (hold ran 10:00-27:00 = 17 min)
+A 1800000 300 0 50 12 1            # ... TARGET 12 Hz at end (SMR/alpha border) — ends ALERT, ON
+
+# --- Audio ch2: pink-noise focus bed (wave 5), steady, masks distraction (not an entrainer) ---
+A 0       220 0 >0 0 2 0 5          # pink bed, vol fade-in from 0
+A 45000   220 0 20 0 2 0 5         # bed settled at vol 20 (steady pink)
+A 1620000 220 0 >20 0 2 0 5        # gentle ease START 20 ...
+A 1800000 220 0 18 0 2 0 5         # ... TARGET 18 at end — still ON at alert end

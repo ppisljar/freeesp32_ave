@@ -286,6 +286,65 @@ function restoreDefaults() {
         .catch(err => showMessage('Restore failed: ' + err, 'error'));
 }
 
+// Build a download-friendly timestamp like 20260630-134005 from a Date.
+function fileTimestamp(d) {
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+        `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// Export the fresh canonical settings (from GET, so no password) as a
+// pretty-printed .json file downloaded by the browser.
+function exportSettings() {
+    fetch('/api/settings')
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(obj => {
+            const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `freeesp32_ave-settings-${fileTimestamp(new Date())}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showMessage('Settings exported (password not included)', 'success');
+        })
+        .catch(err => showMessage('Export failed: ' + err, 'error'));
+}
+
+// Open the hidden file picker to import a settings .json.
+function importSettings() {
+    const el = document.getElementById('settingsImportFile');
+    if (el) el.click();
+}
+
+// File-change handler: parse the picked .json and load it into the form for
+// review. Does NOT POST — the user reviews and clicks Save / Save & Reboot.
+function onImportFile(ev) {
+    const input = ev.target;
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            const obj = JSON.parse(reader.result);
+            if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+                throw new Error('not a settings object');
+            }
+            render(obj);
+            applyVisibility();
+            showMessage('Imported — review the fields and click Save to apply.', 'success');
+        } catch (err) {
+            showMessage('Import failed: ' + err, 'error');
+        }
+    };
+    reader.onerror = () => showMessage('Import failed: could not read file', 'error');
+    reader.readAsText(file);
+    // Reset so re-picking the same file re-fires change.
+    input.value = '';
+}
+
 function bind(id, fn) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', fn);
@@ -296,5 +355,9 @@ export function settingsInit() {
     bind('btnSettingsReboot', saveAndReboot);
     bind('btnSettingsRestore', restoreDefaults);
     bind('btnSettingsReload', loadSettings);
+    bind('btnSettingsExport', exportSettings);
+    bind('btnSettingsImport', importSettings);
+    const fileEl = document.getElementById('settingsImportFile');
+    if (fileEl) fileEl.addEventListener('change', onImportFile);
     loadSettings();
 }
