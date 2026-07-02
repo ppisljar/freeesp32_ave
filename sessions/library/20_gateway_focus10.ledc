@@ -1,0 +1,79 @@
+# Gateway Focus 10 — "Mind Awake / Body Asleep" — ~30 min — delta + theta stack, long steady hold
+# Goal: Monroe-style Focus-10 state — the body deeply relaxed ("asleep") while the mind
+#       stays alert and aware. NOT a beat-glide session: Focus levels are built by ADDING
+#       fixed binaural layers over time (delta bed -> theta stack), then holding steady.
+# Method: BINAURAL — HEADPHONES REQUIRED (each layer is a true L/R carrier pair; pan 0).
+#
+# Patent upgrade (Monroe US 5,213,562 / 5,356,368 — see reports/session_research/monroe_patents_guide.md
+#   §4a phased pink bed, §4b septon stack, §3 mix staging): the dominant 200[4.0] theta layer is now a
+#   3-carrier SEPTON stack (L 200/204/208, R 204/208/212 -> 4 Hz binaural AND monaural beat, speaker-
+#   robust), and a phased pink-noise bed (wave 5, pan L<->R on a 6 s sine LFO) rides ~-18 dB under the
+#   beats (+30% claimed FFR). Layer vols restaged to the patent mix: dominant ~65 combined, secondary
+#   -10..-15 dB, bed -18 dB. Carriers/beats otherwise UNCHANGED from the measured tape map.
+#
+# Measured layer table (from reports/session_research/gateway_focus_construction_guide.md §1):
+#   Layer        carrier[beat Hz]      channel    band     vol
+#   100[1.5]     100 -> 101.5           ch1        delta    30 (secondary)
+#   200[4.0]     septon 200/204/208     ch2/5/6    theta    22 x3 (dominant)
+#   250[4.0]     250 -> 254.0           ch3        theta    30 (secondary)
+#   300[4.0]     300 -> 304.0           ch4        theta    30 (secondary)
+#   pink bed     200 (noise, wave 5)    ch7        ~200     8  (-18 dB, phased L<->R 6 s)
+#   (binaural beat = freq_r - carrier; all carriers < 1000 Hz, offsets < 35 Hz)
+#
+# LED: dim violet flicker locked to the SAFE 4 Hz theta rate for the whole session
+#      (never the delta/higher beats). Brightness capped <=25%, ramps in over 20 s,
+#      gentle breathing LFO, faded to 0 on the multi-minute return. Four zones (mask 15).
+# SAFETY (guidelines §4 + guide §3): LED flicker fixed at 4 Hz — far below the 15-25 Hz
+#   photosensitive band; brightness <=25% with a floor, ramp-in >=15 s, ramp-out over
+#   minutes (never abrupt); dim violet only (no saturated red, no red<->blue). Binaural
+#   carriers 100-300 Hz (<1000), offsets 1.5-4 Hz (<35). Audio <=~65.
+#
+# Ramp convention = animate-on-start (guidelines 5a): the > prefix sits on the row where a
+# segment BEGINS; its value is the start; the target is the next same-channel/field row.
+
+# --- Prep / fade-in (00:00-03:00): delta bed + phased pink bed + LED fade in ---
+0 4 50 >0 90 0 200 15            # LED 4 Hz violet, brightness ramps 0->20% over 20 s
+A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta bed; vol fades 0->30 over 60 s; sine
+A 0 200 ~-100:100:6000 >0 0 7 0 5   # ch7 phased pink bed; pan L<->R 6 s LFO; vol fades 0->8; wave 5 pink
+S 2000 default 65 "Settle in. Let the breath slow and the body grow heavy, softening from head to toe."
+20000 4 50 20 90 0 200 15        # brightness reaches 20% (ramp-in >=15 s done)
+30000 4 50 ~12:22:10000 90 0 200 15   # breathing LFO: brightness sine 12<->22% over 10 s
+A 60000 100 0 30 0 1 101.5 7  # ch1 delta holds vol 30 through the session
+A 60000 200 ~-100:100:6000 8 0 7 0 5   # ch7 pink bed holds vol 8; pan LFO continues
+
+# --- Focus-10 establishment (03:00-08:00): bring in the septon theta stack ---
+S 180000 default 65 "Entering Focus Ten. The body drifts toward sleep while the mind stays clear, awake, and watchful."
+A 180000 200 0 >0 0 2 204 7  # ch2 septon 200->204; vol fades 0->22 over 45 s
+A 180000 204 0 >0 0 5 208 7  # ch5 septon 204->208; vol fades 0->22 over 45 s
+A 180000 208 0 >0 0 6 212 7  # ch6 septon 208->212; vol fades 0->22 over 45 s
+A 180000 250 0 >0 0 3 254 7  # ch3 250[4.0] theta; vol fades 0->30 over 45 s
+A 180000 300 0 >0 0 4 304 7  # ch4 300[4.0] theta; vol fades 0->30 over 45 s
+A 225000 200 0 22 0 2 204 7  # ch2 septon holds 22
+A 225000 204 0 22 0 5 208 7  # ch5 septon holds 22
+A 225000 208 0 22 0 6 212 7  # ch6 septon holds 22
+A 225000 250 0 30 0 3 254 7  # ch3 theta holds 30
+A 225000 300 0 30 0 4 304 7  # ch4 theta holds 30
+
+# --- Long steady hold (08:00-26:00 = 18 min): full F10 stack, no changes ---
+S 480000 default 65 "Mind awake, body asleep. Rest in this open, effortless stillness."
+S 960000 default 65 "Nothing to do here. Simply notice, and let awareness float, quiet and wide."
+
+# --- Gentle return + soft fade (26:00-30:00): fade the stack, bed, and light to zero ---
+S 1560000 default 65 "Beginning to return now. Draw your awareness gently back toward the body."
+A 1560000 100 0 >30 0 1 101.5 7  # ch1 delta vol 30->0 over 4 min
+A 1560000 200 0 >22 0 2 204 7  # ch2 septon vol 22->0
+A 1560000 204 0 >22 0 5 208 7  # ch5 septon vol 22->0
+A 1560000 208 0 >22 0 6 212 7  # ch6 septon vol 22->0
+A 1560000 250 0 >30 0 3 254 7  # ch3 theta vol 30->0
+A 1560000 300 0 >30 0 4 304 7  # ch4 theta vol 30->0
+A 1560000 200 ~-100:100:6000 >8 0 7 0 5   # ch7 pink bed vol 8->0; pan LFO continues
+1560000 4 50 >20 90 0 200 15     # LED brightness 20->0 over the return (preempts LFO)
+S 1770000 default 65 "Coming fully back to the room, calm, clear, and rested."
+A 1800000 100 0 0 0 1 101.5 7  # end: ch1 volume 0
+A 1800000 200 0 0 0 2 204 7  # end: ch2 volume 0
+A 1800000 204 0 0 0 5 208 7  # end: ch5 volume 0
+A 1800000 208 0 0 0 6 212 7  # end: ch6 volume 0
+A 1800000 250 0 0 0 3 254 7  # end: ch3 volume 0
+A 1800000 300 0 0 0 4 304 7  # end: ch4 volume 0
+A 1800000 200 ~-100:100:6000 0 0 7 0 5   # end: ch7 pink bed volume 0
+1800000 4 50 0 90 0 200 15       # end: brightness 0

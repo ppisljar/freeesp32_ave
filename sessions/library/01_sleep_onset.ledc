@@ -22,6 +22,7 @@
 0       >10 50 >0             255 100 0 255    # LED all-ch: 10 Hz flicker, bright 0-> over 10 s ramp-in, amber
 A 0     >245 0 >0 0 1 255 0                    # ch1 binaural: L carrier 245 / R(freq_r) 255 = 10 Hz beat; vol fade-in start
 A 0     0 0 >0 0 3 0 5                         # ch3 pink-noise bed (wave_type 5); vol fade-in start
+S 3000 default 65 "Beginning at ten hertz, in alpha. Let your breath slow and your body grow heavy."
 
 # t=0:10  Brightness has reached the breathing band -> start breathing LFO
 #         (sine 25<->30% over a 10 s period ~ 6 breaths/min). Induction only.
@@ -38,12 +39,14 @@ A 45000 >245.3 0 55 0 1 255 0                  # ch1 vol 55; carrier glides on t
 #         brightness descent begins 30->15. LED flicker tracks beat -> 8 Hz.
 300000  >8 50 >30            255 100 0 255     # LED: freq 8 Hz, bright 30->15 descent
 A 300000 >247 0 55 0 1 255 0                   # ch1 beat 8 Hz; carrier glides toward 250
+S 300000 default 65 "Drifting down into theta, eight hertz. Sinking toward light sleep."
 
 # ---------------------------------------------------------------------------
 # t=15:00  Deep descent. Beat 5 Hz (carrier 250). Color glide amber->deep-red
 #          begins; brightness 15->5.
 900000  >5 50 >15           >255 >100 >0 255   # LED: freq 5 Hz, bright 15->5, color 255,100,0 -> 180,30,0
 A 900000 >250 0 55 0 1 255 0                   # ch1 beat 5 Hz; carrier glides toward 253
+S 900000 default 65 "Deeper now, five hertz, entering delta. Let go completely."
 
 # ---------------------------------------------------------------------------
 # t=30:00  Delta fade start = SOFT OFF begins. Beat 2 Hz (carrier 253).
@@ -52,6 +55,7 @@ A 900000 >250 0 55 0 1 255 0                   # ch1 beat 5 Hz; carrier glides t
 1800000 >2 50 >5           >180 >30 >0 255     # LED: freq 2 Hz, bright 5->0, color 180,30,0 -> 150,20,0
 A 1800000 >253 0 *55 0 1 255 0                 # ch1 beat 2 Hz; carrier glides toward 254; quad vol fade 55->0
 A 1800000 0 0 *18 0 3 0 5                      # ch3 pink-noise quad fade 18->0
+S 1800000 default 65 "Falling into deep delta, two hertz. The sound and light are fading away. Sleep now."
 
 # ---------------------------------------------------------------------------
 # t=45:00  Soft Off complete. Beat 1 Hz (carrier 254). Brightness 0 AND volume 0
@@ -59,3 +63,4 @@ A 1800000 0 0 *18 0 3 0 5                      # ch3 pink-noise quad fade 18->0
 2700000 1 50 0             150 20 0 255        # LED: 1 Hz, bright 0, dim deep-red (off)
 A 2700000 254 0 0 0 1 255 0                    # ch1 beat 1 Hz, vol 0
 A 2700000 0 0 0 0 3 0 5                        # ch3 pink-noise vol 0
+S 2700000 default 65 "One hertz, deep sleep. Rest."

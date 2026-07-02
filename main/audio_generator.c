@@ -75,6 +75,36 @@ static const char* TAG = "audio_generator";
 
 static float sine_lut[SINE_LUT_SIZE];
 
+// EEG-contour lookup table (AUDIO_WAVE_EEG_CONTOUR).  A single-cycle,
+// non-geometric carrier shape — the Monroe US 5,213,562 "replicated EEG
+// waveform" idea.  It is NOT noise and NOT a beat generator: it is only the
+// *shape* of the carrier; the entrainment beat still comes from the L/R phase
+// detune (current_freq vs current_freq_r), exactly as for the sine carrier.
+//
+// 1024 entries × 4 bytes = 4 KB internal DRAM (vs the 16 KB sine LUT).  Synthesized
+// at init from a short harmonic series (below) — zero baked data, ~a few dozen
+// bytes of coefficients in flash.  Its own index-shift/mask because it is a
+// different size than the 4096-entry sine LUT.
+#define EEG_LUT_SIZE            1024u
+#define EEG_LUT_MASK            (EEG_LUT_SIZE - 1u)
+// Q32 phase: top 10 bits index 1024 entries, low 22 bits are the interp fraction.
+#define EEG_LUT_INDEX_SHIFT     22
+#define EEG_LUT_FRAC_MASK       ((1u << EEG_LUT_INDEX_SHIFT) - 1u)
+#define EEG_LUT_FRAC_SCALE      (1.0f / (float)(1u << EEG_LUT_INDEX_SHIFT))
+static float eeg_lut[EEG_LUT_SIZE];
+
+// Fourier coefficients for the EEG-contour cycle.  Amplitudes taper ~1/n (rich
+// but band-limited to 6 partials — at the therapeutic ≤275 Hz carrier the 6th
+// harmonic is ≤1650 Hz, far below Nyquist, so no aliasing).  The per-harmonic
+// phase offsets break symmetry to give the asymmetric "rounded crest / sharper
+// trough" morphology of slow cortical waves — satisfying the patent's "neither
+// sinusoidal, nor square, nor triangular."  The table is DC-removed and peak-
+// normalized to [-1, +1] at init.  This is an EEG-INSPIRED representative shape,
+// not a clinically-averaged EEG (see feasibility report §5).
+#define EEG_HARMONICS           6
+static const float EEG_HARM_AMP[EEG_HARMONICS]   = { 1.00f, 0.50f, 0.33f, 0.22f, 0.14f, 0.09f };
+static const float EEG_HARM_PHASE[EEG_HARMONICS] = { 0.00f, 0.50f, 1.20f, -0.70f, 0.90f, 2.10f };
+
 // Global audio generator state
 static audio_gen_channel_t audio_channels[NUM_AUDIO_CHANNELS];
 static bool generator_initialized = false;
@@ -109,6 +139,17 @@ static inline float fast_sin_idx(uint32_t int_idx, float frac) {
     return a + frac * (sine_lut[si2] - a);
 }
 
+// EEG-contour LUT lookup + linear interpolation.  Same structure as
+// fast_sin_q32 but with the EEG table's own shift/mask (1024-entry).  Cost is
+// identical to the sine case (~16–20 cy/pair).
+static inline float fast_eeg_q32(uint32_t phase_q32) {
+    uint32_t idx  = (phase_q32 >> EEG_LUT_INDEX_SHIFT) & EEG_LUT_MASK;
+    uint32_t idx2 = (idx + 1u) & EEG_LUT_MASK;
+    float frac = (float)(phase_q32 & EEG_LUT_FRAC_MASK) * EEG_LUT_FRAC_SCALE;
+    float a = eeg_lut[idx];
+    return a + frac * (eeg_lut[idx2] - a);
+}
+
 esp_err_t audio_generator_init(void) {
     if (generator_initialized) {
         return ESP_OK;
@@ -127,6 +168,32 @@ esp_err_t audio_generator_init(void) {
     // here; this is the only sinf() call left in audio_generator.c.
     for (uint32_t i = 0; i < SINE_LUT_SIZE; i++) {
         sine_lut[i] = sinf((2.0f * PI * (float)i) / (float)SINE_LUT_SIZE);
+    }
+
+    // Synthesize the EEG-contour LUT from the harmonic series, then DC-remove and
+    // peak-normalize to [-1, +1].  Done once at init (like the sine LUT); no baked
+    // table.  Zero-mean matters so the carrier carries no DC offset into the mix.
+    {
+        float eeg_mean = 0.0f;
+        for (uint32_t i = 0; i < EEG_LUT_SIZE; i++) {
+            float theta = (2.0f * PI * (float)i) / (float)EEG_LUT_SIZE;
+            float v = 0.0f;
+            for (int h = 0; h < EEG_HARMONICS; h++) {
+                v += EEG_HARM_AMP[h] * sinf((float)(h + 1) * theta + EEG_HARM_PHASE[h]);
+            }
+            eeg_lut[i] = v;
+            eeg_mean += v;
+        }
+        eeg_mean /= (float)EEG_LUT_SIZE;
+        float eeg_peak = 1e-9f;  // guard against divide-by-zero
+        for (uint32_t i = 0; i < EEG_LUT_SIZE; i++) {
+            eeg_lut[i] -= eeg_mean;
+            float mag = fabsf(eeg_lut[i]);
+            if (mag > eeg_peak) eeg_peak = mag;
+        }
+        for (uint32_t i = 0; i < EEG_LUT_SIZE; i++) {
+            eeg_lut[i] /= eeg_peak;
+        }
     }
 
     // Initialize all channels
@@ -357,11 +424,15 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Noise channels (AUDIO_WAVE_NOISE_WHITE and higher) legitimately use
-    // frequency = 0 — no carrier is generated; the phase accumulator still
-    // advances for AM modulation / gating support, but the value is optional.
-    // Skip the frequency range check for all noise wave types.
-    bool is_noise = (params->wave_type >= AUDIO_WAVE_NOISE_WHITE);
+    // Noise channels (WHITE/PINK/BROWN) legitimately use frequency = 0 — no
+    // carrier is generated; the phase accumulator still advances for AM
+    // modulation / gating support, but the value is optional.  Skip the
+    // frequency range check for those.  NOTE: this must be a RANGE test, not
+    // ">= WHITE": AUDIO_WAVE_EEG_CONTOUR (7) is numerically above the noise
+    // types but IS a carrier and requires a valid frequency, so it must NOT be
+    // treated as noise here.
+    bool is_noise = (params->wave_type >= AUDIO_WAVE_NOISE_WHITE &&
+                     params->wave_type <= AUDIO_WAVE_NOISE_BROWN);
     if (!is_noise && (params->frequency <= 0 || params->frequency > AUDIO_SAMPLE_RATE/2)) {
         ESP_LOGE(TAG, "Invalid frequency: %.1f Hz (must be > 0 and <= %d Hz for non-noise types)",
                  params->frequency, AUDIO_SAMPLE_RATE / 2);
@@ -1027,6 +1098,17 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                         channel->brown_acc_r = 0.998f * channel->brown_acc_r + white_r * 0.02f;
                         raw_r = channel->brown_acc_r * 3.5f;
                     }
+                    break;
+
+                case AUDIO_WAVE_EEG_CONTOUR:
+                    // EEG-contour carrier: read the non-geometric single-cycle LUT
+                    // at each ear's phase.  Because phase_l_q32 and phase_r_q32
+                    // advance at current_freq vs current_freq_r (below), the L/R
+                    // detune produces the binaural beat for free — identical
+                    // mechanics to the SINE case, just a different table.  Same
+                    // ~16–20 cy/pair cost.
+                    raw_l = fast_eeg_q32(channel->phase_l_q32);
+                    raw_r = fast_eeg_q32(channel->phase_r_q32);
                     break;
 
                 default:

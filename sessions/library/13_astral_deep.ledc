@@ -1,0 +1,53 @@
+# Astral — Deep / Vibrational (Focus 12) — ~50 min — alpha 10 -> deep theta/delta-border ~3.5 Hz long hold -> gentle return to alpha 10
+# Goal: deeper Monroe Hemi-Sync "Focus 12 / vibrational" practice. Alpha induction, a slow
+#       staged descent through theta to the theta/delta border, a LONG ~26-min flat hold at
+#       the "vibrational threshold", then a GENTLE multi-minute return up to alpha so the
+#       user resurfaces calmly (NOT a sleep/soft-off ending).
+# Bands: induction alpha 10 Hz; descent 10->7->~3.5 Hz; vibrational plateau ~3.5 Hz (the core);
+#        return 3.5->10 Hz. Beat method: BINAURAL only (headphones).
+# Driver: binaural. freq_r FIXED at 220 Hz; the beat slides by ramping the CARRIER
+#         210->216.5 Hz (beat = freq_r - carrier), per guidelines 5a (freq_r is NOT
+#         interpolatable). Low, warm carrier (~210 Hz "synodic moon" range) for the deep phase.
+# LED: OBE wants NEAR-DARKNESS. Warm amber only (R255 G80 B0), VERY dim (<=12%), and NO
+#      flicker (LED freq 0 = steady-on); the only visual motion is a slow breathing brightness
+#      LFO in the early phases. The long deep hold sits at a near-dark ~3% ember. Four zones (mask 15).
+# SAFETY (guidelines 4): no flicker at all (0 Hz steady) so we are far below the 15-25 Hz
+#   photosensitive band; binaural carrier ~210 Hz (<1000), L/R offset = beat <=10 Hz (<35);
+#   warm amber (no saturated red, no red<->blue alternation); brightness capped <=12% with
+#   ramp-in 15 s and fade-out 120 s (both >=10 s), never stopped abruptly; volume fades in
+#   60 s. Descent ramps are slow; the return actively raises the beat to bring the listener up.
+#
+# Ramp convention = animate-on-start (5a): the > prefix sits on the row where a segment
+# BEGINS; its value is the start; the target is the next same-channel/field row over the gap.
+
+# --- Induction: alpha 10 Hz (00:00-06:00): vol + light fade in ---
+0 0 50 >0 255 80 0 15            # LED steady amber (no flicker), brightness ramps 0->12% over 15 s
+A 0 210 0 >0 0 1 220 0           # ch1 binaural: carrier 210 / freq_r 220 => 10 Hz beat; vol fades 0->40 over 60 s; sine
+S 3000 default 65 "Relax completely. Let every muscle soften, and let the body grow still."
+15000 0 50 12 255 80 0 15        # brightness reaches 12% (ramp-in >=10 s done)
+30000 0 50 ~4:10:12000 255 80 0 15   # breathing LFO engages: brightness sine 4<->10% over 12 s
+A 60000 210 0 40 0 1 220 0       # vol reaches 40; carrier held 210 => alpha 10 Hz through induction
+
+# --- Staged descent (06:00-16:00, beat 10->7->3.5 Hz), slow ramps ---
+A 360000 >210 0 40 0 1 220 0     # carrier ramps 210->213 => beat 10->7 over 5 min (0.6 Hz/min)
+360000 0 50 ~3:8:12000 255 80 0 15   # LED dims further, gentle breathing 3<->8%
+S 360000 default 65 "Let go now, drifting downward, sinking deeper with every slow breath."
+A 660000 >213 0 40 0 1 220 0     # carrier ramps 213->216.5 => beat 7->3.5 over 5 min (0.7 Hz/min)
+
+# --- Vibrational plateau: long flat hold (16:00-42:00 = 26 min, beat ~3.5 Hz) ---
+A 960000 216.5 0 40 0 1 220 0    # carrier fixed 216.5 => beat 3.5 Hz held flat (theta/delta border, the "vibrational" threshold)
+960000 0 50 3 255 80 0 15        # near-dark: steady amber ember ~3%, no flicker, held still
+S 960000 default 65 "Mind awake, body asleep. Rest at the threshold, still and aware."
+S 1600000 default 65 "Feel the vibrations rise. Let them move through you, and simply allow it."
+
+# --- Gentle return to alpha (42:00-48:00, beat 3.5->10 Hz) ---
+A 2520000 >216.5 0 40 0 1 220 0  # carrier ramps 216.5->210 => beat 3.5->10 over 6 min; resurface, not sleep
+2520000 0 50 >3 255 80 0 15      # brightness ramps 3->12% back up over the return
+S 2520000 default 65 "Gently now. Beginning the slow return, rising back toward the body."
+
+# --- Soft close (48:00-50:00): vol + brightness fade out ---
+A 2880000 210 0 >40 0 1 220 0    # beat back at alpha 10 Hz; vol ramps 40->0 over final 120 s
+2880000 0 50 >12 255 80 0 15     # brightness fades 12->0 over 120 s (>=10 s), never abrupt
+S 2880000 default 65 "Coming back to the room now, calm, clear, and whole."
+A 3000000 210 0 0 0 1 220 0      # end: volume 0
+3000000 0 50 0 255 80 0 15       # end: brightness 0

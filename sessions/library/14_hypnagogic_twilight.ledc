@@ -1,0 +1,54 @@
+# Hypnagogic Twilight — ~28 min — alpha 10 settle -> theta 6.5 twilight -> imagery hold (8<->12 float) -> soft fade
+# Goal: hold the wake-sleep border for hypnagogic imagery WITHOUT falling asleep.
+#       Settle in alpha, descend to a theta twilight, then a long imagery hold that
+#       gently oscillates the flicker across the bright-safe imagery band while a
+#       "floating frequency" keeps the drive from ever going static (anti-sleep).
+# Bands: induction alpha 10 Hz; descent 10->6.5 Hz; twilight bottom 6.5 Hz (theta);
+#        imagery hold oscillates 8<->12 Hz (centered on the 10 Hz imagery peak).
+# Driver: ISOCHRONIC (audio `mod` = beat Hz, the preferred theta driver; 200 Hz carrier,
+#         sine). Light flicker + audio pulse locked 1:1 at the same Hz throughout.
+# Drift method: LFO. The imagery hold uses a sine LFO on BOTH the LED freq and the
+#         audio mod (`~8:12:75000` = sine 8<->12 Hz, 75 s/cycle). The format applies one
+#         LFO per field (verified: MOD_LED_FREQ + MOD_AUDIO_MOD dispatch in config_parser.c),
+#         so this single slow sine simultaneously provides the 8<->12 imagery-band
+#         oscillation AND the never-static "floating frequency" (Lucia) anti-sleep drift.
+#         A separate breathing brightness LFO (~20:30:10000) adds texture.
+# LED: cool white (200 220 255) drives imagery (white entrains; color is cortical);
+#      violet-blue (90 40 200) for the theta descent/twilight mood. Four zones (mask 15).
+# SAFETY (guidelines 4 + hypnagogic research): imagery flicker kept <=12 Hz for the
+#   whole session (below the 15-25 Hz photosensitive strobe band); NO rate ever reaches
+#   13 Hz+ at bright levels. Brightness capped <=30% (imagery hold ~20-30% breathing).
+#   No saturated-red strobe, no red<->blue alternation (cool white / soft violet-blue only).
+#   Brightness ramps IN 15 s and fades OUT 240 s (both >= the required minimums);
+#   isochronic carrier 200 Hz (<1000). Anti-sleep by design (floating drift), not pro-sleep.
+#
+# Ramp convention = animate-on-start (guidelines 5a): the > prefix sits on the row where a
+# segment BEGINS; its value is the start; the target is the next same-channel/field row.
+
+# --- Settle / induction (00:00-05:00, 10 Hz alpha): vol + light fade in ---
+0 10 50 >0 200 220 255 15         # LED 10 Hz cool white, brightness ramps 0->25% over 15 s
+A 0 200 0 >0 10 1                 # isochronic: 200 Hz carrier pulsed at 10 Hz; vol fades 0->50 over 60 s
+S 3000 default 65 "Let your eyes rest closed and soften your gaze."
+15000 10 50 25 200 220 255 15     # brightness reaches 25% (ramp-in >=15 s done)
+30000 10 50 ~20:30:10000 200 220 255 15   # breathing brightness LFO 20<->30% over 10 s
+A 60000 200 0 50 10 1             # vol settled 50, beat holds 10 Hz (alpha induction)
+
+# --- Descent to theta twilight (05:00-12:00, 10->6.5 Hz) ---
+300000 >10 50 ~20:30:10000 90 40 200 15   # LED freq ramps 10->6.5 over 6 min; mood shifts violet-blue
+A 300000 200 0 50 >10 1           # isochronic beat ramps 10->6.5 lockstep with the light
+S 305000 default 65 "Drifting down now, toward the twilight edge between waking and sleep."
+660000 6.5 50 ~20:30:10000 90 40 200 15   # twilight bottom 6.5 Hz, held ~1 min
+A 660000 200 0 50 6.5 1           # beat 6.5 Hz twilight dwell
+
+# --- Twilight / imagery hold (12:00-24:00, oscillate 8<->12 Hz, float drift) ---
+720000 ~8:12:75000 50 ~20:30:10000 200 220 255 15   # LED freq floats 8<->12 Hz (75 s/cycle); cool white for imagery
+A 720000 200 0 50 ~8:12:75000 1   # isochronic beat floats 8<->12 Hz, locked 1:1 with the light
+S 725000 default 65 "Let images and colors arise — watch them, without holding on."
+S 1080000 default 65 "Rest at the border. Notice the shapes drift and change."
+
+# --- Soft fade (24:00-28:00): flicker settles to 10 Hz, brightness + vol fade to 0 over 4 min ---
+1440000 10 50 >30 200 220 255 15  # oscillation ends, steady 10 Hz; brightness fades 30->0 over 240 s
+A 1440000 200 0 >50 10 1          # beat settles to 10 Hz; vol fades 50->0 over 240 s
+S 1440000 default 65 "Gently returning now."
+1680000 10 50 0 200 220 255 15    # end: brightness 0
+A 1680000 200 0 0 10 1            # end: volume 0

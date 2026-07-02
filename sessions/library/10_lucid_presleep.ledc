@@ -1,0 +1,72 @@
+# ============================================================================
+# 10 Lucid — Pre-Sleep MILD/WILD Induction   *** EXPERIMENTAL [W/P]-tier ***
+# ----------------------------------------------------------------------------
+# Goal:     Run lying in bed, lights off, eyes closed, intending to lucid dream
+#           (pair with a MILD phrase). Walk the user from relaxed waking down to
+#           the hypnagogic threshold, priming a lucid mindset before sleep onset.
+# Duration: 28:00 (1,680,000 ms). Ends in a SOFT OFF -> drift into sleep.
+# Arc (research Arc A "Descent to Hypnagogia"):
+#   1. Induction / relax   00:00-06:00  alpha, beat 10->8 Hz, light 10->8 Hz dim
+#                                        violet, vol + light fade IN, breathing LFO.
+#   2. Descent             06:00-16:00  alpha->theta, beat 8->6 Hz carrier glide.
+#   3. Theta hold + gamma  16:00-24:00  beat 6->5 Hz, light dropping to ~5 Hz
+#                                        VERY dim; a low-volume 40 Hz AUDIO
+#                                        isochronic gamma layer (ch2) joins here.
+#   4. Soft Off            24:00-28:00  light brightness AND all audio volumes
+#                                        fade to 0 together. No wake ramp.
+# Bands:    induction alpha 10->8 Hz; descent 8->6 Hz; theta hold 6->5 Hz;
+#           lucidity gamma 40 Hz (Voss cue) — AUDIO ONLY.
+#
+# SAFETY (guidelines section 4): the 40 Hz lucidity band sits inside the 15-25 Hz
+#   photosensitive danger zone for BRIGHT light, so it is delivered as AUDIO
+#   isochronic ONLY (ch2), NEVER as strobe. All LED flicker is <=10 Hz (eyes
+#   closed cap 12 Hz), dim violet only (no saturated red, no red<->blue). Binaural
+#   carrier ~200 Hz (<1000), L/R offset = beat <=10 Hz (<35). Brightness ramps IN
+#   0->18% over 15 s (>=15 s), capped <=18%, and fades to 0 over the final 4 min
+#   (Soft Off, never abrupt). Volume fades IN over 60 s.
+#
+# *** EXPERIMENTAL: our device is a pre-sleep unit — it cannot detect REM or cue
+# inside a dream like a worn mask. This arc PRIMES a lucid mindset (theta gateway
+# + audio gamma seed); it is not a proven in-dream trigger. ***
+#
+# LED:   time freq duty bright R G B mask   (mask 15 = all four zones)
+# Audio: A time freq pan vol mod ch [freq_r] [wave]   (freq_r fixed => binaural
+#        beat = freq_r - carrier; mod = isochronic beat Hz; wave 0=sine)
+# Ramp convention = animate-on-start: the '>' sits on the EARLIER entry (value =
+# start); target = the next same-channel/field entry, swept over the gap.
+# LFO is self-contained: ~min:max:period_ms (sine).
+# ============================================================================
+
+# ---- LED: dim violet, 10->8->6->5 Hz (1:1 with beat), breathing, Soft Off -----
+0       10 50 >0 90 0 200 15              # t=00:00 10 Hz flicker, brightness fade-in from 0
+15000   10 50 18 90 0 200 15              # t=00:15 brightness 18% reached (15 s ramp-in)
+30000   10 50 ~8:18:10000 90 0 200 15     # t=00:30 breathing LFO: brightness sine 8<->18% /10s
+60000   >10 50 ~8:18:10000 90 0 200 15    # t=01:00 flicker descent START 10 Hz; breathing continues
+360000  >8 50 >18 90 0 200 15             # t=06:00 beat 8 Hz; end breathing, plain brightness 18->10
+960000  >6 50 >10 90 0 200 15             # t=16:00 beat 6 Hz; brightness 10->8 (theta hold, very dim)
+1440000 5 50 >8 90 0 200 15               # t=24:00 beat 5 Hz; SOFT OFF START: brightness 8 -> 0
+1680000 5 50 0 90 0 200 15                # t=28:00 fully off (no wake ramp)
+
+# ---- ch1: binaural driver — carrier glide, freq_r FIXED 210 (beat=210-carrier)
+A 0       200 0 >0 0 1 210 0              # t=00:00 carrier 200 => 10 Hz beat; vol fade-in from 0
+A 60000   >200 0 45 0 1 210 0             # t=01:00 vol 45 reached; carrier glide START 200->202
+A 360000  >202 0 45 0 1 210 0             # t=06:00 beat 8 Hz; carrier glides 202->204
+A 960000  >204 0 45 0 1 210 0             # t=16:00 beat 6 Hz; carrier glides 204->205
+A 1440000 205 0 >45 0 1 210 0             # t=24:00 beat 5 Hz; SOFT OFF: vol 45 -> 0
+A 1680000 205 0 0 0 1 210 0               # t=28:00 silent
+
+# ---- ch2: 40 Hz gamma lucidity cue — AUDIO ISOCHRONIC ONLY (Voss), joins theta
+A 960000  250 0 >0 40 2                   # t=16:00 carrier 250, isochronic mod 40 Hz; vol fade-in from 0
+A 1020000 250 0 15 40 2                   # t=17:00 gamma cue steady at low vol 15
+A 1440000 250 0 >15 40 2                  # t=24:00 SOFT OFF: gamma vol 15 -> 0
+A 1680000 250 0 0 40 2                    # t=28:00 silent
+
+# ---- Speech markers (sparse, calm, at phase transitions) ----------------------
+S 3000 default 65 "Settling into alpha. Let your body grow still while your awareness stays softly awake."
+S 360000 default 65 "Drifting down toward theta, the dream gateway."
+S 960000 default 65 "Resting in theta now. Hold one intention: tonight I will know that I am dreaming."
+S 1200000 default 65 "Let the images drift and form. Watch them, aware, as the body sleeps."
+S 1440000 default 65 "Let go now, and dream aware."
+
+# Soft Off: 24:00-28:00 LED brightness and ALL audio volumes ramp to 0 together.
+# No alpha/SMR exit ramp — the user drifts into sleep primed for lucidity.

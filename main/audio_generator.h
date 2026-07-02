@@ -48,7 +48,11 @@ typedef enum {
     AUDIO_WAVE_NOISE_WHITE = 4,   // White noise — Galois LFSR
     AUDIO_WAVE_NOISE_PINK  = 5,   // Pink noise — Kellet 3-pole IIR
     AUDIO_WAVE_NOISE_BROWN = 6,   // Brown noise — leaky integrator
-    AUDIO_WAVE_COUNT       = 7
+    AUDIO_WAVE_EEG_CONTOUR = 7,   // EEG-contour carrier — non-geometric single-cycle
+                                  // LUT (Monroe US 5,213,562 "replicated EEG waveform").
+                                  // A CARRIER (needs a valid frequency), not noise; the
+                                  // binaural beat still comes from L/R detune.
+    AUDIO_WAVE_COUNT       = 8
 } audio_wave_type_t;
 
 typedef enum {
@@ -372,7 +376,7 @@ typedef struct {
     float    pan;               // -100..+100 (UI scale)
     float    volume;            // 0..100 (% — UI scale)
     float    modulation;        // beat/modulation freq in Hz
-    uint8_t  wave_type;         // 0=sine, 1=square, 2=triangle, 3=sawtooth, 4=white, 5=pink, 6=brown
+    uint8_t  wave_type;         // 0=sine, 1=square, 2=triangle, 3=sawtooth, 4=white, 5=pink, 6=brown, 7=eeg
     bool     mod_freq_active;
     bool     mod_pan_active;
     bool     mod_vol_active;

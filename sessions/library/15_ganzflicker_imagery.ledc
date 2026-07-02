@@ -1,0 +1,46 @@
+# Ganzflicker Imagery — ~20 min — 10 Hz induction -> sustained 10 Hz imagery hold (float +/-0.5) -> soft fade
+# Goal: a focused flicker-induced-imagery journey. Settle at the 10 Hz imagery peak,
+#       then a long bright-safe hold at ~10 Hz to watch geometric forms and color arise,
+#       kept alive by a "floating frequency" micro-drift, then a gentle fade.
+# Bands: induction alpha 10 Hz; imagery hold 10 Hz with +/-0.5 Hz float (9.5<->10.5 Hz).
+#        10 Hz is the empirically strongest flicker-imagery frequency (Klüver form-constants,
+#        vivid color) and sits BELOW the photosensitive danger band.
+# Driver: ISOCHRONIC 10 Hz audio partner (audio `mod` = beat Hz; 200 Hz carrier, sine),
+#         locked 1:1 with the light flicker at the same Hz (they float together).
+# Drift method: LFO. The hold uses a sine LFO on BOTH the LED freq and the audio mod
+#         (`~9.5:10.5:8000` = sine 9.5<->10.5 Hz, 8 s/cycle) — the Lucia "floating
+#         frequency" +/-0.5 Hz micro-drift. Verified the freq field accepts the ~ LFO
+#         (MOD_LED_FREQ + MOD_AUDIO_MOD dispatch in config_parser.c), so one sine per field
+#         does it. A breathing brightness LFO (~25:30:10000) adds texture, capped at 30%.
+# LED: cool white (200 220 255) — white drives imagery (color is cortical, not entraining).
+#      Four zones (mask 15). NO red (avoids the classic red<->black Ganzflicker paradigm).
+# SAFETY (guidelines 4 + hypnagogic/flicker research): flicker LOCKED in the 8-12 Hz
+#   bright-safe imagery band the whole session — never 13 Hz+ (well clear of the 15-25 Hz
+#   photosensitive strobe band). Brightness capped <=30% (breathing 25-30%). No saturated-red
+#   strobe, no red<->blue alternation (cool white only). Brightness ramps IN 15 s and fades
+#   OUT 240 s; isochronic carrier 200 Hz (<1000). Single session <=~20 min per research.
+#
+# Ramp convention = animate-on-start (guidelines 5a): the > prefix sits on the row where a
+# segment BEGINS; its value is the start; the target is the next same-channel/field row.
+
+# --- Induction (00:00-04:00, 10 Hz): vol + light fade in ---
+0 10 50 >0 200 220 255 15         # LED 10 Hz cool white, brightness ramps 0->30% over 15 s
+A 0 200 0 >0 10 1                 # isochronic: 200 Hz carrier pulsed at 10 Hz; vol fades 0->50 over 60 s
+S 3000 default 65 "Let your eyes rest closed and soften your gaze."
+15000 10 50 30 200 220 255 15     # brightness reaches 30% cap (ramp-in >=15 s done)
+30000 10 50 ~25:30:10000 200 220 255 15   # breathing brightness LFO 25<->30% over 10 s
+A 60000 200 0 50 10 1             # vol settled 50, beat holds 10 Hz
+
+# --- Imagery hold (04:00-16:00, ~10 Hz with +/-0.5 Hz floating drift) ---
+240000 ~9.5:10.5:8000 50 ~25:30:10000 200 220 255 15   # LED freq floats 9.5<->10.5 Hz (8 s/cycle); cool white
+A 240000 200 0 50 ~9.5:10.5:8000 1   # isochronic beat floats 9.5<->10.5 Hz, locked 1:1 with the light
+S 240000 default 65 "Watch the geometric shapes and colors begin to form."
+S 480000 default 65 "Let the patterns move and shift — just observe, without holding on."
+S 720000 default 65 "Colors and forms arise on their own. Stay with them, at ease."
+
+# --- Soft fade (16:00-20:00): flicker settles to 10 Hz, brightness + vol fade to 0 over 4 min ---
+960000 10 50 >30 200 220 255 15   # float ends, steady 10 Hz; brightness fades 30->0 over 240 s
+A 960000 200 0 >50 10 1           # beat settles to 10 Hz; vol fades 50->0 over 240 s
+S 960000 default 65 "Gently returning now. Let the images fade."
+1200000 10 50 0 200 220 255 15    # end: brightness 0
+A 1200000 200 0 0 10 1            # end: volume 0

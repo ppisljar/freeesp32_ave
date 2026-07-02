@@ -25,11 +25,16 @@
 
 # --- Audio ch1: isochronic driver — 300 Hz sine carrier, AUDIO carries the beat ---
 A 0       300 0 >0 10 1              # induction: 300 Hz, vol fade-in from 0, beat 10 Hz (alpha)
+S 3000 default 65 "Starting at ten hertz, in alpha. Let your attention settle and steady."
 A 45000   300 0 55 10 1             # vol settled 55 (~45 s fade-in), still 10 Hz
 A 300000  300 0 55 >10 1            # deepening: beat ramp START 10 Hz ...
+S 300000 default 65 "Rising now toward fourteen hertz, sharpening into calm, alert focus."
 A 600000  300 0 60 14 1            # ... TARGET 14 Hz at 10:00 — HOLD begins (therapeutic core)
+S 600000 default 65 "You have reached SMR, fourteen hertz. Hold here, focused and relaxed. Let your work flow."
 A 1620000 300 0 60 >14 1           # exit: beat ramp START 14 Hz ... (hold ran 10:00-27:00 = 17 min)
+S 1620000 default 65 "Easing gently toward twelve hertz. Stay alert as the session winds down."
 A 1800000 300 0 50 12 1            # ... TARGET 12 Hz at end (SMR/alpha border) — ends ALERT, ON
+S 1800000 default 65 "Twelve hertz, alert and clear. Carry this focus with you."
 
 # --- Audio ch2: pink-noise focus bed (wave 5), steady, masks distraction (not an entrainer) ---
 A 0       220 0 >0 0 2 0 5          # pink bed, vol fade-in from 0

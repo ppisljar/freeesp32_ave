@@ -16,10 +16,10 @@ export const SAMPLE_RATE        = 44100; // AUDIO_GEN_SAMPLE_RATE
 export const NYQUIST            = SAMPLE_RATE / 2; // 22050
 
 // Waveform types — index = the integer emitted in the 8th audio token.
-// 0 sine, 1 square, 2 triangle, 3 sawtooth, 4 white, 5 pink, 6 brown.
-export const WAVE_TYPES = ['sine', 'square', 'triangle', 'sawtooth', 'white', 'pink', 'brown'];
-export const WAVE_COUNT = WAVE_TYPES.length; // 7 (AUDIO_WAVE_COUNT)
-export const NOISE_WAVE_TYPES = [4, 5, 6];   // white / pink / brown
+// 0 sine, 1 square, 2 triangle, 3 sawtooth, 4 white, 5 pink, 6 brown, 7 eeg.
+export const WAVE_TYPES = ['sine', 'square', 'triangle', 'sawtooth', 'white', 'pink', 'brown', 'eeg'];
+export const WAVE_COUNT = WAVE_TYPES.length; // 8 (AUDIO_WAVE_COUNT)
+export const NOISE_WAVE_TYPES = [4, 5, 6];   // white / pink / brown (eeg=7 is a carrier, NOT noise)
 
 // Interpolation kinds used inside a Cell.
 //   none → bare step value

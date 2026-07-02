@@ -23,8 +23,39 @@ const Q32 = 4294967296;                 // 2^32
 const Q32_PER_HZ = Q32 / SAMPLE_RATE;   // matches audio_generator.c:68
 const TWO_PI = Math.PI * 2;
 
+// ---- EEG-contour single-cycle table (mirrors audio_generator.c eeg_lut) -----
+// Same harmonic coefficients, DC-removed + peak-normalized. 1024-entry, top-10
+// bits index / low-22 bits interpolate — matching the firmware Q32 lookup so the
+// browser bounce/preview is a perceptual match for wave_type=7.
+const EEG_HARM_AMP   = [1.00, 0.50, 0.33, 0.22, 0.14, 0.09];
+const EEG_HARM_PHASE = [0.00, 0.50, 1.20, -0.70, 0.90, 2.10];
+const EEG_LUT_SIZE = 1024;
+const eegLut = (() => {
+    const t = new Float32Array(EEG_LUT_SIZE);
+    let mean = 0;
+    for (let i = 0; i < EEG_LUT_SIZE; i++) {
+        const theta = TWO_PI * i / EEG_LUT_SIZE;
+        let v = 0;
+        for (let h = 0; h < EEG_HARM_AMP.length; h++) v += EEG_HARM_AMP[h] * Math.sin((h + 1) * theta + EEG_HARM_PHASE[h]);
+        t[i] = v; mean += v;
+    }
+    mean /= EEG_LUT_SIZE;
+    let peak = 1e-9;
+    for (let i = 0; i < EEG_LUT_SIZE; i++) { t[i] -= mean; const m = Math.abs(t[i]); if (m > peak) peak = m; }
+    for (let i = 0; i < EEG_LUT_SIZE; i++) t[i] /= peak;
+    return t;
+})();
+function eegSample(phase) {
+    const p = phase >>> 0;
+    const idx  = (p >>> 22) & (EEG_LUT_SIZE - 1);
+    const idx2 = (idx + 1) & (EEG_LUT_SIZE - 1);
+    const frac = (p & 0x3FFFFF) / 0x400000;   // low 22 bits
+    const a = eegLut[idx];
+    return a + frac * (eegLut[idx2] - a);
+}
+
 // ---- Waveform from a Q32 phase (audio_generator.c section 2/7) -------------
-// wave: 0 sine 1 square 2 triangle 3 saw  (4/5/6 = noise, handled separately)
+// wave: 0 sine 1 square 2 triangle 3 saw 7 eeg  (4/5/6 = noise, handled separately)
 export function waveform(wave, phase) {
     switch (wave) {
         case 1: return (phase >>> 0) < 0x80000000 ? 1 : -1;                 // square
@@ -34,6 +65,7 @@ export function waveform(wave, phase) {
             return f * (2 / 0x7FFFFFFF) - 1;
         }
         case 3: return (phase | 0) / 0x80000000;                           // sawtooth (signed/2^31)
+        case 7: return eegSample(phase);                                   // EEG-contour carrier
         default: return Math.sin(TWO_PI * (phase >>> 0) / Q32);            // sine (0)
     }
 }
@@ -146,9 +178,9 @@ export function renderSession(channels, opts = {}) {
             const since = i - startSample;
             if (since < fadeSamples) amp *= since / fadeSamples;
 
-            // Oscillator (noise waves 4/5/6 handled here).
+            // Oscillator (noise waves 4/5/6 handled here; eeg=7 is a carrier → waveform()).
             let rawL, rawR;
-            if (ent.wave >= 4) {
+            if (ent.wave >= 4 && ent.wave <= 6) {
                 let w;
                 [w, nsL] = whiteStep(nsL);
                 if (ent.wave === 5) {         // pink (Kellet)
