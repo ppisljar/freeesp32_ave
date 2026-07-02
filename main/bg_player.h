@@ -149,6 +149,31 @@ void bg_player_mix_into(float *output_buffer, size_t samples);
 esp_err_t bg_player_start_push(float pan, float loudness);
 
 /**
+ * @brief How many milliseconds of audio are currently buffered in the ring.
+ *
+ * Used by the timeline "prime gate": when a session's BG is push://, the
+ * timeline start is deferred until this reaches a threshold (so the pushed
+ * audio is sample-aligned to session t=0). Returns 0 if there is no ring.
+ * Valid in either producer mode; meaningful during a push fill.
+ *
+ * @return Buffered audio duration in milliseconds (44.1 kHz stereo float ring).
+ */
+uint32_t bg_player_push_buffered_ms(void);
+
+/**
+ * @brief Prime-gate hold: buffer pushed BG without playing it.
+ *
+ * While held, bg_player_mix_into() adds no BG to the output and does NOT drain
+ * the ring — the pushed audio accumulates. The timeline arms this when a push://
+ * session starts and releases it (bg_player_push_release) at the exact moment it
+ * dispatches t=0, so BG sample 0 == session t=0.
+ */
+void bg_player_push_hold(void);
+
+/** @brief Release the prime-gate hold — BG playback begins from sample 0. */
+void bg_player_push_release(void);
+
+/**
  * @brief Feed interleaved 16-bit PCM into the ring (blocking / backpressured).
  *
  * Converts `frames` int16 frames (channels 1 or 2) to 44.1 kHz stereo float via

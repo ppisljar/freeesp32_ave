@@ -24,16 +24,21 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
     const rows = (doc && doc.rows) || [];
     const speechRows = rows.filter(r => r.kind === 'speech' && r.text && r.text.trim());
 
-    // 1. Synthesize each speech line (sequential = ordered).
+    // 1. Synthesize each speech line (sequential = ordered). This is the slow
+    //    part (one network TTS call per line), so it drives most of the progress
+    //    bar: onProgress(msg, frac) — frac in [0,1], synth spans 0..0.8.
     const speeches = [];
-    if (speechRows.length) log('Synthesizing ' + speechRows.length + ' speech line(s) via ' + engine + '…');
-    for (const s of speechRows) {
+    if (speechRows.length) log('Synthesizing ' + speechRows.length + ' speech line(s) via ' + engine + '…', 0.02);
+    for (let si = 0; si < speechRows.length; si++) {
+        const s = speechRows[si];
         const buf = await synthSpeech(s.text, { voice: s.voice, engine });
         speeches.push({
             offset: Math.floor((s.time / 1000) * SAMPLE_RATE),
             buf,
             gain: clamp01((s.volume == null ? 80 : s.volume) / 100),
         });
+        log('Synthesized speech ' + (si + 1) + '/' + speechRows.length,
+            ((si + 1) / speechRows.length) * 0.8);
     }
 
     // 2. Decode the session BG clip so speech can be mixed onto it.
@@ -53,7 +58,7 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
             if (rec) { try { bgBuf = await decodeFile(rec.wavBlob); } catch (e) { bgBuf = null; } }
             else bgNote = 'BG clip "' + name + '" not in library — not baked';
         } else if (url.indexOf('http://') === 0 || url.indexOf('https://') === 0) {
-            log('Fetching BG ' + url + '…');
+            log('Fetching BG ' + url + '…', 0.82);
             let ab;
             try {
                 const r = await fetch(url);
@@ -79,7 +84,7 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
         if (endMs > totalMs) totalMs = endMs;
     }
     if (totalMs < 1000) totalMs = 1000;
-    log('Rendering ' + Math.round(totalMs / 1000) + 's…');
+    log('Rendering ' + Math.round(totalMs / 1000) + 's…', 0.9);
     await tick(); // let any status UI paint before the synchronous render
 
     // 4. Base: A entrainment mix (scope 'all') or silence.

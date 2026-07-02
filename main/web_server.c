@@ -18,6 +18,9 @@
 #if CONFIG_BG_SUPPORT_PUSH
 #include "esp_http_client.h"     // GET /api/tts — outbound proxy to Google Translate TTS
 #include "esp_crt_bundle.h"      // TLS CA bundle for the TTS proxy HTTPS GET
+#include "freertos/FreeRTOS.h"   // async worker pool for long-running handlers
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #endif
 #include "esp_timer.h"
 #include "esp_system.h"          // esp_restart (POST /api/reboot)
@@ -73,8 +76,10 @@ static esp_err_t example_handler(httpd_req_t *req);
 static esp_err_t play_config_handler(httpd_req_t *req);
 static esp_err_t patch_config_handler(httpd_req_t *req);
 #if CONFIG_BG_SUPPORT_PUSH
-static esp_err_t bg_stream_handler(httpd_req_t *req);
-static esp_err_t tts_handler(httpd_req_t *req);
+static esp_err_t bg_stream_handler(httpd_req_t *req);   // thin async entry
+static esp_err_t bg_stream_work(httpd_req_t *req);      // real body (worker task)
+static esp_err_t tts_handler(httpd_req_t *req);         // thin async entry
+static esp_err_t tts_work(httpd_req_t *req);            // real body (worker task)
 #endif
 static esp_err_t state_handler(httpd_req_t *req);
 static esp_err_t report_handler(httpd_req_t *req);
@@ -95,6 +100,66 @@ static esp_err_t reports_delete_handler(httpd_req_t *req);
 static esp_err_t logs_handler(httpd_req_t *req);
 static esp_err_t coredump_handler(httpd_req_t *req);
 static esp_err_t coredump_erase_handler(httpd_req_t *req);
+
+#if CONFIG_BG_SUPPORT_PUSH
+// ---------------------------------------------------------------------------
+// Async request offload — a worker pool for long-running handlers
+// ---------------------------------------------------------------------------
+// esp_http_server runs EVERY handler in its ONE server task, so a long handler
+// blocks all other endpoints (even /api/stop). bg-stream streams for the whole
+// audio duration; tts blocks on an outbound HTTPS fetch. We move both off the
+// server task via the async-request API: the thin sync entry snapshots the
+// request (httpd_req_async_handler_begin), queues it, and returns immediately —
+// freeing the server task — while a worker pool runs the real body and calls
+// httpd_req_async_handler_complete() when done.
+// 1 worker keeps internal-DRAM cost to a single 8 KB stack (this ESP32 is
+// internal-DRAM constrained). It offloads the common single long-request case
+// (one bg-stream OR one tts); a second concurrent long request runs inline (the
+// timeout cap still bounds any stall). tts needs ~8 KB for mbedTLS.
+#define ASYNC_WORKERS      1
+#define ASYNC_QUEUE_DEPTH  4
+#define ASYNC_WORKER_STACK 8192
+
+typedef esp_err_t (*async_work_fn)(httpd_req_t *req);
+typedef struct { httpd_req_t *req; async_work_fn fn; } async_job_t;
+static QueueHandle_t s_async_queue;
+
+static void async_worker_task(void *arg)
+{
+    async_job_t job;
+    for (;;) {
+        if (xQueueReceive(s_async_queue, &job, portMAX_DELAY) == pdTRUE) {
+            job.fn(job.req);                              // run the real handler body
+            httpd_req_async_handler_complete(job.req);    // release the socket
+        }
+    }
+}
+
+// Thin sync entry: snapshot the request into an async handle, queue it, return.
+// Falls back to running the body inline if the async machinery is unavailable
+// (no pool, or no free socket to promote the request) so the endpoint still
+// works — it just briefly blocks the server task as it did before.
+static esp_err_t async_dispatch(httpd_req_t *req, async_work_fn fn)
+{
+    if (!s_async_queue) {
+        return fn(req);                               // no worker pool — run inline
+    }
+    httpd_req_t *areq = NULL;
+    if (httpd_req_async_handler_begin(req, &areq) != ESP_OK) {
+        return fn(req);                               // can't promote — run inline
+    }
+    async_job_t job = { .req = areq, .fn = fn };
+    if (xQueueSend(s_async_queue, &job, 0) != pdTRUE) {
+        // All workers busy and the queue is full — shed load rather than block.
+        httpd_resp_set_status(areq, "503 Service Unavailable");
+        httpd_resp_set_type(areq, "application/json");
+        httpd_resp_sendstr(areq, "{\"ok\":false,\"error\":\"server busy\"}");
+        httpd_req_async_handler_complete(areq);
+        return ESP_OK;
+    }
+    return ESP_OK;
+}
+#endif // CONFIG_BG_SUPPORT_PUSH
 
 esp_err_t web_server_init(void)
 {
@@ -167,6 +232,13 @@ esp_err_t web_server_init(void)
     // Enable wildcard matching so "/*" can serve arbitrary static assets.
     // Exact /api/... handlers are registered first and keep priority.
     config.uri_match_fn = httpd_uri_match_wildcard;
+#if CONFIG_BG_SUPPORT_PUSH
+    // Max the server allows is LWIP_MAX_SOCKETS (10) minus the 3 it reserves
+    // internally = 7 (also the default). Anything higher makes httpd_start fail
+    // with ESP_ERR_INVALID_ARG and the web server never comes up. 7 comfortably
+    // covers 2 in-flight async requests (bg-stream + tts) plus UI traffic.
+    config.max_open_sockets = 7;
+#endif
 
     // Start HTTP server
     esp_err_t ret = httpd_start(&g_server_state.server, &config);
@@ -175,6 +247,19 @@ esp_err_t web_server_init(void)
         free(g_server_state.upload_buffer);
         return ret;
     }
+
+#if CONFIG_BG_SUPPORT_PUSH
+    // Spin up the async worker pool that runs long handlers off the server task.
+    s_async_queue = xQueueCreate(ASYNC_QUEUE_DEPTH, sizeof(async_job_t));
+    if (s_async_queue) {
+        for (int i = 0; i < ASYNC_WORKERS; i++) {
+            xTaskCreate(async_worker_task, "http_async", ASYNC_WORKER_STACK,
+                        NULL, 5, NULL);
+        }
+    } else {
+        ESP_LOGE(TAG, "async worker queue alloc failed — long handlers run inline");
+    }
+#endif
 
     // Register URI handlers. Exact /api/... routes are registered first; the
     // wildcard static-asset handler ("/*") is registered LAST (below) so the
@@ -1237,6 +1322,10 @@ static esp_err_t patch_config_handler(httpd_req_t *req)
 // Only one push stream may run at a time (guarded); a second concurrent POST
 // gets 409. A superseding play is achieved by the browser stopping first.
 #define BG_STREAM_RECV_BYTES 8192u
+// Max consecutive httpd_req_recv timeouts before aborting a stalled push. The
+// httpd recv_wait_timeout is ~5 s, so 2 bounds a stalled client to ~10 s before
+// the worker is freed and the server is responsive again (vs hanging forever).
+#define BG_STREAM_MAX_TIMEOUTS 2
 static volatile int s_bg_stream_busy = 0;
 
 // Push a run of PCM bytes into bg_player, maintaining a 0..3 byte frame carry
@@ -1268,7 +1357,14 @@ static bool bg_stream_feed_pcm(const uint8_t *buf, size_t len,
     return true;
 }
 
+// Thin async entry — offload the (potentially minutes-long) push to a worker so
+// the server task stays free for /api/stop, /api/state, live control, etc.
 static esp_err_t bg_stream_handler(httpd_req_t *req)
+{
+    return async_dispatch(req, bg_stream_work);
+}
+
+static esp_err_t bg_stream_work(httpd_req_t *req)
 {
     // ----- Parse query string (pan / loudness / stop) -----------------------
     float pan = 0.0f, loudness = 50.0f;
@@ -1313,10 +1409,13 @@ static esp_err_t bg_stream_handler(httpd_req_t *req)
     const char *err_msg = NULL;
     int http_err = 0;
 
+    /* PSRAM, not internal DRAM: these 8 KB buffers were failing to allocate
+     * under internal-DRAM pressure (competing with the WAV pull's raw_buf),
+     * OOMing the push. PSRAM is ample and fast enough for the recv/convert. */
     uint8_t *stage = heap_caps_malloc(BG_STREAM_RECV_BYTES + 4u,
-                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     uint8_t *rb    = heap_caps_malloc(BG_STREAM_RECV_BYTES,
-                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!stage || !rb) {
         free(stage); free(rb);
         s_bg_stream_busy = 0;
@@ -1337,11 +1436,24 @@ static esp_err_t bg_stream_handler(httpd_req_t *req)
     uint8_t carry[4]; size_t carry_len = 0;
     size_t remaining = req->content_len;
     bool ended = false;   // push mode ended mid-stream (stop / supersede)
+    // Bound consecutive recv timeouts. A real-time audio push that goes silent
+    // for this long means the client stalled or half-closed — abort rather than
+    // retry forever. Retrying without a cap would spin the single httpd worker
+    // indefinitely, wedging the ENTIRE web server (no other request, not even
+    // /api/stop, could be served) while audio/LED tasks kept running.
+    int recv_timeouts = 0;
 
     while (remaining > 0 && !ended) {
         size_t want = remaining > BG_STREAM_RECV_BYTES ? BG_STREAM_RECV_BYTES : remaining;
         int r = httpd_req_recv(req, (char *)rb, want);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;   // transient — retry
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++recv_timeouts > BG_STREAM_MAX_TIMEOUTS) {
+                status = ESP_FAIL; err_msg = "recv timeout (client stalled)"; http_err = 1;
+                break;
+            }
+            continue;                                 // transient — retry (bounded)
+        }
+        recv_timeouts = 0;                            // progress resets the counter
         if (r <= 0) { status = ESP_FAIL; err_msg = "recv error"; http_err = 1; break; }
         remaining -= (size_t)r;
 
@@ -1453,7 +1565,14 @@ static int tts_urlencode_append(char *dst, size_t cap, size_t off, const char *s
     return (int)o;
 }
 
+// Thin async entry — the outbound HTTPS fetch to Google would otherwise block
+// the server task for the whole request; run it on a worker instead.
 static esp_err_t tts_handler(httpd_req_t *req)
+{
+    return async_dispatch(req, tts_work);
+}
+
+static esp_err_t tts_work(httpd_req_t *req)
 {
     // ----- Parse query: tl (lang, default en), q (text, required) ----------
     size_t qlen = httpd_req_get_url_query_len(req) + 1;

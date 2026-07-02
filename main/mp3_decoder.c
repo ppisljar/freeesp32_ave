@@ -24,6 +24,13 @@
  * format the BG ring's int16->float conversion tail already expects.
  * MINIMP3_ONLY_MP3 drops the MPEG-1/2 Layer I/II tables we never use. The ESP32
  * is Xtensa, so minimp3 auto-selects its portable (no-SIMD) code path. */
+/* Place minimp3's ~16 KB decode scratch in PSRAM (.ext_ram.bss) instead of the
+ * stack or scarce internal DRAM. Requires CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_
+ * MEMORY=y; without it EXT_RAM_BSS_ATTR is a no-op and it falls back to internal
+ * .bss. See the LOCAL PATCH note in minimp3.h. */
+#include "esp_attr.h"
+#define MINIMP3_SCRATCH_ATTR EXT_RAM_BSS_ATTR
+
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_ONLY_MP3
 #include "minimp3.h"

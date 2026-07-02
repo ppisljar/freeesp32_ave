@@ -155,12 +155,12 @@ static const char *TAG = "bg_player";
 #define BG_AMP_RAMP_SAMPLES     220u
 
 /** Producer task stack depth in bytes.
- *  minimp3's mp3dec_decode_frame() declares a mp3dec_scratch_t as a LOCAL — that
- *  single struct is ~16 KB on the stack (grbuf 4.6 KB + syn 8.4 KB + maindata +
- *  gr_info). 12 KB overflowed it (observed panic). 24 KB covers the scratch plus
- *  the surrounding HTTP/decode frames. The WAV path needs only ~4 KB; the extra
- *  is reserved whenever BG is active but harmless (one task).                    */
-#define BG_STREAMER_STACK_BYTES 24576u
+ *  12 KB: enough for the WAV path (~4 KB) plus minimp3's non-scratch decode
+ *  frames. minimp3's big ~16 KB mp3dec_scratch_t is NOT on this stack — it was
+ *  patched to `static` in minimp3.h (moved to .bss) precisely so this task stack
+ *  stays small enough to allocate from the ESP32's fragmented internal DRAM.
+ *  (24 KB — needed if the scratch were on-stack — fails to allocate mid-session.) */
+#define BG_STREAMER_STACK_BYTES 12288u
 
 /** Producer task FreeRTOS priority.
  *  LED task = 23, timing dispatch = 22, audio output = 5.
@@ -232,6 +232,10 @@ typedef struct {
 
     volatile bool active;               /* consumer gate: true → mix_into is live   */
     volatile bool streaming;            /* producer gate: true → keep producing      */
+    volatile bool hold;                 /* prime gate: true → BUFFER but don't drain/
+                                         * play (mix_into outputs silence, ring keeps
+                                         * filling) until the timeline releases it so
+                                         * BG sample 0 aligns with session t=0.      */
 
     char  url[256];                     /* copy of source URL from config_bg_entry_t */
     float pan;                          /* [-1.0, +1.0]; 0 = centre                 */
@@ -402,13 +406,13 @@ static void bg_stream_http_wav(esp_http_client_handle_t client,
                                 const uint8_t *leftover,
                                 size_t leftover_len)
 {
-    /* Scratch buffers explicitly in INTERNAL DRAM. At BG_HTTP_CHUNK_BYTES=16 KB
-     * default malloc would route them to PSRAM (above ALWAYSINTERNAL threshold)
-     * which slows the producer's per-byte conversion loop. */
-    /* raw_buf stays in INTERNAL DRAM — the int16→float convert loop reads
-     * it in a tight loop and PSRAM access there is measurably slower. */
+    /* raw_buf in PSRAM. It was INTERNAL DRAM (faster for the tight int16->float
+     * loop), but internal DRAM is scarce on this build (WiFi/LWIP + async pool +
+     * diagnostics) and this 16 KB alloc was failing outright after long uptime,
+     * killing all BG. PSRAM is plenty fast here — the convert loop runs at ~24%
+     * producer-busy with headroom to spare — and never fails. */
     uint8_t *raw_buf = heap_caps_malloc(BG_HTTP_CHUNK_BYTES,
-                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     const size_t frame_bytes  = (size_t)(fmt->channels) * (fmt->bits_per_sample / 8u);
     const size_t max_frames   = BG_HTTP_CHUNK_BYTES / frame_bytes;
 
@@ -1440,6 +1444,27 @@ esp_err_t bg_player_stop_async(void)
  * Browser-push producer (bg_browser_push_plan.md, Phase 1)
  * --------------------------------------------------------------------------- */
 
+uint32_t bg_player_push_buffered_ms(void)
+{
+    /* Only count once push mode is genuinely active — before the browser's
+     * /api/bg-stream arrives (which resets the ring in bg_player_start_push),
+     * any leftover ring bytes are stale and must NOT prematurely trip the gate. */
+    if (s_bg.ring == NULL || !s_bg.active || s_bg.producer_kind != BG_PRODUCER_PUSH) {
+        return 0u;
+    }
+    /* Ring holds 44.1 kHz stereo float: 2 floats * 4 bytes = 8 bytes per frame,
+     * 44100 frames per second. ms = frames * 1000 / 44100. */
+    size_t bytes  = xStreamBufferBytesAvailable(s_bg.ring);
+    size_t frames = bytes / (2u * sizeof(float));
+    return (uint32_t)(((uint64_t)frames * 1000ULL) / 44100ULL);
+}
+
+/* Prime gate: buffer the pushed BG but DON'T play it yet (mix_into stays silent
+ * and leaves the ring untouched). Set from config_parser when a push:// session
+ * is armed, cleared when the timeline actually starts (or on stop).            */
+void bg_player_push_hold(void)    { s_bg.hold = true;  }
+void bg_player_push_release(void) { s_bg.hold = false; }
+
 esp_err_t bg_player_start_push(float pan, float loudness)
 {
     if (s_bg.state_mutex == NULL) {
@@ -1623,7 +1648,10 @@ void bg_player_mix_into(float *output_buffer, size_t samples)
     /* Guard: return immediately if BG is not active.
      * The output task SHOULD gate with bg_player_is_active() before calling,
      * but this check provides a safety net.                                    */
-    if (!s_bg.active || s_bg.ring == NULL) {
+    if (!s_bg.active || s_bg.ring == NULL || s_bg.hold) {
+        /* hold: prime gate armed — leave the ring untouched (buffering) and add
+         * no BG to the output, so playback begins exactly when the timeline
+         * releases the hold (see bg_player_push_release).                       */
         return;
     }
 

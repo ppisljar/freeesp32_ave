@@ -15,6 +15,7 @@ import { serialize } from './serialize.js';
 import { validate } from './validate.js';
 import { playDoc, stop, patchLine, pushBg } from './transport.js';
 import { bounceSession, pushSessionBg } from './bounce.js';
+import { playSession } from './play.js';
 import { getEngine } from './tts.js';
 import * as bgstore from './bgstore.js';
 import { initTextView } from './views/text.js';
@@ -223,37 +224,10 @@ function saveAs() {
 }
 
 // ---- Transport bar ---------------------------------------------------------
-// Play the session as-is: run the timeline on the device (speech stripped), then
-// stream the session's push:// BG clip (if any) so it plays underneath.
-function playNormal() {
-    return playDoc(doc)
-        .then(res => {
-            showMessage(res || 'Playing', 'success');
-            const p = pushSessionBg(doc);   // null if BG isn't a push:// clip
-            if (p) p.catch(err => showMessage('Session BG: ' + err.message, 'error'));
-        })
-        .catch(err => showMessage('Play error: ' + err, 'error'));
-}
-
-async function onPlay() {
-    if (!doc.rows.length) { showMessage('Nothing to play', 'error'); return; }
-    const hasSpeech = doc.rows.some(r => r.kind === 'speech');
-    if (!hasSpeech) { playNormal(); return; }
-
-    // Session has speech: auto-merge BG + Speech into one WAV (no prompt), push
-    // it as the background, and play the timeline so the device synthesizes the
-    // A tones live. TTS phrases are cached, so repeat plays are fast.
-    try {
-        showMessage('Preparing speech…', 'info');
-        const res = await bounceSession(doc, {
-            scope: 'bgspeech', engine: getEngine(), onProgress: m => showMessage(m, 'info'),
-        });
-        await playDoc(doc);                          // A kept, S stripped by serializeForDevice
-        await pushBg(res.blob, { pan: 0, loudness: 100 });
-        showMessage('Playing (speech merged into background)', 'success');
-    } catch (err) {
-        showMessage('Play error: ' + (err.message || err), 'error');
-    }
+// Play the session through the shared path (also used by the Home Play button):
+// device timeline (A + LED), speech merge, and push:// BG streaming.
+function onPlay() {
+    return playSession(doc);
 }
 
 // Bounce the whole session (BG + Speech + A) to a WAV → save to library + download.
@@ -301,7 +275,6 @@ export function generatorInit() {
     bind('btnGenSave', saveCurrent);
     bind('btnGenSaveAs', saveAs);
     bind('btnGenPlay', onPlay);
-    bind('btnGenStopLocal', onStop);
     bind('btnGenApply', onApplyLive);
     bind('btnGenBounce', onBounce);
 

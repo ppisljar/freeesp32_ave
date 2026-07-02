@@ -9,6 +9,10 @@ import { saveReport } from './reportstore.js';
 import {
     parseValueInterp, audioStateAtTime, ledStateAtTime,
 } from './gen/interp.js';
+// Play through the SAME path as the Generator (parse → playSession) so the Home
+// Play button handles speech (S) rows and push:// BG, not just a raw device POST.
+import { parse } from './gen/parse.js';
+import { playSession } from './gen/play.js';
 
 // Report-on-session-end. Rather than guessing when a session finishes, we
 // fetch the report when the live-control poll detects the timeline's
@@ -220,24 +224,18 @@ export function playConfig() {
         return;
     }
 
-    fetch('/api/play-config', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'text/plain'
-        },
-        body: config
-    })
-    .then(response => response.text())
-    .then(result => {
-        showMessage(result, 'success');
-        // The report fires when the poll detects the timeline stop (natural end
-        // or early STOP) — no guessing. The fallback (parsed duration + 10 s)
-        // only covers a session too short for the 1 s poll to catch the edge.
-        const durMs = parseConfigDurationMs(config);
-        armReport(durMs + 10000);
-        showMessage('Playing — report when the session ends', 'info');
-    })
-    .catch(error => showMessage('Play error: ' + error, 'error'));
+    // Parse to the shared model and play via the same code path as the Generator
+    // (device timeline + speech merge + push:// BG). playSession handles its own
+    // success/error messaging.
+    const { doc } = parse(config);
+    playSession(doc);
+
+    // Report-on-session-end stays a Home feature: the report fires when the poll
+    // detects the timeline stop; the fallback (parsed duration + 10 s) only
+    // covers a session too short for the 1 s poll to catch the edge.
+    const durMs = parseConfigDurationMs(config);
+    armReport(durMs + 10000);
+    showMessage('Playing — report when the session ends', 'info');
 }
 
 export function clearConfig() {

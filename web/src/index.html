@@ -23,6 +23,12 @@
 
         <div id="status" class="status info" style="display:none"></div>
 
+        <!-- Bounce progress (speech synth + mix can take several seconds) -->
+        <div id="bounceProg" class="bounce-prog" style="display:none">
+            <div class="bounce-prog-track"><div id="bounceProgBar" class="bounce-prog-bar"></div></div>
+            <span id="bounceProgText" class="bounce-prog-text"></span>
+        </div>
+
         <!-- ===================== HOME ===================== -->
         <div class="page active" id="page-home">
             <div class="section">
@@ -74,7 +80,6 @@
                 <!-- Transport bar -->
                 <div class="gen-transport">
                     <button id="btnGenPlay" style="background:#28a745;">▶ Play</button>
-                    <button id="btnGenStopLocal" style="background:#dc3545;">■ Stop</button>
                     <button id="btnGenApply">⚡ Apply live</button>
                     <button id="btnGenBounce" title="Render the whole session (BG + Speech + A) to one WAV">⭯ Bounce</button>
                     <span id="genRowMeter" class="gen-meter">0 / 100 entries</span>

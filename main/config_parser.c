@@ -422,6 +422,59 @@ esp_err_t config_parser_parse_file(const char *file_path, config_timeline_t *tim
     return ret;
 }
 
+/* ---------------------------------------------------------------------------
+ * BG push:// prime gate
+ * ---------------------------------------------------------------------------
+ * When a session's BG is a push:// clip, the browser-pushed audio (often with
+ * baked speech) must be sample-aligned to session t=0. So the timeline start is
+ * DEFERRED: bg_player buffers the pushed audio but holds it silent
+ * (bg_player_push_hold) while a 100 ms poll waits until the ring holds
+ * BG_PRIME_THRESHOLD_MS (or BG_PRIME_TIMEOUT_MS elapses — start anyway). Then the
+ * timeline task latches T0, releases the hold, and dispatches t=0 in one breath.
+ */
+#define BG_PRIME_THRESHOLD_MS    500u
+#define BG_PRIME_TIMEOUT_MS     5000u
+static volatile bool      bg_prime_pending = false;
+static uint32_t           bg_prime_deadline_ms = 0;
+static esp_timer_handle_t bg_prime_poll_timer = NULL;
+
+static inline bool bg_is_push_url(const char *url)
+{
+    return url && strncmp(url, "push://", 7) == 0;
+}
+
+// esp_timer callback: nudge the timeline task to re-check the prime condition.
+static void bg_prime_poll_cb(void *arg)
+{
+    (void)arg;
+    if (timeline_task_handle) {
+        xTaskNotifyGive(timeline_task_handle);
+    }
+}
+
+static void bg_prime_poll_start(void)
+{
+    if (!bg_prime_poll_timer) {
+        const esp_timer_create_args_t args = {
+            .callback = bg_prime_poll_cb,
+            .name = "bg_prime_poll",
+        };
+        if (esp_timer_create(&args, &bg_prime_poll_timer) != ESP_OK) {
+            bg_prime_poll_timer = NULL;
+        }
+    }
+    if (bg_prime_poll_timer) {
+        esp_timer_start_periodic(bg_prime_poll_timer, 100000ULL);   // 100 ms
+    }
+}
+
+static void bg_prime_poll_stop(void)
+{
+    if (bg_prime_poll_timer) {
+        esp_timer_stop(bg_prime_poll_timer);
+    }
+}
+
 esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 {
     if (!timeline || timeline->count == 0) {
@@ -479,6 +532,28 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 
     current_timeline = &persistent_timeline;
     current_entry_index = 0;
+
+    // ---- BG push:// prime gate ------------------------------------------------
+    // For a push:// BG the browser-pushed audio must be sample-aligned to t=0, so
+    // defer the whole start (T0 latch + t=0 dispatch) to the timeline task, which
+    // fires it once the pushed audio has primed (see the poll branch in
+    // timeline_execution_task). current_entry_index = (size_t)-1 so the task's ++
+    // yields 0 and it dispatches the t=0 batch itself. bg_player_push_hold()
+    // buffers the push but keeps it silent until that exact moment.
+    if (persistent_timeline.has_bg && bg_is_push_url(persistent_timeline.bg.url)) {
+        timeline_loop = loop;
+        timeline_running = true;
+        current_entry_index = (size_t)-1;
+        bg_prime_pending = true;
+        bg_prime_deadline_ms = (xTaskGetTickCount() * portTICK_PERIOD_MS) + BG_PRIME_TIMEOUT_MS;
+        bg_player_push_hold();
+        bg_prime_poll_start();
+        ESP_LOGI(TAG, "BG push:// '%s' — deferring timeline start until %ums buffered (or %ums)",
+                 persistent_timeline.bg.url, (unsigned)BG_PRIME_THRESHOLD_MS,
+                 (unsigned)BG_PRIME_TIMEOUT_MS);
+        return ESP_OK;
+    }
+
     timeline_start_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
     // Layer 2 (Plan 007 Step 2.1): capture the single canonical T0.
@@ -682,6 +757,13 @@ esp_err_t config_parser_stop_timeline(void)
     }
 
     ESP_LOGI(TAG, "Stopping timeline execution");
+
+    // Cancel a pending BG push:// prime gate (stopped before it primed).
+    if (bg_prime_pending) {
+        bg_prime_pending = false;
+        bg_prime_poll_stop();
+        bg_player_push_release();
+    }
 
     timeline_running = false;
     current_timeline = NULL;
@@ -1512,6 +1594,39 @@ static void timeline_execution_task(void *pvParameters)
         if (!timeline_running || !current_timeline) {
             xSemaphoreGive(timeline_mutex);
             continue;
+        }
+
+        // ---- BG push:// prime gate ----
+        // Hold the timeline until the pushed BG has buffered enough (or the
+        // timeout fires), then latch T0, release the hold, and fall through so the
+        // normal batch logic dispatches t=0 (current_entry_index is (size_t)-1, so
+        // the ++ below makes it 0). This aligns BG sample 0 with session t=0.
+        if (bg_prime_pending) {
+            uint32_t buffered = bg_player_push_buffered_ms();
+            uint32_t now_ms   = xTaskGetTickCount() * portTICK_PERIOD_MS;
+            bool timed_out = (int32_t)(now_ms - bg_prime_deadline_ms) >= 0;
+            if (buffered < BG_PRIME_THRESHOLD_MS && !timed_out) {
+                xSemaphoreGive(timeline_mutex);
+                continue;                       // not primed yet — wait for next poll
+            }
+            bg_prime_pending = false;
+            bg_prime_poll_stop();
+            timeline_start_time    = now_ms;
+            transport_origin_us    = esp_timer_get_time();
+            last_session_origin_us = transport_origin_us;
+            bg_player_push_release();            // BG playback begins now, at t=0
+            lock_free_message_t start_msg = {
+                .type = MSG_TYPE_TIMELINE_EVENT,
+                .timestamp_us = esp_timer_get_time(),
+                .data_size = sizeof(uint32_t),
+            };
+            uint32_t tc = current_timeline->count;
+            memcpy(start_msg.data, &tc, sizeof(uint32_t));
+            lock_free_ring_buffer_t *q = lock_free_get_timeline_queue();
+            if (q) lock_free_send_message(q, &start_msg);
+            ESP_LOGI(TAG, "BG prime %s (buffered=%ums) — starting timeline",
+                     timed_out ? "TIMEOUT" : "ready", (unsigned)buffered);
+            // fall through (mutex held) → current_entry_index++ → 0 → dispatch t=0
         }
 
         current_entry_index++;

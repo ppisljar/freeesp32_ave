@@ -1715,7 +1715,16 @@ int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_bytes, mp3d_s
     int i = 0, igr, frame_size = 0, success = 1;
     const uint8_t *hdr;
     bs_t bs_frame[1];
-    mp3dec_scratch_t scratch;
+    /* LOCAL PATCH (freeesp32_ave): this scratch struct is ~16 KB. On the stack it
+     * forces a task stack too big to allocate from fragmented internal DRAM; in
+     * plain internal .bss it exhausts internal DRAM. So it is `static` (off the
+     * stack) AND placed in PSRAM via MINIMP3_SCRATCH_ATTR (defined to
+     * EXT_RAM_BSS_ATTR in mp3_decoder.c). Safe: the BG player decodes on ONE
+     * task, one frame at a time — never a concurrent mp3dec_decode_frame(). */
+#ifndef MINIMP3_SCRATCH_ATTR
+#define MINIMP3_SCRATCH_ATTR
+#endif
+    static MINIMP3_SCRATCH_ATTR mp3dec_scratch_t scratch;
 
     if (mp3_bytes > 4 && dec->header[0] == 0xff && hdr_compare(dec->header, mp3))
     {
