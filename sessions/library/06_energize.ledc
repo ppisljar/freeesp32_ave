@@ -16,22 +16,22 @@
 # Format:  LED: time freq duty bright R G B mask  |  Audio: A time freq pan vol mod channel
 
 # ---- Induction (10 Hz alpha flicker, dim; vol fade-in) ----
-0      10 40 >0 200 220 255 15    # LED gentle 10 Hz flicker (alpha, safe), brightness fade-in start
-12000  10 40 25 200 220 255 15    # brightness reaches 25% (12 s ramp-in, >=10 s)
+0      10 40 >0 200 220 255 5    # LED gentle 10 Hz flicker (alpha, safe), brightness fade-in start
+12000  10 40 25 200 220 255 5    # brightness reaches 25% (12 s ramp-in, >=10 s)
 A 0      420 0 >0 10 1            # ch1 isochronic: 420 Hz carrier, vol fade-in start, beat 10 Hz
 S 3000 default 65 "Starting at ten hertz, in alpha. Take a breath and let's begin to wake up."
 A 40000  420 0 55 10 1           # t=0:40 vol fade-in complete (0->55 over 40 s), beat steady 10 Hz
 
 # ---- Deepening (flicker OFF -> STEADY; beat climbs 10->18 via AUDIO) ----
-180000 0 100 >25 200 220 255 15   # t=3:00 flicker OFF -> STEADY (freq 0); brightness ramp 25->70 start
+180000 0 100 >25 200 220 255 5   # t=3:00 flicker OFF -> STEADY (freq 0); brightness ramp 25->70 start
 A 180000 420 0 55 >10 1          # t=3:00 beat ramp START 10 Hz -> (target 18 at t=10:00), ~1.1 Hz/min
 S 180000 default 65 "Climbing now, rising up through the bands toward beta. Feel your energy building."
 
 # ---- Hold (beta 18-20 Hz, audio-only; bright steady cool white) ----
-600000 0 100 >70 200 220 255 15   # t=10:00 steady reaches 70%; brightness ramp 70->80 start
+600000 0 100 >70 200 220 255 5   # t=10:00 steady reaches 70%; brightness ramp 70->80 start
 A 600000 420 0 65 18 1           # t=10:00 beat = 18 Hz (beta hold begins, audio-carried)
 S 600000 default 65 "You have reached beta, eighteen hertz. Alert and awake, fully switched on."
-840000 0 100 80 200 220 255 15    # t=14:00 brightness peaks 80% (steady)
+840000 0 100 80 200 220 255 5    # t=14:00 brightness peaks 80% (steady)
 A 840000 420 0 65 >18 1          # t=14:00 beat ramp START 18 -> (target 20 at t=16:00)
 A 960000 420 0 65 20 1           # t=16:00 beat = 20 Hz plateau
 S 960000 default 65 "Peak energy now at twenty hertz. Bright, sharp, and ready."
@@ -40,6 +40,6 @@ S 960000 default 65 "Peak energy now at twenty hertz. Bright, sharp, and ready."
 A 990000 420 0 65 >20 1          # t=16:30 beat ramp START 20 -> (target 16 at t=18:00)
 
 # ---- End: ALERT (no fade to 0) ----
-1080000 0 100 80 200 220 255 15   # t=18:00 lamp stays ON, bright steady cool white
+1080000 0 100 80 200 220 255 5   # t=18:00 lamp stays ON, bright steady cool white
 A 1080000 420 0 60 16 1          # t=18:00 ends ON, beat parked at 16 Hz (low-beta, alert)
 S 1080000 default 65 "Settling to sixteen hertz, awake and alert. Go take on your day."

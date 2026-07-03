@@ -389,6 +389,32 @@ esp_err_t config_parser_parse_content(const char *content, size_t content_length
         line_number++;
     }
 
+    /* Stable-sort entries by timestamp. The timeline EXECUTOR (execute_timeline's
+     * batch pre-scan) assumes same-timestamp entries are CONTIGUOUS and that
+     * timestamps are non-decreasing in array order — but the parser preserves
+     * FILE order, and a .ledc authored grouped-by-layer (e.g. one channel's t=0
+     * AND t=60000 rows listed before another channel's t=0 row) violates that:
+     * the t=0 batch pre-scan hits the t=60000 row, breaks, and dispatches only
+     * 1 of N same-time entries — so the rest of the t=0 layer (LED flash, drum
+     * carriers) never fire. Stable insertion sort (count<=100, runs once at
+     * parse) makes any authoring order correct while preserving the relative
+     * order of entries that share a timestamp. */
+    for (size_t i = 1; i < timeline->count; i++) {
+        config_entry_t key = timeline->entries[i];
+        uint32_t key_t = (key.type == CONFIG_ENTRY_LED)   ? key.data.led.time_ms
+                       : (key.type == CONFIG_ENTRY_AUDIO) ? key.data.audio.time_ms : 0;
+        size_t j = i;
+        while (j > 0) {
+            const config_entry_t *p = &timeline->entries[j - 1];
+            uint32_t pt = (p->type == CONFIG_ENTRY_LED)   ? p->data.led.time_ms
+                        : (p->type == CONFIG_ENTRY_AUDIO) ? p->data.audio.time_ms : 0;
+            if (pt <= key_t) break;   // '<=' keeps equal-timestamp order stable
+            timeline->entries[j] = timeline->entries[j - 1];
+            j--;
+        }
+        timeline->entries[j] = key;
+    }
+
     ESP_LOGI(TAG, "Parsed %zu entries from config", timeline->count);
     return ESP_OK;
 }
@@ -931,6 +957,14 @@ static void apply_patch_audio_entry(const config_audio_entry_t *e)
      * a square/saw tone from a .ledc file isn't reset to sine by a slider nudge. */
     if (e->has_wave_type) {
         audio_generator_set_wave_type_locked(e->channel, (audio_wave_type_t)e->wave_type);
+    }
+
+    /* freq_r (7th field) — right-ear binaural carrier. Not an AUDIO_PARAM_* sweep
+     * field, so it's set directly (instant) when the patch carried it. Guard on the
+     * present bit so a plain 6-field slider nudge never zeroes an existing binaural
+     * pair. freq_r == 0 (explicitly present) collapses the channel back to mono. */
+    if (e->present & AUD_SET_FREQR) {
+        audio_generator_set_freq_r_locked(e->channel, e->frequency_r);
     }
 
     const uint32_t dur_ms = e->time_ms;

@@ -36,12 +36,12 @@
 # ============================================================================
 
 # ---- LED: dim violet, 10->6->5 Hz (1:1 with beat), brief breathing, Soft Off --
-0      10 50 >0 90 0 200 15               # t=00:00 10 Hz flicker, brightness fade-in from 0
-15000  10 50 15 90 0 200 15               # t=00:15 brightness 15% reached (15 s ramp-in)
-30000  >10 50 ~8:15:10000 90 0 200 15     # t=00:30 flicker descent START 10 Hz; breathing LFO 8<->15%
-240000 >6 50 >15 90 0 200 15              # t=04:00 beat 6 Hz; end breathing, brightness 15->8 (theta, dim)
-540000 5 50 >8 90 0 200 15                # t=09:00 beat 5 Hz; SOFT OFF START: brightness 8 -> 0
-720000 5 50 0 90 0 200 15                 # t=12:00 fully off (no wake ramp)
+0      10 50 >0 90 0 200 5               # t=00:00 10 Hz flicker, brightness fade-in from 0
+15000  10 50 15 90 0 200 5               # t=00:15 brightness 15% reached (15 s ramp-in)
+30000  >10 50 ~8:15:10000 90 0 200 5     # t=00:30 flicker descent START 10 Hz; breathing LFO 8<->15%
+240000 >6 50 >15 90 0 200 5              # t=04:00 beat 6 Hz; end breathing, brightness 15->8 (theta, dim)
+540000 5 50 >8 90 0 200 5                # t=09:00 beat 5 Hz; SOFT OFF START: brightness 8 -> 0
+720000 5 50 0 90 0 200 5                 # t=12:00 fully off (no wake ramp)
 
 # ---- ch1: binaural driver — carrier glide, freq_r FIXED 210 (beat=210-carrier)
 A 0      200 0 >0 0 1 210 0               # t=00:00 carrier 200 => 10 Hz beat; vol fade-in from 0

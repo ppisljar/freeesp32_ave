@@ -34,35 +34,35 @@
 # Ramp convention = animate-on-start (the >/* prefix sits where a segment BEGINS).
 
 # --- Induction / alpha 10 Hz (00:00-02:00): amber field + audio fade in ---
-0 10 50 >0 255 140 0 15 1 0 3 0.6:30000     # amber sine-gated 10 Hz field, flicker jitter 0.6 Hz/30 s; bright fade-in
+0 10 50 >0 255 140 0 10 1 0 3 0.6:30000     # amber sine-gated 10 Hz field, flicker jitter 0.6 Hz/30 s; bright fade-in
 A 0 246 0 >0 0 1 256 0                       # ch1 binaural theta-bridge: carrier 246 / freqR 256 => 10 Hz beat; vol fade-in
 A 0 200 0 >0 0 2 0 5                         # ch2 soft pink-noise bed; vol fade-in
 S 3000 default 65 "Eyes closed. Let the amber field fill your vision, and simply watch what arises."
-15000 10 50 28 255 140 0 15 1 0 3 0.6:30000  # brightness reaches 28% (>=10 s ramp-in)
+15000 10 50 28 255 140 0 10 1 0 3 0.6:30000  # brightness reaches 28% (>=10 s ramp-in)
 A 60000 246 0 45 0 1 256 0                   # ch1 vol settled 45
 A 60000 200 0 20 0 2 0 5                     # ch2 pink settled 20 (soft bed)
 
 # --- Deepen (02:00-08:00): glide alpha 10 -> theta 6 Hz (~0.67 Hz/min) ---
 A 120000 >246 0 45 0 1 256 0                 # carrier ramps 246->250 (beat 10->6); freqR held (not interpolatable)
-120000 >10 50 28 255 140 0 15 1 0 3 0.6:30000   # LED flicker tracks the beat 10->6, jitter continues
+120000 >10 50 28 255 140 0 10 1 0 3 0.6:30000   # LED flicker tracks the beat 10->6, jitter continues
 S 120000 default 65 "Drifting down into the twilight. Images may drift and shift; let them come and go."
 
 # --- Hold / theta 6 Hz (08:00-22:00 = 14 min): the imagery band, jitter sustains novelty ---
 A 480000 250 0 45 0 1 256 0                  # beat settled 6 Hz (carrier 250 / freqR 256), held
-480000 6 50 ~20:32:10000 255 140 0 15 1 0 3 0.6:30000  # 6 Hz sine field, 0.1 Hz brightness breath, jitter on
+480000 6 50 ~20:32:10000 255 140 0 10 1 0 3 0.6:30000  # 6 Hz sine field, 0.1 Hz brightness breath, jitter on
 S 480000 default 65 "Rest here at the threshold. Faces, patterns, landscapes — witness them without grasping."
 S 900000 default 65 "Let the slow breath of the light carry you. The images renew themselves; stay soft and curious."
 
 # --- Return (22:00-25:00): glide theta 6 -> alpha 9 Hz ---
 A 1320000 >250 0 45 0 1 256 0               # carrier ramps 250->247 (beat 6->9)
-1320000 >6 50 28 255 140 0 15 1 0 3 0.6:30000   # LED 6->9 lockstep; breathing LFO dropped, steady dim
+1320000 >6 50 28 255 140 0 10 1 0 3 0.6:30000   # LED 6->9 lockstep; breathing LFO dropped, steady dim
 S 1320000 default 65 "Gently rising now, carrying the imagery with you toward waking clarity."
 
 # --- Soft close (25:00-27:00): field + audio fade to 0 (jitter released) ---
 A 1500000 247 0 >45 0 1 256 0               # beat at alpha 9; vol ramp-out 45->0
-1500000 9 50 >28 255 140 0 15 1 0 3 0        # brightness ramp-out 28->0, jitter released
+1500000 9 50 >28 255 140 0 10 1 0 3 0        # brightness ramp-out 28->0, jitter released
 A 1500000 200 0 >20 0 2 0 5                  # pink bed fade 20->0
 S 1500000 default 65 "The field fades. Open your eyes when you are ready, calm and rested."
 A 1620000 247 0 0 0 1 256 0                  # end: ch1 vol 0
-1620000 9 50 0 255 140 0 15 1 0 3 0          # end: brightness 0
+1620000 9 50 0 255 140 0 10 1 0 3 0          # end: brightness 0
 A 1620000 200 0 0 0 2 0 5                    # end: pink vol 0

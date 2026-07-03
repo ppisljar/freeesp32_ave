@@ -358,6 +358,12 @@ esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, flo
  * Used to switch noise type live. Caller must hold audio_gen_mutex. */
 esp_err_t audio_generator_set_wave_type_locked(int channel, audio_wave_type_t wt);
 
+/* Set the right-ear (binaural) carrier frequency of an active channel directly.
+ * freq_r isn't an AUDIO_PARAM_* sweep field, so live changes (e.g. a Live Control
+ * binaural slider) go through this. hz == 0 makes the channel mono. Caller must
+ * hold audio_gen_mutex. */
+esp_err_t audio_generator_set_freq_r_locked(int channel, float hz);
+
 /* _locked one-field readers — caller must hold audio_gen_mutex via
  * audio_generator_lock(). Used by patch dispatch (config_parser.c) to read
  * the current value of each field so animated patches can sweep FROM the

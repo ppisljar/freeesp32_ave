@@ -13,6 +13,7 @@ import {
 // Play button handles speech (S) rows and push:// BG, not just a raw device POST.
 import { parse } from './gen/parse.js';
 import { playSession } from './gen/play.js';
+import { stopBg } from './gen/transport.js';
 
 // Report-on-session-end. Rather than guessing when a session finishes, we
 // fetch the report when the live-control poll detects the timeline's
@@ -51,6 +52,9 @@ export function loadExample() {
 }
 
 export function stopConfig() {
+    // Abort any in-flight browser BG push FIRST, else it keeps uploading and the
+    // device keeps playing the background track after the timeline is stopped.
+    stopBg();
     fetch('/api/stop', { method: 'POST' })
         .then(response => response.text())
         .then(result => {

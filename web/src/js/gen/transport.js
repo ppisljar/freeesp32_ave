@@ -71,6 +71,13 @@ export function getCaps() {
 
 // ---- BG browser-push (bg_browser_push_plan.md) -----------------------------
 
+// AbortController for the in-flight BG push fetch. A push POST streams the WHOLE
+// bounced clip (can be hundreds of MB for a 30-min session), paced by TCP
+// backpressure over the entire session. Without a handle to abort it, hitting
+// Stop leaves the browser still uploading — so the device keeps receiving/playing
+// BG audio after the timeline stopped. stopBg() aborts this.
+let s_pushAbort = null;
+
 // Stream a canonical WAV Blob to the device as the active background track.
 // The POST body is fixed-length (a Blob), so it works over the device's
 // HTTP/1.1 server; TCP flow control paces the upload to playback rate. The
@@ -78,17 +85,31 @@ export function getCaps() {
 // (natural completion) — which is when a client-driven loop should re-POST.
 export function pushBg(wavBlob, { pan = 0, loudness = 50 } = {}) {
     const q = '?pan=' + encodeURIComponent(pan) + '&loudness=' + encodeURIComponent(loudness);
+    // Supersede any earlier push and get an abort handle for this one.
+    if (s_pushAbort) { try { s_pushAbort.abort(); } catch (e) { /* ignore */ } }
+    const ctl = new AbortController();
+    s_pushAbort = ctl;
     return fetch('/api/bg-stream' + q, {
         method: 'POST',
         headers: { 'Content-Type': 'audio/wav' },
         body: wavBlob,
+        signal: ctl.signal,
     }).then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
-    });
+    }).catch(err => {
+        // A deliberate stopBg()/supersede abort is not an error to surface.
+        if (err && err.name === 'AbortError') return { ok: true, aborted: true };
+        throw err;
+    }).finally(() => { if (s_pushAbort === ctl) s_pushAbort = null; });
 }
 
-// Stop ONLY the background track (leaves any running timeline/audio untouched).
+// Stop the background track: abort the browser's in-flight upload FIRST (so it
+// stops sending immediately), then tell the device to tear down the BG player.
+// Leaves any running timeline/audio untouched. Best-effort — never rejects.
 export function stopBg() {
-    return fetch('/api/bg-stream?stop=1', { method: 'POST' }).then(r => r.json());
+    if (s_pushAbort) { try { s_pushAbort.abort(); } catch (e) { /* ignore */ } s_pushAbort = null; }
+    return fetch('/api/bg-stream?stop=1', { method: 'POST' })
+        .then(r => r.json())
+        .catch(() => ({ ok: false }));
 }

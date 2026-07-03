@@ -25,10 +25,13 @@
 #   SESSION_DESIGN_GUIDELINES.md §1 (lucid = Soft Off, no wake). 40 Hz offered as an explicit fixed
 #   research frequency, framed strictly non-medically (MIT US 10,682,490, patent_landscape_ave.md).
 #
-# channel_map recipe (menuconfig CONFIG_LED_CHANNEL_MAP): map LEFT-eye pixels to channel 0
-#   (mask 1), RIGHT-eye pixels to channel 1 (mask 2), and interleave a shared central strip between
-#   channel 2 (amber gamma, mask 4) and channel 3 (cyan gamma, mask 8). Example 8-pixel layout:
-#   "0,2,3,0,1,2,3,1" (left eye + right eye + interleaved central gamma pair).
+# channel_map recipe (menuconfig CONFIG_LED_CHANNEL_MAP): channels are fixed by temperature/eye
+#   (ch0=L-cool bit1, ch1=L-warm bit2, ch2=R-cool bit4, ch3=R-warm bit8). LEFT-eye theta = mask 3
+#   (ch0+ch1), RIGHT-eye theta = mask 12 (ch2+ch3), both eyes = mask 15. The antiphase gamma pair
+#   rides temperature ACROSS both eyes: AMBER (warm) = mask 10 (ch1+ch3), CYAN (cool) = mask 5
+#   (ch0+ch2), so the invisible 40 Hz shimmer reaches both eyes. Map LEFT-eye pixels to channels
+#   0/1 and RIGHT-eye pixels to channels 2/3, interleaving warm/cool within each eye. Example
+#   8-pixel layout: "0,1,2,3,0,1,2,3" (L-cool,L-warm,R-cool,R-warm x2).
 #
 # SAFETY / CONTRAINDICATIONS:
 #   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of photic
@@ -43,39 +46,39 @@
 # Ramp convention = animate-on-start (the > prefix sits where a segment BEGINS).
 
 # --- Induction / alpha 10 Hz both eyes (00:00-01:30): fade in ---
-0 10 50 >0 60 120 255 3 1 0 3                 # BOTH eyes (mask 3) cool-blue 10 Hz sine; bright fade-in
+0 10 50 >0 60 120 255 15 1 0 3                 # BOTH eyes (mask 15) cool-blue 10 Hz sine; bright fade-in
 A 0 200 0 >0 5 1 0 0 30 1                     # ch1 theta dream bed: 5 Hz isochronic (sine gate, 30% duty); vol fade-in
 S 3000 default 65 "Rest back and let a calm alpha rhythm settle you toward the dream. You will stay just aware enough to notice."
-15000 10 50 20 60 120 255 3 1 0 3             # brightness reaches 20% (>=10 s ramp-in)
+15000 10 50 20 60 120 255 15 1 0 3             # brightness reaches 20% (>=10 s ramp-in)
 A 60000 200 0 40 5 1 0 0 30 1                 # theta bed settled 40
 
 # --- Split field + gamma cues (01:30-20:00): LEFT 6.5 Hz / RIGHT 4.5 Hz + alternating 40 Hz ---
-90000 6.5 50 20 60 120 255 1 1 0 3            # LEFT eye (mask 1): theta 6.5 Hz
-90000 4.5 50 20 60 120 255 2 1 0 3            # RIGHT eye (mask 2): theta 4.5 Hz
-90000 40 50 >0 255 140 0 4 0 0                # AMBER gamma bank (mask 4): 40 Hz, phase 0; fade in
-90000 40 50 >0 0 220 255 8 0 180             # CYAN gamma bank (mask 8): 40 Hz, phase 180 (antiphase, invisible)
+90000 6.5 50 20 60 120 255 3 1 0 3            # LEFT eye (mask 3): theta 6.5 Hz
+90000 4.5 50 20 60 120 255 12 1 0 3            # RIGHT eye (mask 12): theta 4.5 Hz
+90000 40 50 >0 255 140 0 10 0 0                # AMBER gamma bank (WARM bits, mask 10 = L-warm+R-warm): 40 Hz, phase 0; fade in
+90000 40 50 >0 0 220 255 5 0 180             # CYAN gamma bank (COOL bits, mask 5 = L-cool+R-cool): 40 Hz, phase 180 (antiphase, invisible)
 A 90000 340 -60 >0 40 2 0 0 10 0 0 3          # ch2 gamma CLICK left: 40 Hz, 10% duty, phase 0, panned left; fade in
 A 90000 340 60 >0 40 3 0 0 10 0 180 3         # ch3 gamma CLICK right: 40 Hz, 10% duty, phase 180, panned right (alternates)
-105000 40 50 16 255 140 0 4 0 0              # amber gamma reaches 16%
-105000 40 50 16 0 220 255 8 0 180            # cyan gamma reaches 16% (matched -> ~invisible shimmer)
+105000 40 50 16 255 140 0 10 0 0              # amber gamma reaches 16%
+105000 40 50 16 0 220 255 5 0 180            # cyan gamma reaches 16% (matched -> ~invisible shimmer)
 A 150000 340 -60 30 40 2 0 0 10 0 0 3         # left click settled 30
 A 150000 340 60 30 40 3 0 0 10 0 180 3        # right click settled 30
 S 90000 default 65 "One eye quickens, one eye slows. A soft forty-hertz shimmer whispers: notice. If you see a dream, you are dreaming."
 S 600000 default 65 "Whenever you realise you are dreaming, stay calm and steady. You are lucid. Look at your hands, and stay."
 
 # --- Soft Off (20:00-25:00): all fields + audio fade to dark (no wake-up) ---
-1200000 6.5 50 >20 60 120 255 1 1 0 3         # LEFT fade
-1200000 4.5 50 >20 60 120 255 2 1 0 3         # RIGHT fade
-1200000 40 50 >16 255 140 0 4 0 0            # amber gamma fade
-1200000 40 50 >16 0 220 255 8 0 180          # cyan gamma fade
+1200000 6.5 50 >20 60 120 255 3 1 0 3         # LEFT fade
+1200000 4.5 50 >20 60 120 255 12 1 0 3         # RIGHT fade
+1200000 40 50 >16 255 140 0 10 0 0            # amber gamma fade
+1200000 40 50 >16 0 220 255 5 0 180          # cyan gamma fade
 A 1200000 200 0 >40 5 1 0 0 30 1              # theta bed fade
 A 1200000 340 -60 >30 40 2 0 0 10 0 0 3       # left click fade
 A 1200000 340 60 >30 40 3 0 0 10 0 180 3      # right click fade
 S 1200000 default 65 "Letting every light and tone fade now. Sink fully into sleep, or dream on, aware."
-1500000 6.5 50 0 60 120 255 1 1 0 3           # end: left 0
-1500000 4.5 50 0 60 120 255 2 1 0 3           # end: right 0
-1500000 40 50 0 255 140 0 4 0 0              # end: amber gamma 0
-1500000 40 50 0 0 220 255 8 0 180            # end: cyan gamma 0
+1500000 6.5 50 0 60 120 255 3 1 0 3           # end: left 0
+1500000 4.5 50 0 60 120 255 12 1 0 3           # end: right 0
+1500000 40 50 0 255 140 0 10 0 0              # end: amber gamma 0
+1500000 40 50 0 0 220 255 5 0 180            # end: cyan gamma 0
 A 1500000 200 0 0 5 1 0 0 30 1                # end: theta bed 0
 A 1500000 340 -60 0 40 2 0 0 10 0 0 3         # end: left click 0
 A 1500000 340 60 0 40 3 0 0 10 0 180 3        # end: right click 0

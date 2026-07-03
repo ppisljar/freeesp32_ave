@@ -22,12 +22,12 @@
 #   Audio: A time freq pan vol mod ch [freq_r] [wave]   (wave 0 sine, 5 pink)
 
 # --- LED: STEADY cool-white lamp (180,200,255), freq 0 = no flicker, mask 15 ---
-0       0 100 >0 180 200 255 15      # lamp steady; brightness fade-in begins from 0
-15000   0 100 20 180 200 255 15      # brightness reaches 20% (15 s ramp-in, >=10 s safety rule)
-300000  0 100 >20 180 200 255 15     # deepening: brightness ramp START 20 ...
-600000  0 100 25 180 200 255 15      # ... TARGET 25% at 10:00 (dim working cap, photosensitivity)
-1620000 0 100 >25 180 200 255 15     # exit: gentle brighten START 25 ...
-1800000 0 100 40 180 200 255 15      # ... TARGET 40% at end — light STAYS ON and BRIGHTENS (alert end)
+0       0 100 >0 180 200 255 5      # lamp steady; brightness fade-in begins from 0
+15000   0 100 20 180 200 255 5      # brightness reaches 20% (15 s ramp-in, >=10 s safety rule)
+300000  0 100 >20 180 200 255 5     # deepening: brightness ramp START 20 ...
+600000  0 100 25 180 200 255 5      # ... TARGET 25% at 10:00 (dim working cap, photosensitivity)
+1620000 0 100 >25 180 200 255 5     # exit: gentle brighten START 25 ...
+1800000 0 100 40 180 200 255 5      # ... TARGET 40% at end — light STAYS ON and BRIGHTENS (alert end)
 
 # --- Audio ch1: isochronic driver — 300 Hz sine carrier, AUDIO carries the beat ---
 A 0       300 0 >0 10 1              # induction: 300 Hz, vol fade-in from 0, beat 10 Hz (alpha)

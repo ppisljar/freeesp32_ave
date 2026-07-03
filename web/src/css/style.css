@@ -404,3 +404,17 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .diag-cmd { background: #1e1e1e; color: #d4d4d4; border-radius: 4px; padding: 8px 10px;
     font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;
     margin: 8px 0 0; }
+
+/* ---- Community tab (gen/community.js) ---- */
+.gen-communityview { padding: 8px; overflow-y: auto; max-height: 70vh; }
+.comm-bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; color:#555; }
+.comm-msg { padding:16px; color:#555; }
+.comm-err { color:#a00; background:#fff4f4; border:1px solid #f0c0c0; border-radius:6px; }
+.comm-card { border:1px solid #e0e0e0; border-radius:8px; padding:10px 12px; margin-bottom:8px; background:#fff; }
+.comm-title { font-weight:600; font-size:14px; }
+.comm-title .comm-file { font-weight:400; font-size:11px; color:#999; margin-left:8px; }
+.comm-short { color:#444; font-size:13px; margin:4px 0; }
+.comm-long { color:#555; font-size:12px; margin:6px 0; padding:8px; background:#f7f7f7; border-radius:6px; white-space:pre-wrap; }
+.comm-actions { display:flex; gap:8px; align-items:center; margin-top:6px; }
+.comm-actions button { padding:4px 10px; font-size:12px; cursor:pointer; }
+.comm-actions button.primary { background:#28a745; color:#fff; border:none; border-radius:4px; }

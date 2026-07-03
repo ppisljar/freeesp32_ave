@@ -32,12 +32,12 @@
 # segment BEGINS; its value is the start; the target is the next same-channel/field row.
 
 # --- Prep / fade-in (00:00-03:00): delta bed + phased pink bed + LED fade in ---
-0 4 50 >0 90 0 200 15            # LED 4 Hz violet, brightness ramps 0->20% over 20 s
+0 4 50 >0 90 0 200 5            # LED 4 Hz violet, brightness ramps 0->20% over 20 s
 A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta bed; vol fades 0->30 over 60 s; sine
 A 0 200 ~-100:100:6000 >0 0 7 0 5   # ch7 phased pink bed; pan L<->R 6 s LFO; vol fades 0->8; wave 5 pink
 S 2000 default 65 "Settle in. Let the breath slow and the body grow heavy, softening from head to toe."
-20000 4 50 20 90 0 200 15        # brightness reaches 20% (ramp-in >=15 s done)
-30000 4 50 ~12:22:10000 90 0 200 15   # breathing LFO: brightness sine 12<->22% over 10 s
+20000 4 50 20 90 0 200 5        # brightness reaches 20% (ramp-in >=15 s done)
+30000 4 50 ~12:22:10000 90 0 200 5   # breathing LFO: brightness sine 12<->22% over 10 s
 A 60000 100 0 30 0 1 101.5 7  # ch1 delta holds vol 30 through the session
 A 60000 200 ~-100:100:6000 8 0 7 0 5   # ch7 pink bed holds vol 8; pan LFO continues
 
@@ -67,7 +67,7 @@ A 1560000 208 0 >22 0 6 212 7  # ch6 septon vol 22->0
 A 1560000 250 0 >30 0 3 254 7  # ch3 theta vol 30->0
 A 1560000 300 0 >30 0 4 304 7  # ch4 theta vol 30->0
 A 1560000 200 ~-100:100:6000 >8 0 7 0 5   # ch7 pink bed vol 8->0; pan LFO continues
-1560000 4 50 >20 90 0 200 15     # LED brightness 20->0 over the return (preempts LFO)
+1560000 4 50 >20 90 0 200 5     # LED brightness 20->0 over the return (preempts LFO)
 S 1770000 default 65 "Coming fully back to the room, calm, clear, and rested."
 A 1800000 100 0 0 0 1 101.5 7  # end: ch1 volume 0
 A 1800000 200 0 0 0 2 204 7  # end: ch2 volume 0
@@ -76,4 +76,4 @@ A 1800000 208 0 0 0 6 212 7  # end: ch6 volume 0
 A 1800000 250 0 0 0 3 254 7  # end: ch3 volume 0
 A 1800000 300 0 0 0 4 304 7  # end: ch4 volume 0
 A 1800000 200 ~-100:100:6000 0 0 7 0 5   # end: ch7 pink bed volume 0
-1800000 4 50 0 90 0 200 15       # end: brightness 0
+1800000 4 50 0 90 0 200 5       # end: brightness 0

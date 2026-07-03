@@ -26,29 +26,29 @@
 # segment BEGINS; its value is the start; the target is the next same-channel/field row.
 
 # --- Settle / induction (00:00-05:00, 10 Hz alpha): vol + light fade in ---
-0 10 50 >0 200 220 255 15         # LED 10 Hz cool white, brightness ramps 0->25% over 15 s
+0 10 50 >0 200 220 255 5         # LED 10 Hz cool white, brightness ramps 0->25% over 15 s
 A 0 200 0 >0 10 1                 # isochronic: 200 Hz carrier pulsed at 10 Hz; vol fades 0->50 over 60 s
 S 3000 default 65 "Let your eyes rest closed and soften your gaze."
-15000 10 50 25 200 220 255 15     # brightness reaches 25% (ramp-in >=15 s done)
-30000 10 50 ~20:30:10000 200 220 255 15   # breathing brightness LFO 20<->30% over 10 s
+15000 10 50 25 200 220 255 5     # brightness reaches 25% (ramp-in >=15 s done)
+30000 10 50 ~20:30:10000 200 220 255 5   # breathing brightness LFO 20<->30% over 10 s
 A 60000 200 0 50 10 1             # vol settled 50, beat holds 10 Hz (alpha induction)
 
 # --- Descent to theta twilight (05:00-12:00, 10->6.5 Hz) ---
-300000 >10 50 ~20:30:10000 90 40 200 15   # LED freq ramps 10->6.5 over 6 min; mood shifts violet-blue
+300000 >10 50 ~20:30:10000 90 40 200 5   # LED freq ramps 10->6.5 over 6 min; mood shifts violet-blue
 A 300000 200 0 50 >10 1           # isochronic beat ramps 10->6.5 lockstep with the light
 S 305000 default 65 "Drifting down now, toward the twilight edge between waking and sleep."
-660000 6.5 50 ~20:30:10000 90 40 200 15   # twilight bottom 6.5 Hz, held ~1 min
+660000 6.5 50 ~20:30:10000 90 40 200 5   # twilight bottom 6.5 Hz, held ~1 min
 A 660000 200 0 50 6.5 1           # beat 6.5 Hz twilight dwell
 
 # --- Twilight / imagery hold (12:00-24:00, oscillate 8<->12 Hz, float drift) ---
-720000 ~8:12:75000 50 ~20:30:10000 200 220 255 15   # LED freq floats 8<->12 Hz (75 s/cycle); cool white for imagery
+720000 ~8:12:75000 50 ~20:30:10000 200 220 255 5   # LED freq floats 8<->12 Hz (75 s/cycle); cool white for imagery
 A 720000 200 0 50 ~8:12:75000 1   # isochronic beat floats 8<->12 Hz, locked 1:1 with the light
 S 725000 default 65 "Let images and colors arise — watch them, without holding on."
 S 1080000 default 65 "Rest at the border. Notice the shapes drift and change."
 
 # --- Soft fade (24:00-28:00): flicker settles to 10 Hz, brightness + vol fade to 0 over 4 min ---
-1440000 10 50 >30 200 220 255 15  # oscillation ends, steady 10 Hz; brightness fades 30->0 over 240 s
+1440000 10 50 >30 200 220 255 5  # oscillation ends, steady 10 Hz; brightness fades 30->0 over 240 s
 A 1440000 200 0 >50 10 1          # beat settles to 10 Hz; vol fades 50->0 over 240 s
 S 1440000 default 65 "Gently returning now."
-1680000 10 50 0 200 220 255 15    # end: brightness 0
+1680000 10 50 0 200 220 255 5    # end: brightness 0
 A 1680000 200 0 0 10 1            # end: volume 0

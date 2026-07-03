@@ -33,12 +33,12 @@
 # BEGINS; its value is the start; the target is the next same-channel/field row over the gap.
 
 # --- Prep / fade-in (00:00-03:00): a calm 100[1.5] delta tone; vol + light fade in ---
-0 4 50 >0 255 100 0 15           # LED 4 Hz theta, warm amber, brightness ramps 0->20% over 15 s
+0 4 50 >0 255 100 0 10           # LED 4 Hz theta, warm amber, brightness ramps 0->20% over 15 s
 A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta: vol fades 0->55 over 60 s; sine
 A 0 200 ~-100:100:6000 >0 0 14 0 5   # pink bed ch14: 6 s L<->R pan, vol fades 0->8 over 60 s (wave 5)
 S 3000 default 65 "Settle in and let the body grow heavy. We will begin drifting inward together."
-15000 4 50 20 255 100 0 15       # brightness reaches 20% (ramp-in >=15 s done)
-30000 4 50 ~12:25:12000 255 100 0 15   # gentle breathing LFO: brightness sine 12<->25% over 12 s
+15000 4 50 20 255 100 0 10       # brightness reaches 20% (ramp-in >=15 s done)
+30000 4 50 ~12:25:12000 255 100 0 10   # gentle breathing LFO: brightness sine 12<->25% over 12 s
 A 60000 100 0 55 0 1 101.5 7  # ch1 vol reaches 55; delta anchor held
 A 60000 200 ~-100:100:6000 8 0 14 0 5   # pink bed reaches -18 dB steady (held through hold)
 
@@ -83,7 +83,7 @@ A 540000 900 0 40 0 10 904 7
 S 480000 default 65 "Expanding now, rising into Focus 27 — a warm, welcoming place of your own making."
 
 # --- The Park: warm welcoming hold (12:00-28:00 = 16 min, full F27 stack, steady) ---
-720000 4 50 ~15:28:12000 255 110 0 15   # LED warmer amber, gentle breathing 15<->28%, still 4 Hz
+720000 4 50 ~15:28:12000 255 110 0 10   # LED warmer amber, gentle breathing 15<->28%, still 4 Hz
 S 720000 default 65 "You have arrived at the Park. Rest here, at ease, and let it take shape around you."
 S 1200000 default 65 "There is no hurry. Explore this peaceful, creative space and simply be."
 
@@ -92,7 +92,7 @@ A 1680000 750 0 >45 0 9 754 7  # ch9 750 fades 45->0 over 3 min
 A 1860000 750 0 0 0 9 754 7
 A 1680000 900 0 >40 0 10 904 7  # ch10 900 fades out
 A 1860000 900 0 0 0 10 904 7
-1680000 4 50 ~10:20:12000 255 100 0 15  # LED dims gently, still 4 Hz theta
+1680000 4 50 ~10:20:12000 255 100 0 10  # LED dims gently, still 4 Hz theta
 A 1680000 200 ~-100:100:6000 >8 0 14 0 5   # pink bed begins its slow fade-out across the return
 S 1680000 default 65 "Beginning to return now, gently, carrying the calm of the Park back with you."
 
@@ -105,7 +105,7 @@ A 1860000 503 0 >50 0 7 507.2 7  # ch7 503 fades out
 A 1980000 503 0 0 0 7 507.2 7
 A 1860000 600 0 >50 0 8 604 7  # ch8 600 fades out
 A 1980000 600 0 0 0 8 604 7
-1860000 4 50 >18 255 100 0 15    # brightness fades 18->0 over 2 min (>=15 s), never abrupt
+1860000 4 50 >18 255 100 0 10    # brightness fades 18->0 over 2 min (>=15 s), never abrupt
 S 1860000 default 65 "Coming back to the room now, calm, clear, and refreshed."
 A 1980000 200 ~-100:100:6000 0 0 14 0 5   # pink bed reaches 0 at session end
-1980000 4 50 0 255 100 0 15      # end: brightness 0
+1980000 4 50 0 255 100 0 10      # end: brightness 0

@@ -29,8 +29,10 @@
 #   INTERLEAVED pixels (see channel_map recipe) and an RGB backend; on a brightness-only backend it
 #   degrades to two dim 40 Hz zones — still safe, just less invisible.
 #
-# channel_map recipe (menuconfig CONFIG_LED_CHANNEL_MAP): interleave pixels so alternating pixels
-#   belong to channel 0 (amber, mask 1) and channel 1 (blue, mask 2). 8-pixel strip: "0,1,0,1,0,1,0,1".
+# channel_map recipe (menuconfig CONFIG_LED_CHANNEL_MAP): channels are fixed by temperature/eye
+#   (ch0=L-cool bit1, ch1=L-warm bit2, ch2=R-cool bit4, ch3=R-warm bit8). The AMBER (warm) bank
+#   rides the WARM bits of both eyes (mask 10 = ch1+ch3), the BLUE (cool) bank the COOL bits of
+#   both eyes (mask 5 = ch0+ch2). Interleave warm/cool within each eye, 8-pixel "0,1,2,3,0,1,2,3".
 #
 # SAFETY / CONTRAINDICATIONS:
 #   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of photic
@@ -44,12 +46,12 @@
 # Ramp convention = animate-on-start (the > prefix sits where a segment BEGINS).
 
 # --- Induction / alpha 10 Hz (00:00-02:00): antiphase pair + alpha bed fade in ---
-0 40 50 >0 255 140 0 1 0 0                    # AMBER bank (mask 1): 40 Hz square, phase 0; bright fade-in
-0 40 50 >0 0 120 255 2 0 180                  # BLUE  bank (mask 2): 40 Hz, phase 180 (antiphase -> luminance ~flat)
+0 40 50 >0 255 140 0 10 0 0                    # AMBER bank (WARM bits, mask 10 = L-warm+R-warm): 40 Hz square, phase 0; bright fade-in
+0 40 50 >0 0 120 255 5 0 180                  # BLUE  bank (COOL bits, mask 5 = L-cool+R-cool): 40 Hz, phase 180 (antiphase -> luminance ~flat)
 A 0 340 0 >0 0 1 350 0                        # ch1 alpha binaural: carrier 340 / freqR 350 => 10 Hz beat; vol fade-in
 S 3000 default 65 "Settle, and let the breath grow slow. We begin softly at ten hertz."
-15000 40 50 18 255 140 0 1 0 0                # amber reaches 18% dim cap
-15000 40 50 18 0 120 255 2 0 180             # blue reaches 18% (matched -> mean luminance ~steady)
+15000 40 50 18 255 140 0 10 0 0                # amber reaches 18% dim cap
+15000 40 50 18 0 120 255 5 0 180             # blue reaches 18% (matched -> mean luminance ~steady)
 A 60000 340 0 45 0 1 350 0                    # ch1 alpha vol settled 45
 
 # --- Cross-fade into gamma (02:00-05:00): alpha out, 40 Hz binaural + harmonic in ---
@@ -76,9 +78,9 @@ S 1500000 default 65 "Gently gathering back toward a centre now, carrying the sp
 
 # --- Soft close (27:00-30:00): alpha + antiphase pair fade to 0 ---
 A 1680000 340 0 >35 0 1 350 0                 # alpha vol fade 35->0
-1680000 40 50 >18 255 140 0 1 0 0            # amber brightness fade 18->0
-1680000 40 50 >18 0 120 255 2 0 180          # blue brightness fade 18->0
+1680000 40 50 >18 255 140 0 10 0 0            # amber brightness fade 18->0
+1680000 40 50 >18 0 120 255 5 0 180          # blue brightness fade 18->0
 S 1680000 default 65 "Let the shimmer fade. Rest a moment, then open your eyes, whole and clear."
 A 1800000 340 0 0 0 1 350 0                   # end: ch1 vol 0
-1800000 40 50 0 255 140 0 1 0 0              # end: amber 0
-1800000 40 50 0 0 120 255 2 0 180            # end: blue 0
+1800000 40 50 0 255 140 0 10 0 0              # end: amber 0
+1800000 40 50 0 0 120 255 5 0 180            # end: blue 0

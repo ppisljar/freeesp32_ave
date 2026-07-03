@@ -132,7 +132,14 @@ async function synthViaGoogle(text, voice) {
 export async function synthSpeech(text, opts = {}) {
     if (!text || !String(text).trim()) throw new Error('empty speech text');
     const engine = opts.engine || 'puter';
-    const voice = opts.voice || (engine === 'google' ? 'en' : 'en-US');
+    // The `S`-row voice defaults to the sentinel 'default' (speechRow()); it is
+    // NOT a real voice/language, so map it (and any empty value) to the engine's
+    // actual default. Passing 'default' straight to Polly/Google fails their
+    // language-code enum ("Value 'default' at 'languageCode' failed…").
+    const rawVoice = opts.voice;
+    const voice = (!rawVoice || rawVoice === 'default')
+        ? (engine === 'google' ? 'en' : 'en-US')
+        : rawVoice;
     const key = engine + '|' + voice + '|' + text;
 
     // Cache hit → decode the stored WAV.
@@ -156,7 +163,7 @@ export function previewSpeech(text, voice) {
     if (typeof speechSynthesis === 'undefined') return false;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(String(text || ''));
-    if (voice) {
+    if (voice && voice !== 'default') {
         u.lang = voice;
         const match = speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().indexOf(voice.toLowerCase()) === 0);
         if (match) u.voice = match;

@@ -25,14 +25,14 @@
 # ---------------------------------------------------------------------------
 # t=0  Induction (~10 Hz alpha). Warm amber. Brightness ramp-IN 0->band over 10 s
 #      (safety). Binaural beat 10 Hz (carrier 240 / R250). Volume fade-in.
-0       >10 50 >0             255 100 0 255    # LED all-ch: 10 Hz flicker, bright 0-> (10 s ramp-in), amber
+0       >10 50 >0             255 100 0 10    # LED all-ch: 10 Hz flicker, bright 0-> (10 s ramp-in), amber
 A 0     240 0 >0 0 1 250 0                     # ch1 binaural: carrier 240 / R250 = 10 Hz beat; vol fade-in
 A 0     0 0 >0 0 3 0 5                          # ch3 pink-noise bed (wave 5); vol fade-in
 S 3000 default 65 "Beginning at ten hertz, in alpha. Let your breath slow and your body grow heavy."
 
 # t=0:10  Brightness reached the breathing band -> breathing LFO (sine 25<->30% over
 #         10 s ~ 6 breaths/min). Induction only.
-10000   10 50 ~25:30:10000   255 100 0 255     # hold 10 Hz, breathing brightness LFO 25<->30%
+10000   10 50 ~25:30:10000   255 100 0 10     # hold 10 Hz, breathing brightness LFO 25<->30%
 
 # t=0:30  Pink-noise fade-in complete.
 A 30000 0 0 16 0 3 0 5                          # ch3 pink-noise bed steady at 16
@@ -43,21 +43,21 @@ A 45000 240 0 55 0 1 250 0                      # ch1 vol 55, beat holds 10 Hz
 # ---------------------------------------------------------------------------
 # t=2:00  Deepening: glide 10->2 Hz over 18 min (~0.44 Hz/min). Breathing LFO ends;
 #         plain brightness descent 25->8; color glides amber -> deep red.
-120000  >10 50 >25          >255 >100 >0 255   # LED freq 10->2; bright 25->8; color 255,100,0 -> 180,30,0
+120000  >10 50 >25          >255 >100 >0 10   # LED freq 10->2; bright 25->8; color 255,100,0 -> 180,30,0
 A 120000 >240 0 55 0 1 250 0                    # carrier 240->248 => beat 10->2 over 18 min
 S 120000 default 65 "Drifting down now. Sinking through theta toward deep, slow delta."
 
 # ---------------------------------------------------------------------------
 # t=20:00  Beat 2 Hz reached -> Soft Off begins. Brightness 8->0; quadratic volume
 #          fade 55->0; pink-noise quad fade 16->0. No wake-up.
-1200000 >2 50 >8           >180 >30 >0 255     # LED 2 Hz; bright 8->0; color 180,30,0 -> 150,20,0
+1200000 >2 50 >8           >180 >30 >0 10     # LED 2 Hz; bright 8->0; color 180,30,0 -> 150,20,0
 A 1200000 248 0 *55 0 1 250 0                  # beat 2 Hz held; quad vol fade 55->0
 A 1200000 0 0 *16 0 3 0 5                      # pink-noise quad fade 16->0
 S 1200000 default 65 "Falling into deep delta, two hertz. The sound and light are fading. Sleep now."
 
 # ---------------------------------------------------------------------------
 # t=25:00  Soft Off complete: brightness 0 AND volume 0 together -> silent + dark. No loop.
-1500000 2 50 0             150 20 0 255        # 2 Hz, bright 0, dim deep-red (off)
+1500000 2 50 0             150 20 0 10        # 2 Hz, bright 0, dim deep-red (off)
 A 1500000 248 0 0 0 1 250 0                    # ch1 beat 2 Hz, vol 0
 A 1500000 0 0 0 0 3 0 5                        # ch3 pink-noise vol 0
 S 1500000 default 65 "Two hertz, deep sleep. Rest."

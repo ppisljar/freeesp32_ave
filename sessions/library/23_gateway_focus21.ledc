@@ -41,14 +41,14 @@
 # phase time and fading its volume in.
 
 # --- Prep / fade-in (00:00-03:00): calm 4 Hz SEPTON theta, LED + vol ease in ---
-0 4 50 >0 90 0 200 15            # LED 4 Hz theta, violet, brightness ramps 0->22% over 15 s
+0 4 50 >0 90 0 200 5            # LED 4 Hz theta, violet, brightness ramps 0->22% over 15 s
 A 0 200 0 >0 0 7 204 7  # septon a 200->204 (4 Hz): vol fades 0->22 over 60 s
 A 0 204 0 >0 0 8 208 7  # septon b 204->208 (4 Hz)
 A 0 208 0 >0 0 9 212 7  # septon c 208->212 (4 Hz)
 A 0 200 ~-100:100:6000 >0 0 10 0 5   # ch10 phased PINK bed: pan L<->R 6 s, vol fades 0->8
 S 3000 default 65 "Settle in and let the body grow still. Breathe slowly, easily, and let yourself relax."
-15000 4 50 22 90 0 200 15        # brightness reaches 22% (ramp-in >=15 s done)
-30000 4 50 ~16:24:12000 90 0 200 15   # gentle breathing: brightness sine 16<->24% over 12 s
+15000 4 50 22 90 0 200 5        # brightness reaches 22% (ramp-in >=15 s done)
+30000 4 50 ~16:24:12000 90 0 200 5   # gentle breathing: brightness sine 16<->24% over 12 s
 A 60000 200 0 22 0 7 204 7  # septon a reaches 22, held
 A 60000 204 0 22 0 8 208 7  # septon b reaches 22
 A 60000 208 0 22 0 9 212 7  # septon c reaches 22
@@ -84,7 +84,7 @@ A 1800000 750 0 0 0 5 766.2 7  # ch5 silent
 A 1800000 900 0 0 0 6 916.2 7  # ch6 silent
 
 # --- Soft close (31:00-33:00): fade theta base + LED to zero ---
-1860000 4 50 >22 90 0 200 15     # LED brightness begins soft fade 22->0
+1860000 4 50 >22 90 0 200 5     # LED brightness begins soft fade 22->0
 A 1860000 200 0 >22 0 7 204 7  # septon a fades 22->0 over 120 s
 A 1860000 204 0 >22 0 8 208 7  # septon b fades out
 A 1860000 208 0 >22 0 9 212 7  # septon c fades out
@@ -98,4 +98,4 @@ A 1980000 208 0 0 0 9 212 7  # septon c silent
 A 1980000 250 0 0 0 2 254 7
 A 1980000 300 0 0 0 3 304 7
 A 1980000 200 ~-100:100:6000 0 0 10 0 5   # ch10 pink bed silent
-1980000 4 50 0 90 0 200 15       # end: brightness 0
+1980000 4 50 0 90 0 200 5       # end: brightness 0

@@ -12,15 +12,15 @@
 #   target is the next same-channel entry's value, swept over the gap.
 
 # --- t=0: session start -------------------------------------------------------
-0 0 50 >0 0 60 180 15            # LED steady (freq 0); brightness >0 ramps toward next entry (->22%); dim blue
+0 0 50 >0 0 60 180 5            # LED steady (freq 0); brightness >0 ramps toward next entry (->22%); dim blue
 A 0 >370 0 >0 0 1 382 0          # ch1: carrier >370 ramps toward next freq; vol >0 fades toward next vol; freq_r 382 (beat 12); sine
 S 3000 default 65 "Settling now at twelve hertz. Let your breathing slow, gently in and out."
 
 # --- t=15 s: brightness ramp-in (>=10 s) complete -----------------------------
-15000 0 50 22 0 60 180 15        # brightness 22% reached; steady dim blue
+15000 0 50 22 0 60 180 5        # brightness 22% reached; steady dim blue
 
 # --- t=30 s: breathing brightness LFO engages (sine 12<->28% / 10 s, ~6 breaths/min) ---
-30000 0 50 ~12:28:10000 0 60 180 15   # gentle breathing; the only LED motion (no strobe, freq stays 0)
+30000 0 50 ~12:28:10000 0 60 180 5   # gentle breathing; the only LED motion (no strobe, freq stays 0)
 
 # --- t=45 s: volume fade-in (0->50 over 45 s) complete; carrier continues sliding ---
 A 45000 >370.5 0 50 0 1 382 0    # vol 50 reached; carrier mid-slide (>370.5 -> next 372); beat ~11.5 Hz
@@ -37,8 +37,8 @@ S 180000 default 65 "You've reached alpha, ten hertz. Rest here, calm and safe. 
 # --- t=24:30: begin soft close (gentle, stays in alpha) -----------------------
 A 1470000 372 0 >50 0 1 382 0    # carrier holds 372; vol >50 ramps toward 0 over the last 30 s
 S 1470000 default 65 "Slowly returning now, still calm and clear. Carry this ease with you."
-1470000 0 50 >12 0 60 180 15     # brightness >12 (LFO floor) ramps toward 0 over the last 30 s (>=10 s)
+1470000 0 50 >12 0 60 180 5     # brightness >12 (LFO floor) ramps toward 0 over the last 30 s (>=10 s)
 
 # --- t=25:00: end — audio and light at zero -----------------------------------
 A 1500000 372 0 0 0 1 382 0      # carrier 372 (beat 10 Hz), volume 0
-1500000 0 50 0 0 60 180 15       # brightness 0; session end
+1500000 0 50 0 0 60 180 5       # brightness 0; session end

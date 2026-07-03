@@ -13,7 +13,7 @@ import { emptyDoc } from './model.js';
 import { parse } from './parse.js';
 import { serialize } from './serialize.js';
 import { validate } from './validate.js';
-import { playDoc, stop, patchLine, pushBg } from './transport.js';
+import { playDoc, stop, stopBg, patchLine, pushBg } from './transport.js';
 import { bounceSession, pushSessionBg } from './bounce.js';
 import { playSession } from './play.js';
 import { getEngine } from './tts.js';
@@ -22,6 +22,7 @@ import { initTextView } from './views/text.js';
 import { initTableView } from './views/table.js';
 import { initLaneView } from './views/lane.js';
 import { initWizardView } from './views/wizard.js';
+import { communityShow } from './community.js';
 
 // ---- Shared model + event bus ---------------------------------------------
 let doc = emptyDoc();
@@ -106,6 +107,7 @@ function switchView(view) {
     const tableRoot = document.getElementById('genTableView');
     const laneRoot = document.getElementById('genLaneView');
     const wizardRoot = document.getElementById('genWizardView');
+    const commRoot = document.getElementById('genCommunityView');
     const placeholder = document.getElementById('genOtherView');
 
     // Hide everything first.
@@ -113,6 +115,7 @@ function switchView(view) {
     if (tableView) tableView.hide(); else if (tableRoot) tableRoot.style.display = 'none';
     if (laneView) laneView.hide(); else if (laneRoot) laneRoot.style.display = 'none';
     if (wizardView) wizardView.hide(); else if (wizardRoot) wizardRoot.style.display = 'none';
+    if (commRoot) commRoot.style.display = 'none';
     if (placeholder) placeholder.style.display = 'none';
 
     if (view === 'text') {
@@ -127,6 +130,9 @@ function switchView(view) {
     } else if (view === 'wizard') {
         if (wizardView) wizardView.show();
         else if (wizardRoot) wizardRoot.style.display = '';
+    } else if (view === 'community') {
+        if (commRoot) commRoot.style.display = '';
+        communityShow();   // lazy-fetches the GitHub index on first show
     } else if (placeholder) {
         placeholder.textContent = view + ' view is not available.';
         placeholder.style.display = '';
@@ -249,6 +255,7 @@ async function onBounce() {
     }
 }
 function onStop() {
+    stopBg();  // abort the in-flight browser BG push so it stops uploading too
     stop().then(res => showMessage(res || 'Stopped', 'info'))
           .catch(err => showMessage('Stop error: ' + err, 'error'));
 }

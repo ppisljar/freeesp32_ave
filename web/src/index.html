@@ -64,6 +64,7 @@
                     <button class="gen-subtab" data-view="table">Table</button>
                     <button class="gen-subtab" data-view="lanes">Lanes</button>
                     <button class="gen-subtab" data-view="wizard">Wizard</button>
+                    <button class="gen-subtab" data-view="community">Community</button>
                 </div>
 
                 <!-- Config load/save row -->
@@ -107,6 +108,9 @@
                     <!-- Wizard view (Phase 5): segment forms + Field/Transition/Pulse.
                          Chrome (minimap / segment cards / layer sheets) is built in JS. -->
                     <div id="genWizardView" class="gen-wizardview" style="display:none;"></div>
+                    <!-- Community view: browse .ledc sessions from the GitHub repo
+                         (browser-only fetch; content built in gen/community.js). -->
+                    <div id="genCommunityView" class="gen-communityview" style="display:none;"></div>
                     <!-- Placeholder for not-yet-built views -->
                     <div id="genOtherView" class="gen-viewarea" style="display:none;"></div>
                 </div>

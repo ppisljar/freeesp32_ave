@@ -106,6 +106,19 @@ const MOD_WAVES = [
     ['sawup', 'Saw up'], ['sawdown', 'Saw down'], ['square', 'Square'],
 ];
 
+// Carrier waveforms for a TONE channel (noise 4/5/6 live on ch 9, handled
+// separately). Value = the integer sent in the 8th audio field / applied by
+// audio_generator_set_wave_type_locked. 7 = EEG-contour carrier.
+const CARRIER_WAVES = [
+    [0, 'Sine'], [1, 'Square'], [2, 'Triangle'], [3, 'Saw'], [7, 'EEG'],
+];
+// Isochronic/pulse envelope shapes. Audio has an extra 4=Tremolo (legacy bipolar
+// sine); LED envelopes are 0..3 only.
+const ISO_ENVS_AUDIO = [[0, 'Square'], [1, 'Sine'], [2, 'Triangle'], [3, 'Trapezoid'], [4, 'Tremolo']];
+const ISO_ENVS_LED   = [[0, 'Square'], [1, 'Sine'], [2, 'Triangle'], [3, 'Trapezoid']];
+// Last-applied pulse settings per channel key, so reopening the popup pre-fills.
+const ctrlPulseState = {};
+
 // Current device value of a field, used as a sensible default for "from".
 function ctrlFieldValue(domain, idx, field) {
     if (domain === 'aud') {
@@ -165,6 +178,79 @@ function ctrlOpenModPopup(domain, idx, field) {
     });
 }
 
+// ---- Per-channel pulse / isochronic shaping (the ⚙ icon) -------------------
+// Audio: env/duty/attack/depth (→ /api/iso-env?ch=), phase (→ /api/audio-phase),
+//        beat jitter (→ /api/beat-jitter, DEVICE-WIDE).
+// LED:   carrier (→ /api/flicker-carrier?mask=), attack (→ /api/flicker-attack),
+//        phase (→ /api/flicker-phase), jitter (→ /api/flicker-jitter?mask=).
+function ctrlGet(url) {
+    return fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
+        .catch(err => showMessage('Pulse update failed: ' + err, 'error'));
+}
+function ctrlOpenPulsePopup(domain, idx) {
+    const isAud = (domain === 'aud');
+    const key = domain + '-' + idx + '-pulse';
+    const label = (isAud ? 'A' : 'L') + (idx + 1) + ' pulse';
+    const st = ctrlPulseState[key] || (isAud
+        ? { env: 4, duty: 50, attack: 5, depth: 0, phase: 0, jamp: 0, jper: 45000 }
+        : { env: 0, attack: 0, phase: 0, jamp: 0, jper: 45000 });
+    const envList = isAud ? ISO_ENVS_AUDIO : ISO_ENVS_LED;
+    const envLabel = isAud ? 'Envelope' : 'Carrier';
+
+    const num = (id, lbl, val, min) =>
+        '<label style="flex:1;">' + lbl + '<br><input id="' + id + '" type="number" step="any"'
+        + (min != null ? ' min="' + min + '"' : '') + ' value="' + val + '" style="width:100%;padding:6px;"></label>';
+
+    const back = document.createElement('div');
+    back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;padding:20px;border-radius:8px;min-width:300px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-size:14px;';
+    box.innerHTML =
+        '<h3 style="margin:0 0 12px 0;">Pulse — ' + label + '</h3>'
+      + '<div style="margin-bottom:8px;"><label>' + envLabel + '<br><select id="pEnv" style="width:100%;padding:6px;">'
+      + envList.map(e => '<option value="' + e[0] + '"' + (e[0] === st.env ? ' selected' : '') + '>' + e[1] + '</option>').join('')
+      + '</select></label></div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:8px;">'
+      + (isAud ? num('pDuty', 'Duty %', st.duty, 0) : '')
+      + num('pAttack', 'Attack ms', st.attack, 0)
+      + (isAud ? num('pDepth', 'Depth %', st.depth, 0) : '')
+      + num('pPhase', 'Phase °', st.phase, 0)
+      + '</div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:14px;">'
+      + num('pJamp', 'Jitter Hz', st.jamp, 0)
+      + num('pJper', 'Jitter period ms', st.jper, 1)
+      + '</div>'
+      + (isAud ? '<div style="font-size:12px;color:#888;margin-bottom:10px;">Beat jitter is device-wide (affects all audio channels).</div>' : '')
+      + '<div style="text-align:right;"><button id="pCancel">Cancel</button> <button id="pApply" style="background:#28a745;">Apply</button></div>';
+    back.appendChild(box);
+    document.body.appendChild(back);
+    const close = () => document.body.removeChild(back);
+    back.addEventListener('click', (e) => { if (e.target === back) close(); });
+    box.querySelector('#pCancel').addEventListener('click', close);
+    box.querySelector('#pApply').addEventListener('click', () => {
+        const g = (id) => { const el = box.querySelector('#' + id); return el ? parseFloat(el.value) : 0; };
+        const env = parseInt(box.querySelector('#pEnv').value, 10) || 0;
+        const attack = g('pAttack'), phase = g('pPhase'), jamp = g('pJamp'), jper = g('pJper') || 45000;
+        if (isAud) {
+            const duty = g('pDuty'), depth = g('pDepth');
+            ctrlPulseState[key] = { env, duty, attack, depth, phase, jamp, jper };
+            const ch = idx + 1;   // audio channel index matches state.audio[] / .ledc channel
+            ctrlGet('/api/iso-env?ch=' + ch + '&env=' + env + '&duty=' + duty + '&attack=' + attack + '&depth=' + depth);
+            ctrlGet('/api/audio-phase?ch=' + ch + '&deg=' + Math.round(phase));
+            ctrlGet('/api/beat-jitter?amp=' + jamp + '&period=' + jper);
+        } else {
+            ctrlPulseState[key] = { env, attack, phase, jamp, jper };
+            const mask = ctrlLedMask(idx);
+            ctrlGet('/api/flicker-carrier?mask=' + mask + '&wave=' + env);
+            ctrlGet('/api/flicker-attack?mask=' + mask + '&ms=' + Math.round(attack));
+            ctrlGet('/api/flicker-phase?mask=' + mask + '&deg=' + Math.round(phase));
+            ctrlGet('/api/flicker-jitter?mask=' + mask + '&amp=' + jamp + '&period=' + jper);
+        }
+        showMessage('Pulse applied on ' + (isAud ? 'A' : 'L') + (idx + 1), 'success');
+        close();
+    });
+}
+
 // Build a one-line audio patch. Reads CURRENT values for non-changed
 // fields from ctrlState so the patch's animation sweeps only the
 // changed field (other fields' current=target → no-op animation).
@@ -181,9 +267,14 @@ function ctrlBuildAudioPatch(chIdx, field, value) {
     const p = (field === 'pan')  ? value : ch.pan;
     const v = (field === 'vol')  ? value : ch.vol;
     const m = (field === 'mod')  ? value : ch.mod;
-    // A time freq pan vol mod channel
+    // freq_r (binaural right-ear Hz) + wave are carried on EVERY patch so a plain
+    // slider nudge preserves them (both apply idempotently on the device).
+    const fr = (field === 'freqr') ? value : (ch.freq_r || 0);
+    const wv = (field === 'wave')  ? value : (ch.wave   || 0);
+    // A time freq pan vol mod channel freq_r wave
     return 'A ' + CTRL_ANIMATE_MS + ' ' + f.toFixed(3) + ' ' + p.toFixed(1)
-         + ' ' + v.toFixed(1) + ' ' + m.toFixed(2) + ' ' + (chIdx + 1);
+         + ' ' + v.toFixed(1) + ' ' + m.toFixed(2) + ' ' + (chIdx + 1)
+         + ' ' + (+fr).toFixed(3) + ' ' + (wv | 0);
 }
 
 // Build a one-line LED patch. Same current-value-preservation logic.
@@ -241,11 +332,15 @@ function ctrlRenderAudioRow(idx) {
     div.className = 'ctrl-row';
     div.id = 'ctrl-aud-' + idx;
     div.innerHTML =
-        '<div class="label"><span class="active-dot" id="aud-' + idx + '-dot"></span> A' + (idx+1) + '</div>'
+        '<div class="label"><span class="active-dot" id="aud-' + idx + '-dot"></span> A' + (idx+1)
+      +   ' <span class="mod-ico" id="aud-' + idx + '-pulse" title="Pulse / isochronic shaping — click to edit">⚙</span></div>'
       + '<div class="field"><label>freq</label><input type="range" min="0" max="20000" step="0.1" id="aud-' + idx + '-freq"><input type="number" class="val numv" min="0" max="20000" step="any" id="aud-' + idx + '-freq-v"><span class="mod-ico" id="aud-' + idx + '-freq-m" title="Modulation — click to edit">∿</span></div>'
+      + '<div class="field"><label>R-freq</label><input type="number" class="val numv" min="0" max="20000" step="any" id="aud-' + idx + '-freqr-v" title="Right-ear carrier Hz for binaural (0 = mono)"></div>'
       + '<div class="field"><label>pan</label><input type="range" min="-100" max="100" step="1" id="aud-' + idx + '-pan"><input type="number" class="val numv" min="-100" max="100" step="any" id="aud-' + idx + '-pan-v"><span class="mod-ico" id="aud-' + idx + '-pan-m" title="Modulation — click to edit">∿</span></div>'
       + '<div class="field"><label>vol</label><input type="range" min="0" max="100" step="1" id="aud-' + idx + '-vol"><input type="number" class="val numv" min="0" max="100" step="any" id="aud-' + idx + '-vol-v"><span class="mod-ico" id="aud-' + idx + '-vol-m" title="Modulation — click to edit">∿</span></div>'
       + '<div class="field"><label>mod-f</label><input type="range" min="0" max="40" step="0.01" id="aud-' + idx + '-mod"><input type="number" class="val numv" min="0" max="40" step="any" id="aud-' + idx + '-mod-v"><span class="mod-ico" id="aud-' + idx + '-mod-m" title="Modulation — click to edit">∿</span></div>'
+      + '<div class="field"><label>wave</label><select class="lockSel" id="aud-' + idx + '-wave" title="Carrier waveform">'
+      +   CARRIER_WAVES.map(w => '<option value="' + w[0] + '">' + w[1] + '</option>').join('') + '</select></div>'
       + '<div class="field"><label>lock</label><select class="lockSel" id="aud-' + idx + '-lock" title="Follow another channel\'s frequency changes"></select></div>';
     return div;
 }
@@ -257,7 +352,8 @@ function ctrlRenderLedRow(idx, hasColor) {
     div.className = 'ctrl-row';
     div.id = 'ctrl-led-' + idx;
     let html =
-        '<div class="label"><span class="active-dot" id="led-' + idx + '-dot"></span> L' + (idx+1) + '</div>'
+        '<div class="label"><span class="active-dot" id="led-' + idx + '-dot"></span> L' + (idx+1)
+      +   ' <span class="mod-ico" id="led-' + idx + '-pulse" title="Pulse / flicker shaping — click to edit">⚙</span></div>'
       + '<div class="field"><label>freq</label><input type="range" min="0" max="30" step="0.1" id="led-' + idx + '-freq"><input type="number" class="val numv" min="0" max="30" step="any" id="led-' + idx + '-freq-v"><span class="mod-ico" id="led-' + idx + '-freq-m" title="Modulation — click to edit">∿</span></div>'
       + '<div class="field"><label>duty</label><input type="range" min="0" max="100" step="1" id="led-' + idx + '-duty"><input type="number" class="val numv" min="0" max="100" step="any" id="led-' + idx + '-duty-v"><span class="mod-ico" id="led-' + idx + '-duty-m" title="Modulation — click to edit">∿</span></div>'
       + '<div class="field"><label>bright</label><input type="range" min="0" max="100" step="1" id="led-' + idx + '-bright"><input type="number" class="val numv" min="0" max="100" step="any" id="led-' + idx + '-bright-v"><span class="mod-ico" id="led-' + idx + '-bright-m" title="Modulation — click to edit">∿</span></div>';
@@ -367,6 +463,17 @@ export async function ctrlInit() {
             const ico = document.getElementById('aud-' + idx + '-' + field + '-m');
             if (ico) ico.addEventListener('click', () => ctrlOpenModPopup('aud', idx, field));
         });
+        // Carrier waveform dropdown → patch the 8th (wave) field.
+        const waveSel = document.getElementById('aud-' + idx + '-wave');
+        if (waveSel) waveSel.addEventListener('change', (e) =>
+            ctrlPatch(ctrlBuildAudioPatch(idx, 'wave', parseInt(e.target.value, 10) || 0)));
+        // Binaural right-ear frequency (number only; applied instantly on the device).
+        const frKey = 'aud-' + idx + '-freqr';
+        ctrlBindNumber(document.getElementById(frKey + '-v'), null, frKey,
+            (v) => ctrlSendThrottled(frKey, () => ctrlBuildAudioPatch(idx, 'freqr', v)));
+        // Pulse ⚙ → per-channel isochronic/pulse popup.
+        const audPulse = document.getElementById('aud-' + idx + '-pulse');
+        if (audPulse) audPulse.addEventListener('click', () => ctrlOpenPulsePopup('aud', idx));
         ctrlPopulateLockSelect('aud', idx, audN);
         if (ctrlLocks.aud[idx] != null) ctrlAudOffset[idx] = ctrlAudFreq(idx) - ctrlAudFreq(ctrlLocks.aud[idx]);
         document.getElementById('aud-' + idx + '-lock').addEventListener('change', (e) => ctrlOnLockChange('aud', idx, e.target));
@@ -420,6 +527,9 @@ export async function ctrlInit() {
             const ico = document.getElementById('led-' + idx + '-' + field + '-m');
             if (ico) ico.addEventListener('click', () => ctrlOpenModPopup('led', idx, field));
         });
+        // Pulse ⚙ → per-channel flicker/pulse popup.
+        const ledPulse = document.getElementById('led-' + idx + '-pulse');
+        if (ledPulse) ledPulse.addEventListener('click', () => ctrlOpenPulsePopup('led', idx));
         if (caps.led_color) {
             ctrlBindColor(document.getElementById('led-' + idx + '-col'), 'led-' + idx + '-col', (hex) => {
                 const r = parseInt(hex.substr(1, 2), 16);
@@ -494,6 +604,13 @@ async function ctrlPoll() {
             const ico = document.getElementById('aud-' + i + '-' + f + '-m');
             if (ico) ico.classList.toggle('active', !!(a.modf && a.modf[f]));
         });
+        // Reflect binaural R-freq + carrier wave (skip while the user is editing).
+        if (!ctrlInteracting.has('aud-' + i + '-freqr')) {
+            const frEl = document.getElementById('aud-' + i + '-freqr-v');
+            if (frEl && document.activeElement !== frEl) frEl.value = (a.freq_r || 0).toFixed(3);
+        }
+        const wSel = document.getElementById('aud-' + i + '-wave');
+        if (wSel && document.activeElement !== wSel) wSel.value = String(a.wave == null ? 0 : a.wave);
     }
     // Noise channel — .ledc channel 9 → state.audio[9].
     if (st.audio && st.audio.length > 9) {

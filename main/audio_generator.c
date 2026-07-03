@@ -34,6 +34,7 @@
 #include "audio_config.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_attr.h"      // EXT_RAM_BSS_ATTR — place the EEG LUT in PSRAM .bss
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -91,7 +92,12 @@ static float sine_lut[SINE_LUT_SIZE];
 #define EEG_LUT_INDEX_SHIFT     22
 #define EEG_LUT_FRAC_MASK       ((1u << EEG_LUT_INDEX_SHIFT) - 1u)
 #define EEG_LUT_FRAC_SCALE      (1.0f / (float)(1u << EEG_LUT_INDEX_SHIFT))
-static float eeg_lut[EEG_LUT_SIZE];
+// PSRAM .bss (EXT_RAM_BSS_ATTR): the ESP32 has chronic internal-DRAM pressure
+// (only a few KB free at runtime once all tasks/buffers are up — a 4 KB internal
+// table can starve later xTaskCreate() calls like led_flicker_task). Filled once
+// at init and read from task context (fill_buffer), so PSRAM latency is fine; the
+// phase accumulator advances monotonically → near-sequential, cache-friendly reads.
+static EXT_RAM_BSS_ATTR float eeg_lut[EEG_LUT_SIZE];
 
 // Fourier coefficients for the EEG-contour cycle.  Amplitudes taper ~1/n (rich
 // but band-limited to 6 partials — at the therapeutic ≤275 Hz carrier the 6th
@@ -1465,6 +1471,22 @@ esp_err_t audio_generator_set_wave_type_locked(int channel, audio_wave_type_t wt
     ch->wave_type            = wt;
     ch->params.wave_type     = wt;
     ch->pending_params.wave_type = wt;
+    return ESP_OK;
+}
+
+esp_err_t audio_generator_set_freq_r_locked(int channel, float hz)
+{
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return ESP_ERR_INVALID_ARG;
+    if (hz < 0.0f || hz > AUDIO_SAMPLE_RATE / 2) return ESP_ERR_INVALID_ARG;
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    if (!ch->active) return ESP_ERR_INVALID_STATE;
+    // current_freq_r drives the right-ear phase increment in fill_buffer;
+    // params.frequency_r is what the binaural pan-bypass keys on (so pan stays
+    // a no-op for a live-created binaural pair). Keep pending_params in sync so a
+    // later pending-apply doesn't revert it.
+    ch->current_freq_r            = hz;
+    ch->params.frequency_r        = hz;
+    ch->pending_params.frequency_r = hz;
     return ESP_OK;
 }
 

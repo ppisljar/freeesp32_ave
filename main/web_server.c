@@ -236,6 +236,15 @@ esp_err_t web_server_init(void)
     // static file handler) silently fail, and every unmatched path — including
     // "/" — returns 404. Keep headroom above the current count (~28).
     config.max_uri_handlers = 40;
+    // Bigger httpd task stack (default 4096). The /api/patch-config path — hit
+    // rapidly by the Live Control sliders — runs config_parser_apply_patch →
+    // parse_content → parse_line → parse_audio/led_line on THIS task's stack,
+    // nesting line_buffer[256] + line_copy[256] + the (v2-enlarged) per-entry
+    // parse locals. At 4096 that lands right at the edge, and an interrupt at
+    // peak depth (Xtensa ISRs borrow the task stack) intermittently tripped the
+    // stack-overflow guard ("stack overflow in task httpd"). 8192 gives margin;
+    // internal DRAM has ample headroom now that eeg_lut moved to PSRAM.
+    config.stack_size = 8192;
     // Enable wildcard matching so "/*" can serve arbitrary static assets.
     // Exact /api/... handlers are registered first and keep priority.
     config.uri_match_fn = httpd_uri_match_wildcard;
@@ -1361,7 +1370,14 @@ static esp_err_t flicker_carrier_handler(httpd_req_t *req)
         char q[64], val[16];
         if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
             httpd_query_key_value(q, "wave", val, sizeof(val)) == ESP_OK) {
-            led_matrix_set_carrier((uint8_t)atoi(val));
+            uint8_t wv = (uint8_t)atoi(val);
+            char mval[16];
+            // Optional ?mask= → per-channel; omitted → device-wide (legacy).
+            if (httpd_query_key_value(q, "mask", mval, sizeof(mval)) == ESP_OK) {
+                led_matrix_set_carrier_masked((uint8_t)atoi(mval), wv);
+            } else {
+                led_matrix_set_carrier(wv);
+            }
         }
     }
     uint8_t w = led_matrix_get_carrier();
@@ -1381,14 +1397,19 @@ static esp_err_t iso_env_handler(httpd_req_t *req)
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
     if (qlen > 1 && qlen < 128) {
         char q[128], val[16];
-        uint8_t env = 0; float duty = 0, attack = -1, depth = 0;
+        uint8_t env = 0; float duty = 0, attack = -1, depth = 0; int ch = -1;
         bool have = false;
         if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
             if (httpd_query_key_value(q, "env",    val, sizeof(val)) == ESP_OK) { env    = (uint8_t)atoi(val); have = true; }
             if (httpd_query_key_value(q, "duty",   val, sizeof(val)) == ESP_OK) { duty   = strtof(val, NULL); }
             if (httpd_query_key_value(q, "attack", val, sizeof(val)) == ESP_OK) { attack = strtof(val, NULL); }
             if (httpd_query_key_value(q, "depth",  val, sizeof(val)) == ESP_OK) { depth  = strtof(val, NULL); }
-            if (have) audio_generator_set_iso(env, duty, attack, depth);
+            if (httpd_query_key_value(q, "ch",     val, sizeof(val)) == ESP_OK) { ch     = atoi(val); }
+            // Optional ?ch= → per-channel iso; omitted → device-wide (legacy).
+            if (have) {
+                if (ch >= 0) audio_generator_set_iso_channel(ch, env, duty, attack, depth);
+                else         audio_generator_set_iso(env, duty, attack, depth);
+            }
         }
     }
     httpd_resp_set_type(req, "application/json");
@@ -1434,7 +1455,8 @@ static esp_err_t beat_jitter_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/flicker-attack?ms=<n>  — trapezoid (env=3) edge duration (complement 2).
+// GET /api/flicker-attack?ms=<n>[&mask=<1..255>]  — trapezoid (env=3) edge duration.
+// Optional ?mask= → per-channel; omitted → device-wide (legacy).
 static esp_err_t flicker_attack_handler(httpd_req_t *req)
 {
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
@@ -1442,7 +1464,13 @@ static esp_err_t flicker_attack_handler(httpd_req_t *req)
         char q[48], val[16];
         if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
             httpd_query_key_value(q, "ms", val, sizeof(val)) == ESP_OK) {
-            led_matrix_set_attack((uint16_t)atoi(val));
+            uint16_t ms = (uint16_t)atoi(val);
+            char mval[16];
+            if (httpd_query_key_value(q, "mask", mval, sizeof(mval)) == ESP_OK) {
+                led_matrix_set_attack_masked((uint8_t)atoi(mval), ms);
+            } else {
+                led_matrix_set_attack(ms);
+            }
         }
     }
     httpd_resp_set_type(req, "application/json");
@@ -1450,19 +1478,23 @@ static esp_err_t flicker_attack_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/flicker-jitter?amp=<hz>&period=<ms>  — flicker-rate jitter (complement 3).
+// GET /api/flicker-jitter?amp=<hz>&period=<ms>[&mask=<1..255>]  — flicker-rate jitter.
+// Optional ?mask= → per-channel; omitted → device-wide (legacy).
 static esp_err_t flicker_jitter_handler(httpd_req_t *req)
 {
     float amp = 0.0f, period = 45000.0f;
+    int mask = -1;
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
     if (qlen > 1 && qlen < 64) {
         char q[64], val[16];
         if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
             if (httpd_query_key_value(q, "amp",    val, sizeof(val)) == ESP_OK) amp    = strtof(val, NULL);
             if (httpd_query_key_value(q, "period", val, sizeof(val)) == ESP_OK) period = strtof(val, NULL);
+            if (httpd_query_key_value(q, "mask",   val, sizeof(val)) == ESP_OK) mask   = atoi(val);
         }
     }
-    led_matrix_set_jitter(amp, period);
+    if (mask > 0) led_matrix_set_jitter_masked((uint8_t)mask, amp, period);
+    else          led_matrix_set_jitter(amp, period);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;

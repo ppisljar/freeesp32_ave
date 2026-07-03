@@ -47,35 +47,35 @@ A 0 90 ~-100:100:8000 >0 4.5 4 0 6 50 1       # ch4 BROWN bed: 4.5 Hz sine-gated
 A 60000 90 ~-100:100:8000 25 4.5 4 0 6 50 1   # ch4 brown settled 25 (warm underlayer)
 
 # --- Settle / drum 8 Hz (00:00-03:00): warm amber trapezoid flash + drum fade in ---
-0 8 50 >0 220 110 0 15 3 0 6                  # amber 8 Hz TRAPEZOID flash (env 3, 6 ms edge); bright fade-in
+0 8 50 >0 220 110 0 10 3 0 6                  # amber 8 Hz TRAPEZOID flash (env 3, 6 ms edge); bright fade-in
 A 0 160 0 >0 0 1 0 0                          # ch1 monaural carrier A (160 Hz, pan 0); vol fade-in
 A 0 168 0 >0 0 2 0 0                          # ch2 monaural carrier B (168 Hz, pan 0) => 8 Hz drum in the air
 A 0 137 0 >0 8 3 0 0 35 3 0 8 0.3:53000       # ch3 iso drum hit: 137 Hz, 8 Hz trapezoid gate, 35% duty, 8 ms edge; pulse jitter 0.3 Hz/53 s
 S 5000 default 65 "Lie down and let the drum find its rhythm around you. Let it carry you toward the journey."
-20000 8 50 26 220 110 0 15 3 0 6             # brightness reaches 26% (>=15 s ramp-in)
+20000 8 50 26 220 110 0 10 3 0 6             # brightness reaches 26% (>=15 s ramp-in)
 A 45000 160 0 50 0 1 0 0                      # ch1 vol settled 50
 A 45000 168 0 50 0 2 0 0                      # ch2 vol settled 50 (drum steady 8 Hz)
 A 45000 137 0 40 8 3 0 0 35 3 0 8 0.3:53000   # ch3 iso drum settled 40
-45000 8 50 ~14:30:12000 220 110 0 15 3 0 6   # breathing brightness LFO engages (0.1 Hz)
+45000 8 50 ~14:30:12000 220 110 0 10 3 0 6   # breathing brightness LFO engages (0.1 Hz)
 
 # --- Descent (03:00-08:00): drum 8 -> 4.5 Hz (~0.7 Hz/min) ---
 A 180000 160 0 50 0 1 0 0                     # ch1 carrier A held at 160 (the anchor tone)
 A 180000 >168 0 50 0 2 0 0                    # ch2 carrier B ramps 168->164.5 => monaural beat 8->4.5
 A 180000 137 0 40 >8 3 0 0 35 3 0 8 0.3:53000 # ch3 iso pulse ramps 8->4.5 (mod IS interpolatable); jitter on
-180000 >8 50 ~14:30:12000 220 110 0 15 3 0 6 # LED flash tracks the drum 8->4.5, breathing continues
+180000 >8 50 ~14:30:12000 220 110 0 10 3 0 6 # LED flash tracks the drum 8->4.5, breathing continues
 S 180000 default 65 "Let the drum slow and carry you downward, into the between-place."
 
 # --- Journey hold (08:00-24:00 = 16 min): the monotonous 4.5 Hz drum, jitter sustains it ---
 A 480000 164.5 0 55 0 2 0 0                   # ch2 carrier B at 164.5 => 4.5 Hz monaural drum, fuller vol
 A 480000 137 0 45 4.5 3 0 0 35 3 0 8 0.3:53000 # ch3 iso drum at 4.5 Hz, jitter drifting the pulse
-480000 4.5 50 ~14:30:12000 220 110 0 15 3 0 6 # amber 4.5 Hz trapezoid flash 1:1, gentle breathing LFO
+480000 4.5 50 ~14:30:12000 220 110 0 10 3 0 6 # amber 4.5 Hz trapezoid flash 1:1, gentle breathing LFO
 S 480000 default 65 "You are in the journey now. Let the steady drum hold you. Travel, and let it be your thread home."
 S 1080000 default 65 "Wander freely. The drum will not let you lose your way; it beats on beneath everything."
 
 # --- Callback (24:00-27:00): the drummer's faster recall, drum 4.5 -> 9 Hz ---
 A 1440000 >164.5 0 55 0 2 0 0                 # ch2 carrier B ramps 164.5->169 => monaural beat 4.5->9 (the recall)
 A 1440000 137 0 45 >4.5 3 0 0 35 3 0 8 0.3:53000 # ch3 iso pulse 4.5->9 lockstep
-1440000 >4.5 50 26 220 110 0 15 3 0 6         # LED 4.5->9; steady 26% for the alerting callback (LFO dropped)
+1440000 >4.5 50 26 220 110 0 10 3 0 6         # LED 4.5->9; steady 26% for the alerting callback (LFO dropped)
 S 1440000 default 65 "The drum is calling you back. Begin to return, following the quickening beat homeward."
 
 # --- Gentle wake (27:00-30:00): drum 9 -> 10 Hz + soft fade ---
@@ -83,10 +83,10 @@ A 1620000 160 0 >50 0 1 0 0                   # ch1 carrier A vol fades 50->0
 A 1620000 >169 0 >55 0 2 0 0                  # ch2 carrier B 169->170 (beat 9->10) and vol fades 55->0
 A 1620000 137 0 >45 >9 3 0 0 35 3 0 8 0.3:53000 # ch3 iso pulse 9->10, vol fades 45->0
 A 1620000 90 ~-100:100:8000 >25 4.5 4 0 6 50 1  # brown bed fades 25->0
-1620000 >9 50 >26 220 110 0 15 3 0 6          # LED 9->10, brightness fades 26->0
+1620000 >9 50 >26 220 110 0 10 3 0 6          # LED 9->10, brightness fades 26->0
 S 1620000 default 65 "Come fully back to the room now. Feel the ground beneath you, and open your eyes when you are ready."
 A 1800000 160 0 0 0 1 0 0                      # end: ch1 vol 0
 A 1800000 170 0 0 0 2 0 0                      # end: ch2 vol 0 (beat settled 10)
 A 1800000 137 0 0 10 3 0 0 35 3 0 8 0.3:53000  # end: ch3 vol 0
 A 1800000 90 ~-100:100:8000 0 4.5 4 0 6 50 1   # end: brown bed 0
-1800000 10 50 0 220 110 0 15 3 0 6            # end: brightness 0
+1800000 10 50 0 220 110 0 10 3 0 6            # end: brightness 0

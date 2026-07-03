@@ -21,11 +21,11 @@
 # Ramp convention = animate-on-start (the >/* prefix sits where a segment BEGINS).
 
 # --- Ease-in (00:00-01:00): steady amber-red field + pink field + theta underlay fade in ---
-0 0 100 >0 255 40 0 255           # steady amber-red field (>=620 nm); brightness ease-in from 0 (15 s)
+0 0 100 >0 255 40 0 10           # steady amber-red field (>=620 nm); brightness ease-in from 0 (15 s)
 A 0 200 0 >0 0 1 0 5              # ch1 pink-noise Ganzfeld field (auditory homogeneity); vol fade-in
 A 0 253 0 >0 0 2 260 0           # ch2 binaural carrier 253 / R260 = 7 Hz theta underlay; vol fade-in
 S 3000 default 65 "Eyes closed, gaze soft. Rest in the warm, even glow and the steady wash of sound."
-15000 0 100 25 255 40 0 255       # brightness reaches 25% cap (>=10 s ease-in)
+15000 0 100 25 255 40 0 10       # brightness reaches 25% cap (>=10 s ease-in)
 A 60000 200 0 45 0 1 0 5          # ch1 pink field settled 45
 A 60000 253 0 25 0 2 260 0        # ch2 theta underlay settled 25
 
@@ -35,10 +35,10 @@ S 720000 default 65 "Nothing to seek. Just watch whatever arises in the glow."
 S 1080000 default 65 "At ease, open, resting in the even light."
 
 # --- Fade out (20:00-22:00): field + pink + underlay fade to 0 ---
-1200000 0 100 >25 255 40 0 255    # brightness ramp-out START 25 ...
+1200000 0 100 >25 255 40 0 10    # brightness ramp-out START 25 ...
 A 1200000 200 0 *45 0 1 0 5       # ch1 pink quad fade 45->0
 A 1200000 253 0 *25 0 2 260 0     # ch2 theta quad fade 25->0
 S 1200000 default 65 "Gently returning now. Let the glow and the sound fade away."
-1320000 0 100 0 255 40 0 255      # end: brightness 0
+1320000 0 100 0 255 40 0 10      # end: brightness 0
 A 1320000 200 0 0 0 1 0 5         # end: pink vol 0
 A 1320000 253 0 0 0 2 260 0       # end: theta vol 0
