@@ -121,10 +121,13 @@ static SemaphoreHandle_t audio_gen_mutex = NULL;
 #define ISO_ENV_TRIANGLE  2u
 #define ISO_ENV_TRAPEZOID 3u
 #define ISO_ENV_TREMOLO   4u
-static volatile uint8_t s_iso_env        = ISO_ENV_TREMOLO; // legacy bipolar sine tremolo
-static volatile float   s_iso_duty       = 0.5f;         // on-fraction of the mod cycle (0..1)
-static volatile float   s_iso_attack_ms  = 3.0f;         // raised edge duration (click-safe ≥2 ms)
-static volatile float   s_iso_depth      = 0.0f;         // >0 overrides mod_depth (test aid)
+static volatile uint8_t  s_iso_env       = ISO_ENV_TREMOLO; // legacy bipolar sine tremolo
+static volatile float    s_iso_duty      = 0.5f;         // on-fraction of the mod cycle (0..1)
+static volatile float    s_iso_attack_ms = 3.0f;         // raised edge duration (click-safe ≥2 ms)
+static volatile float    s_iso_depth     = 0.0f;         // >0 overrides mod_depth (test aid)
+// Complement 4: audio pulse phase is PER-CHANNEL (only relative phase matters);
+// stored as channel->mod_phase_offset_q32 (a fixed fraction of the mod cycle → so
+// it's frequency-independent by construction). Set via audio_generator_set_phase().
 
 // Internal functions
 static float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type);
@@ -161,12 +164,34 @@ static inline float iso_gate(uint32_t mod_phase_q32, uint8_t env, float duty, fl
     }
 }
 
-// A2 setter — env (0=sine,1=trapezoid), duty %, attack ms, depth % (0 = don't override).
+// A2 setter — env, duty %, attack ms, depth % (0 = don't override). Updates the
+// globals (latched by future channel starts) AND broadcasts to every live channel
+// so the /api/iso-env test endpoint is audible immediately on running channels.
 void audio_generator_set_iso(uint8_t env, float duty_pct, float attack_ms, float depth_pct) {
     s_iso_env       = (env <= ISO_ENV_TREMOLO) ? env : ISO_ENV_TREMOLO;
     if (duty_pct   > 0.0f) s_iso_duty      = (duty_pct   > 100.0f ? 100.0f : duty_pct)   * 0.01f;
     if (attack_ms >= 0.0f) s_iso_attack_ms = attack_ms;
     s_iso_depth = (depth_pct <= 0.0f) ? 0.0f : (depth_pct > 100.0f ? 1.0f : depth_pct * 0.01f);
+    for (int c = 0; c < NUM_AUDIO_CHANNELS; c++) {
+        audio_channels[c].iso_env       = s_iso_env;
+        audio_channels[c].iso_duty      = s_iso_duty;
+        audio_channels[c].iso_attack_ms = s_iso_attack_ms;
+        audio_channels[c].iso_depth     = s_iso_depth;
+    }
+}
+
+// Per-channel iso override (v2 timeline wiring). Each arg passed as its "leave"
+// sentinel is untouched on that channel:
+//   env < 0, duty_pct < 0, attack_ms < 0, depth_pct < 0  → field unchanged.
+// (depth_pct == 0 is meaningful: clears the override so params.mod_depth is used.)
+void audio_generator_set_iso_channel(int channel, int env, float duty_pct,
+                                     float attack_ms, float depth_pct) {
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return;
+    audio_gen_channel_t *ch = &audio_channels[channel];
+    if (env >= 0)          ch->iso_env       = ((uint8_t)env <= ISO_ENV_TREMOLO) ? (uint8_t)env : ISO_ENV_TREMOLO;
+    if (duty_pct   > 0.0f) ch->iso_duty      = (duty_pct   > 100.0f ? 100.0f : duty_pct) * 0.01f;
+    if (attack_ms >= 0.0f) ch->iso_attack_ms = attack_ms;
+    if (depth_pct >= 0.0f) ch->iso_depth     = (depth_pct > 100.0f ? 1.0f : depth_pct * 0.01f);
 }
 
 // A3 (entrainment_firmware_plan) — binaural beat-offset jitter for anti-habituation.
@@ -190,6 +215,14 @@ static inline float beat_jitter_offset(void) {
 void audio_generator_set_beat_jitter(float amp_hz, float period_ms) {
     s_beat_jitter_hz        = (amp_hz < 0.0f) ? 0.0f : amp_hz;
     if (period_ms >= 1000.0f) s_beat_jitter_period_ms = period_ms;
+}
+
+// C4 setter — per-channel pulse phase offset in degrees (0..359).
+void audio_generator_set_phase(int channel, uint16_t deg) {
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return;
+    deg %= 360u;
+    audio_channels[channel].mod_phase_offset_q32 =
+        (uint32_t)((float)deg / 360.0f * 4294967296.0f);
 }
 
 static inline float fast_sin_q32(uint32_t phase_q32) {
@@ -324,6 +357,14 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
     ch->amp_ramp_remaining  = AUDIO_AMP_RAMP_SAMPLES;
     ch->current_pan      = params->pan;
     ch->current_mod_freq = params->mod_frequency;
+
+    // Latch the per-channel isochronic pulse shape from the current globals. A v2
+    // timeline entry may then override this single channel via
+    // audio_generator_set_iso_channel() after start, without disturbing others.
+    ch->iso_env       = s_iso_env;
+    ch->iso_duty      = s_iso_duty;
+    ch->iso_attack_ms = s_iso_attack_ms;
+    ch->iso_depth     = s_iso_depth;
 
     // Layer 3 (Plan 007 Step 3.3): pre-advance Q32 phase by the DMA pipeline depth
     // so that phase = 0 lands at the moment the channel's first sample emerges from
@@ -1203,17 +1244,20 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             // Apply modulation if enabled; current_mod_freq drives the accumulator
             // so that mod-frequency sweeps take effect sample-accurately.
             if (channel->current_mod_freq > 0 && channel->params.mod_depth > 0) {
-                // A2: depth may be globally overridden for isochronic testing.
-                float depth = (s_iso_depth > 0.0f) ? s_iso_depth : channel->params.mod_depth;
-                if (s_iso_env == ISO_ENV_TREMOLO) {
+                // A2: depth per-channel (iso_depth>0 overrides params.mod_depth).
+                float depth = (channel->iso_depth > 0.0f) ? channel->iso_depth : channel->params.mod_depth;
+                // C4: apply the per-channel pulse phase offset (Q32 = fixed fraction
+                // of the mod cycle, frequency-independent).
+                uint32_t mphase = channel->mod_phase_q32 + channel->mod_phase_offset_q32;
+                if (channel->iso_env == ISO_ENV_TREMOLO) {
                     // Legacy SINE amplitude modulation (bipolar tremolo) — unchanged.
-                    apply_modulation(&sample_l, channel->mod_phase_q32, depth);
-                    apply_modulation(&sample_r, channel->mod_phase_q32, depth);
+                    apply_modulation(&sample_l, mphase, depth);
+                    apply_modulation(&sample_r, mphase, depth);
                 } else {
                     // Unipolar GATE (square/sine/triangle/trapezoid): gates DOWN to
                     // (1-depth) — classic isochronic pulse `sample *= (1-depth)+depth*g`.
-                    float attack_frac = s_iso_attack_ms * channel->current_mod_freq * 0.001f;
-                    float g = iso_gate(channel->mod_phase_q32, s_iso_env, s_iso_duty, attack_frac);
+                    float attack_frac = channel->iso_attack_ms * channel->current_mod_freq * 0.001f;
+                    float g = iso_gate(mphase, channel->iso_env, channel->iso_duty, attack_frac);
                     float m = (1.0f - depth) + depth * g;
                     sample_l *= m;
                     sample_r *= m;
@@ -1549,6 +1593,15 @@ esp_err_t audio_generator_get_current_freq_r(int channel, float *out) {
     *out = audio_channels[channel].current_freq_r;
     xSemaphoreGive(audio_gen_mutex);
 
+    return ESP_OK;
+}
+
+// _locked variant for the timeline dispatch path (holds audio_gen_mutex across the
+// whole batch). Reads the live right-ear frequency so a '-' freqR field can leave
+// a binaural channel's detune untouched. No mutex take (would deadlock).
+esp_err_t audio_generator_get_current_freq_r_locked(int channel, float *out) {
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS || !out) return ESP_ERR_INVALID_ARG;
+    *out = audio_channels[channel].current_freq_r;
     return ESP_OK;
 }
 

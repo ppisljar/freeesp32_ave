@@ -1,0 +1,81 @@
+# 35_wbtb_lucid_gamma.ledc — WBTB Lucid: Gamma-in-Theta split field, ~25 min
+# ALTERED STATE: lucid dreaming via a Wake-Back-To-Bed (WBTB) re-induction — a theta dream bed
+#   carrying brief gamma "awareness" cues, meant to seed the recognition "I am dreaming" while
+#   drifting back to sleep. Scaffolding only. Arc: brief alpha 10 induction -> split-field theta
+#   hold with alternating 40 Hz gamma cues -> Soft Off to dark (lucid sessions never wake you).
+#
+# V2 FEATURES USED (and why):
+#   * SPLIT-FIELD per-eye (channel masks) — the LEFT eye flickers theta 6.5 Hz and the RIGHT eye
+#     theta 4.5 Hz. Via the optic-chiasm crossover this biases the two hemispheres differently, a
+#     Siever split-field technique for holding dream-state awareness (playbook B5). Both rates are
+#     safely below the danger band, unlike 30_splitfield_lucid's 16 Hz eye.
+#   * LED phase 0 / 180 PHASE-LOCKED ANTIPHASE gamma pair — an amber bank (phase 0) and a cyan
+#     bank (phase 180) run 40 Hz in antiphase across a THIRD field region, delivering the "gamma
+#     awareness" cue as an invisible (luminance-flat) shimmer that will not jar you awake
+#     (playbook B1). This is the phase-locked element.
+#   * Audio duty + audio phase — bilateral 40 Hz isochronic gamma CLICKS: two channels at 340 Hz,
+#     10% duty (env=0 square gate), one at phase 0 panned left and one at phase 180 panned right,
+#     so the clicks ALTERNATE ear-to-ear (a Sana-style bilateral cue) over a gentle theta bed.
+#     Audio phase = the relative pulse phase between the two channels (playbook A2 / patent
+#     landscape Sana US 11,400,252, used here only as the generic bilateral-alternation idea).
+#
+# RESEARCH / PATENT CITATION:
+#   Split-field per-eye: entrainment_techniques_playbook.md B5 (Siever US 5,709,645, EXPIRED).
+#   Invisible antiphase flicker B1. Bilateral alternating stimulus / duty click A2. Lucid WBTB arc:
+#   SESSION_DESIGN_GUIDELINES.md §1 (lucid = Soft Off, no wake). 40 Hz offered as an explicit fixed
+#   research frequency, framed strictly non-medically (MIT US 10,682,490, patent_landscape_ave.md).
+#
+# channel_map recipe (menuconfig CONFIG_LED_CHANNEL_MAP): map LEFT-eye pixels to channel 0
+#   (mask 1), RIGHT-eye pixels to channel 1 (mask 2), and interleave a shared central strip between
+#   channel 2 (amber gamma, mask 4) and channel 3 (cyan gamma, mask 8). Example 8-pixel layout:
+#   "0,2,3,0,1,2,3,1" (left eye + right eye + interleaved central gamma pair).
+#
+# SAFETY / CONTRAINDICATIONS:
+#   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of photic
+#   migraine. Do not use while driving or operating machinery. Stop if you feel dizzy or unwell.
+#   EXPERIENTIAL, not medical. ALL flicker rates (6.5, 4.5, 40, 10 Hz) are OUTSIDE the 15-25 Hz
+#   photosensitive band; brightness dim (<=20%, gamma pair <=16%); amber+cyan (no saturated-red
+#   strobe); light ramps in 15 s / out over the final 5 min; audio fades in 60 s. A lucid session —
+#   ends dark and silent, no wake-up. Best done after ~5 h sleep (WBTB), lying down, eyes closed.
+#
+# Duration: ~25 min.  LED cols: time freq duty bright R G B mask env phase attack
+#   Audio: A time freq pan vol mod [ch] [freqR] [wave] [duty] [env] [phase] [attack]
+# Ramp convention = animate-on-start (the > prefix sits where a segment BEGINS).
+
+# --- Induction / alpha 10 Hz both eyes (00:00-01:30): fade in ---
+0 10 50 >0 60 120 255 3 1 0 3                 # BOTH eyes (mask 3) cool-blue 10 Hz sine; bright fade-in
+A 0 200 0 >0 5 1 0 0 30 1                     # ch1 theta dream bed: 5 Hz isochronic (sine gate, 30% duty); vol fade-in
+S 3000 default 65 "Rest back and let a calm alpha rhythm settle you toward the dream. You will stay just aware enough to notice."
+15000 10 50 20 60 120 255 3 1 0 3             # brightness reaches 20% (>=10 s ramp-in)
+A 60000 200 0 40 5 1 0 0 30 1                 # theta bed settled 40
+
+# --- Split field + gamma cues (01:30-20:00): LEFT 6.5 Hz / RIGHT 4.5 Hz + alternating 40 Hz ---
+90000 6.5 50 20 60 120 255 1 1 0 3            # LEFT eye (mask 1): theta 6.5 Hz
+90000 4.5 50 20 60 120 255 2 1 0 3            # RIGHT eye (mask 2): theta 4.5 Hz
+90000 40 50 >0 255 140 0 4 0 0                # AMBER gamma bank (mask 4): 40 Hz, phase 0; fade in
+90000 40 50 >0 0 220 255 8 0 180             # CYAN gamma bank (mask 8): 40 Hz, phase 180 (antiphase, invisible)
+A 90000 340 -60 >0 40 2 0 0 10 0 0 3          # ch2 gamma CLICK left: 40 Hz, 10% duty, phase 0, panned left; fade in
+A 90000 340 60 >0 40 3 0 0 10 0 180 3         # ch3 gamma CLICK right: 40 Hz, 10% duty, phase 180, panned right (alternates)
+105000 40 50 16 255 140 0 4 0 0              # amber gamma reaches 16%
+105000 40 50 16 0 220 255 8 0 180            # cyan gamma reaches 16% (matched -> ~invisible shimmer)
+A 150000 340 -60 30 40 2 0 0 10 0 0 3         # left click settled 30
+A 150000 340 60 30 40 3 0 0 10 0 180 3        # right click settled 30
+S 90000 default 65 "One eye quickens, one eye slows. A soft forty-hertz shimmer whispers: notice. If you see a dream, you are dreaming."
+S 600000 default 65 "Whenever you realise you are dreaming, stay calm and steady. You are lucid. Look at your hands, and stay."
+
+# --- Soft Off (20:00-25:00): all fields + audio fade to dark (no wake-up) ---
+1200000 6.5 50 >20 60 120 255 1 1 0 3         # LEFT fade
+1200000 4.5 50 >20 60 120 255 2 1 0 3         # RIGHT fade
+1200000 40 50 >16 255 140 0 4 0 0            # amber gamma fade
+1200000 40 50 >16 0 220 255 8 0 180          # cyan gamma fade
+A 1200000 200 0 >40 5 1 0 0 30 1              # theta bed fade
+A 1200000 340 -60 >30 40 2 0 0 10 0 0 3       # left click fade
+A 1200000 340 60 >30 40 3 0 0 10 0 180 3      # right click fade
+S 1200000 default 65 "Letting every light and tone fade now. Sink fully into sleep, or dream on, aware."
+1500000 6.5 50 0 60 120 255 1 1 0 3           # end: left 0
+1500000 4.5 50 0 60 120 255 2 1 0 3           # end: right 0
+1500000 40 50 0 255 140 0 4 0 0              # end: amber gamma 0
+1500000 40 50 0 0 220 255 8 0 180            # end: cyan gamma 0
+A 1500000 200 0 0 5 1 0 0 30 1                # end: theta bed 0
+A 1500000 340 -60 0 40 2 0 0 10 0 0 3         # end: left click 0
+A 1500000 340 60 0 40 3 0 0 10 0 180 3        # end: right click 0

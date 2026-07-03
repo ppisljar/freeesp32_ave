@@ -77,6 +77,9 @@ typedef struct {
     // The shape is LUMINANCE-LINEAR on purpose (no perceptual gamma) so antiphase
     // pairs cancel in photons; PWM/brightness is ~linear in luminance.
     uint8_t           carrier_waveform;    // LED_CARRIER_*; latched at channel start
+    uint16_t          attack_ms;           // trapezoid edge duration (latched at start)
+    uint32_t          jitter_millihz;      // flicker-rate jitter amplitude (0 = off)
+    uint32_t          jitter_period_us;    // jitter wander period
     volatile uint8_t  output_level;        // non-square: ISR-computed 0..brightness output
 
     // V-E2 (entrainment_firmware_plan): flicker phase offset in DEGREES (0..359).
@@ -134,14 +137,20 @@ static led_flicker_state_t flicker_state[NUM_LED_CHANNELS] = {
     },
 };
 
-// Flicker carrier waveforms (B2). SQUARE = legacy on/off; SINE/TRIANGLE = smooth.
-#define LED_CARRIER_SQUARE   0u
-#define LED_CARRIER_SINE     1u
-#define LED_CARRIER_TRIANGLE 2u
+// Flicker carrier waveforms — match ledc_format.md env values: 0 square (legacy
+// on/off), 1 sine, 2 triangle, 3 trapezoid (uses duty + attack). (env=4 tremolo
+// has no LED meaning → treated as square.)
+#define LED_CARRIER_SQUARE    0u
+#define LED_CARRIER_SINE      1u
+#define LED_CARRIER_TRIANGLE  2u
+#define LED_CARRIER_TRAPEZOID 3u
 
-// Module-wide carrier default, latched into each channel at flicker start. Set via
-// led_matrix_set_carrier(). Default SQUARE → every existing session behaves identically.
-static volatile uint8_t s_flicker_carrier = LED_CARRIER_SQUARE;
+// Module-wide carrier + attack + jitter defaults, latched into each channel at
+// flicker start. Default SQUARE / jitter off → existing sessions behave identically.
+static volatile uint8_t  s_flicker_carrier   = LED_CARRIER_SQUARE;
+static volatile uint16_t s_flicker_attack_ms = 3u;   // trapezoid edge duration
+static volatile uint32_t s_flicker_jitter_millihz   = 0u;      // flicker-rate jitter amp (0 = off)
+static volatile uint32_t s_flicker_jitter_period_us = 45000000u; // wander period (default 45 s)
 
 // V-E1 (entrainment_firmware_plan) — flicker ISR tick sizing. The tick scales UP
 // with the highest active flicker frequency so edges/phase stay accurate (clean
@@ -563,7 +572,8 @@ static inline int32_t IRAM_ATTR led_eval_mod_iram(const led_mod_slot_t *m, uint6
  * sines sums to a constant → luminance-flat "invisible" flicker.
  */
 static inline uint8_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t elapsed_us,
-                                                       uint32_t cycle_us, uint8_t brightness) {
+                                                       uint32_t cycle_us, uint8_t brightness,
+                                                       uint32_t duty_q16, uint32_t attack_q16) {
     if (cycle_us == 0u) return brightness;
     // phase_q16 = elapsed_us * 65536 / cycle_us — rescale to stay 32-bit.
     uint32_t period = cycle_us;
@@ -574,6 +584,21 @@ static inline uint8_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t el
     uint32_t shape_q16;
     if (wave == LED_CARRIER_TRIANGLE) {
         shape_q16 = (phase_q16 < 32768u) ? (phase_q16 << 1) : (131072u - (phase_q16 << 1));
+    } else if (wave == LED_CARRIER_TRAPEZOID) {
+        // Duty-gated with raised (linear) edges. duty_q16/attack_q16 are Q16 fractions
+        // of the cycle. phase<a and (duty-phase)<a stay < 32768, so <<16 fits u32.
+        if (phase_q16 >= duty_q16) {
+            shape_q16 = 0u;
+        } else {
+            uint32_t a = attack_q16;
+            uint32_t half = duty_q16 >> 1;
+            if (a > half) a = half;
+            if (a == 0u)                       shape_q16 = 65536u;
+            else if (phase_q16 < a)            shape_q16 = (phase_q16 << 16) / a;
+            else if (phase_q16 > duty_q16 - a) shape_q16 = ((duty_q16 - phase_q16) << 16) / a;
+            else                               shape_q16 = 65536u;
+            if (shape_q16 > 65536u) shape_q16 = 65536u;
+        }
     } else { // SINE (parabola 4·x·(1−x))
         uint32_t p_q8      = phase_q16 >> 8;       // 0..256
         uint32_t one_minus = 256u - p_q8;
@@ -582,6 +607,24 @@ static inline uint8_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t el
     }
     // output = brightness * shape / 65536; brightness ≤100, product ≤6.5e6 fits u32.
     return (uint8_t)(((uint32_t)brightness * shape_q16) >> 16);
+}
+
+// LED flicker-rate jitter (anti-habituation): a slow bipolar triangle LFO returning
+// a signed millihertz offset. IRAM-safe / 32-bit only. amp_millihz kept small
+// (<~5 Hz), so amp*tri fits int32; no 64-bit.
+static inline int32_t IRAM_ATTR led_jitter_millihz_iram(uint32_t now_lo, uint32_t amp_millihz,
+                                                        uint32_t period_us) {
+    if (amp_millihz == 0u || period_us == 0u) return 0;
+    uint32_t period = period_us;
+    uint32_t t      = now_lo % period_us;   // 0..period
+    while (period > 0xFFFFu) { period >>= 1; t >>= 1; }
+    uint32_t ph = (t << 16) / period;       // Q16 phase 0..65536
+    // Bipolar triangle in Q16 (−65536..+65536): up, down, up.
+    int32_t tri;
+    if (ph < 16384u)      tri =  (int32_t)(ph << 2);              // 0 → +1
+    else if (ph < 49152u) tri =  131072 - (int32_t)(ph << 2);    // +1 → −1
+    else                  tri =  (int32_t)(ph << 2) - 262144;    // −1 → 0
+    return ((int32_t)amp_millihz * tri) >> 16;                    // amp·tri, arithmetic shift
 }
 
 /**
@@ -676,6 +719,14 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
                 if (mv > 0) new_freq = (uint32_t)mv;
             }
             if (new_freq > 0) {
+                // Complement 3: anti-habituation flicker-rate jitter (default off).
+                if (s->jitter_millihz > 0u) {
+                    int32_t off = led_jitter_millihz_iram((uint32_t)now_us,
+                                                          s->jitter_millihz, s->jitter_period_us);
+                    int32_t jf = (int32_t)new_freq + off;
+                    if (jf < 100) jf = 100;            // clamp ≥ 0.1 Hz
+                    new_freq = (uint32_t)jf;
+                }
                 s->frequency_milliHz = new_freq;
                 cycle_duration_us = (1000000ULL * 1000ULL) / new_freq;
             }
@@ -735,10 +786,14 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             // B2 smooth carrier — output_level follows a per-tick brightness curve.
             // Dirty whenever the level changes (≈ every tick), so the task refreshes
             // the strip continuously. Cheap for DIRECT/DOTSTAR; heavier for NEOPIXEL.
+            uint32_t cyc_us    = (uint32_t)cycle_duration_us;
+            uint32_t duty_q16  = ((uint32_t)s->duty_cycle * 65536u) / 100u;
+            uint32_t attack_us = (uint32_t)s->attack_ms * 1000u;
+            if (attack_us > 60000u) attack_us = 60000u;       // keep <<16 in 32-bit
+            uint32_t attack_q16 = cyc_us ? ((attack_us << 16) / cyc_us) : 0u;
             uint8_t lvl = led_carrier_level_iram(s->carrier_waveform,
-                                                 eff_elapsed,
-                                                 (uint32_t)cycle_duration_us,
-                                                 s->brightness);
+                                                 eff_elapsed, cyc_us,
+                                                 s->brightness, duty_q16, attack_q16);
             if (lvl != s->output_level) {
                 s->output_level = lvl;
                 s->led_state    = (lvl > 0u);   // keep active/exit bookkeeping sane
@@ -1041,6 +1096,9 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
         s->carrier_waveform    = s_flicker_carrier;   // B2: latch the current carrier
+        s->attack_ms           = s_flicker_attack_ms; // trapezoid edge duration
+        s->jitter_millihz      = s_flicker_jitter_millihz;    // C3: flicker-rate jitter
+        s->jitter_period_us    = s_flicker_jitter_period_us;
         s->output_level        = 0;
         // Only reset the cycle origin and force the LED off on FIRST activation.
         // When the channel is already running, preserve cycle_start_time_us so the
@@ -1118,7 +1176,24 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
  */
 void led_matrix_set_carrier(uint8_t wave)
 {
-    s_flicker_carrier = (wave > LED_CARRIER_TRIANGLE) ? LED_CARRIER_SQUARE : wave;
+    // env=4 (tremolo) has no LED meaning → square; 0..3 pass through.
+    s_flicker_carrier = (wave > LED_CARRIER_TRAPEZOID) ? LED_CARRIER_SQUARE : wave;
+}
+
+// Set the trapezoid edge duration (ms) used by env=3 (TRAPEZOID), latched at start.
+void led_matrix_set_attack(uint16_t ms)
+{
+    s_flicker_attack_ms = (ms > 60u) ? 60u : ms;
+}
+
+// Set the flicker-rate jitter (anti-habituation): amplitude in Hz and wander period
+// in ms. Latched per channel at flicker start. amp 0 = off. amp capped at 5 Hz.
+void led_matrix_set_jitter(float amp_hz, float period_ms)
+{
+    if (amp_hz < 0.0f) amp_hz = 0.0f;
+    if (amp_hz > 5.0f) amp_hz = 5.0f;
+    s_flicker_jitter_millihz = (uint32_t)(amp_hz * 1000.0f);
+    if (period_ms >= 1000.0f) s_flicker_jitter_period_us = (uint32_t)(period_ms * 1000.0f);
 }
 
 /**
@@ -1143,6 +1218,59 @@ void led_matrix_set_phase_masked(uint8_t channel_mask, int16_t deg)
         if (!(channel_mask & (1u << ch))) continue;
         portENTER_CRITICAL(&s_flicker_mux);
         flicker_state[ch].phase_offset_deg = deg;
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+}
+
+/**
+ * @brief Set the flicker carrier waveform (env / carrier field of the .ledc LED
+ *        line) on the masked channels. Unlike led_matrix_set_carrier() (which
+ *        only affects the module-global latched at the NEXT flicker start), this
+ *        writes per-channel state and so also takes effect on a channel that is
+ *        already flickering. 0=square,1=sine,2=triangle,3=trapezoid.
+ */
+void led_matrix_set_carrier_masked(uint8_t channel_mask, uint8_t wave)
+{
+    if (wave > LED_CARRIER_TRAPEZOID) wave = LED_CARRIER_SQUARE;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        portENTER_CRITICAL(&s_flicker_mux);
+        flicker_state[ch].carrier_waveform = wave;
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+}
+
+/**
+ * @brief Set the trapezoid edge duration (ms, capped at 60) on the masked
+ *        channels. Per-channel counterpart of led_matrix_set_attack().
+ */
+void led_matrix_set_attack_masked(uint8_t channel_mask, uint16_t ms)
+{
+    if (ms > 60u) ms = 60u;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        portENTER_CRITICAL(&s_flicker_mux);
+        flicker_state[ch].attack_ms = ms;
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+}
+
+/**
+ * @brief Set the flicker-rate jitter (anti-habituation) on the masked channels.
+ *        amp in Hz (0=off, capped 5 Hz), period in ms (only applied if >=1000).
+ *        Per-channel counterpart of led_matrix_set_jitter().
+ */
+void led_matrix_set_jitter_masked(uint8_t channel_mask, float amp_hz, float period_ms)
+{
+    if (amp_hz < 0.0f) amp_hz = 0.0f;
+    if (amp_hz > 5.0f) amp_hz = 5.0f;
+    uint32_t millihz   = (uint32_t)(amp_hz * 1000.0f);
+    uint32_t period_us = (period_ms >= 1000.0f) ? (uint32_t)(period_ms * 1000.0f) : 0u;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        portENTER_CRITICAL(&s_flicker_mux);
+        flicker_state[ch].jitter_millihz = millihz;
+        if (period_us) flicker_state[ch].jitter_period_us = period_us;
         portEXIT_CRITICAL(&s_flicker_mux);
     }
 }

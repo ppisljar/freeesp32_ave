@@ -9,6 +9,22 @@
 // capability-driven: options not compiled into this firmware are greyed out.
 import { showMessage } from './util.js';
 import { getEngine, setEngine } from './gen/tts.js';
+import { isSafetyAccepted, resetSafetyAccepted } from './safety.js';
+
+// Refresh the "Safety notice" status line + reset-button label to reflect
+// whether this browser has already acknowledged the epilepsy/photosensitivity
+// notice. Browser-local only (no device setting).
+function refreshSafetyStatus() {
+    const el = document.getElementById('safetyStatus');
+    const btn = document.getElementById('btnSafetyReset');
+    const accepted = isSafetyAccepted();
+    if (el) {
+        el.textContent = accepted
+            ? 'You have acknowledged the epilepsy/photosensitivity notice in this browser. Reset to review it before the next flicker session.'
+            : 'Flicker sessions show a one-time epilepsy/photosensitivity notice before the first play in this browser.';
+    }
+    if (btn) btn.disabled = !accepted;
+}
 
 // Current settings object as last fetched/applied (used as the partial-update
 // base — we POST the whole object, but only edited fields will differ).
@@ -370,6 +386,17 @@ export function settingsInit() {
             showMessage('TTS engine set to ' + ttsEl.value + ' (this browser)', 'success');
         });
     }
+
+    // Browser-local epilepsy/photosensitivity acknowledgement reset.
+    const safetyBtn = document.getElementById('btnSafetyReset');
+    if (safetyBtn) {
+        safetyBtn.addEventListener('click', () => {
+            resetSafetyAccepted();
+            refreshSafetyStatus();
+            showMessage('Safety notice will be shown again before the next flicker session', 'success');
+        });
+    }
+    refreshSafetyStatus();
 
     loadSettings();
 }

@@ -33,6 +33,10 @@ export const LANE_VERSION = 1;
 // Cell-valued fields per lane kind (each maps to a model Cell on the row).
 export const AUDIO_CELL_FIELDS = ['freq', 'pan', 'vol', 'mod'];
 export const LED_CELL_FIELDS = ['freq', 'duty', 'bright', 'r', 'g', 'b'];
+// v2 pulse fields carried per-row as a time-keyed sidecar (lane.pulse) rather than
+// as animatable sublanes — the lane view preserves them losslessly across edits.
+export const AUDIO_PULSE_FIELDS = ['duty', 'env', 'phase', 'attack', 'jitter'];
+export const LED_PULSE_FIELDS = ['env', 'phase', 'attack', 'jitter'];
 
 // ---- shape <-> interp mapping ---------------------------------------------
 // The lane model uses 'step' for the no-interp case; the Cell model uses 'none'.
@@ -131,6 +135,11 @@ function laneUnionTimes(lane) {
     for (const f in sub) {
         for (const k of (sub[f].keys || [])) set.add(k.t);
     }
+    // Include pulse-sidecar times so a row that carries only pulse fields (its cell
+    // keyframes coalesced away as redundant) is still re-emitted with its pulse data.
+    if (lane.pulse) {
+        for (const t in lane.pulse) set.add(Number(t));
+    }
     const out = Array.from(set);
     out.sort((a, b) => a - b);
     return out;
@@ -175,10 +184,11 @@ export function lanesToDoc(lanes, opts) {
                 const freqR = sub.freqR ? steppedAt(sub.freqR.keys, t, 0) : 0;
                 const waveType = (sub.wave && sub.wave.keys && sub.wave.keys.length)
                     ? steppedAt(sub.wave.keys, t, null) : null;
-                emitted.push({ time: t, li, row: audioRow({
+                const pulse = (lane.pulse && lane.pulse[t]) || null;
+                emitted.push({ time: t, li, row: audioRow(Object.assign({
                     time: t, freq: fields.freq, pan: fields.pan, vol: fields.vol,
                     mod: fields.mod, channel: lane.key, freqR: freqR, waveType: waveType,
-                }) });
+                }, pulse)) });
             } else {
                 const fields = {};
                 for (const f of LED_CELL_FIELDS) {
@@ -189,10 +199,11 @@ export function lanesToDoc(lanes, opts) {
                         conflicts.push({ laneKey: lane.key, kind: 'led', field: f, t });
                     }
                 }
-                emitted.push({ time: t, li, row: ledRow({
+                const pulse = (lane.pulse && lane.pulse[t]) || null;
+                emitted.push({ time: t, li, row: ledRow(Object.assign({
                     time: t, freq: fields.freq, duty: fields.duty, bright: fields.bright,
                     r: fields.r, g: fields.g, b: fields.b, mask: lane.key,
-                }) });
+                }, pulse)) });
             }
         }
     });
@@ -297,6 +308,19 @@ function buildSteppedSublane(rows, getVal, isActive) {
     return keys.length ? { keys } : null;
 }
 
+// Capture the v2 pulse fields of each row into a time-keyed sidecar. Only stores
+// keys that are present (null = `-` is kept; undefined = omit is dropped so JSON
+// round-trips it back to undefined). Returns undefined when nothing is present.
+function capturePulse(grp, fieldNames) {
+    const pulse = {};
+    for (const r of grp) {
+        const rec = {};
+        for (const f of fieldNames) if (r[f] !== undefined) rec[f] = r[f];
+        if (Object.keys(rec).length) pulse[r.time] = rec;
+    }
+    return Object.keys(pulse).length ? pulse : undefined;
+}
+
 // Reconstruct lanes from a flat doc with no metadata (best-effort structure).
 export function reconstructLanes(doc) {
     const rows = (doc && doc.rows) ? doc.rows : [];
@@ -331,7 +355,7 @@ export function reconstructLanes(doc) {
         if (wave) sub.wave = wave;
         lanes.push({
             kind: 'audio', key: ch, name: 'Audio ch ' + ch,
-            collapsed: false, sub,
+            collapsed: false, sub, pulse: capturePulse(grp, AUDIO_PULSE_FIELDS),
         });
     });
 
@@ -347,7 +371,7 @@ export function reconstructLanes(doc) {
             sub[f].keys.some(k => k.shape !== 'step'));
         lanes.push({
             kind: 'led', key: mask, name: maskName(mask),
-            collapsed: false, colorSplit: split, sub,
+            collapsed: false, colorSplit: split, sub, pulse: capturePulse(grp, LED_PULSE_FIELDS),
         });
     });
 

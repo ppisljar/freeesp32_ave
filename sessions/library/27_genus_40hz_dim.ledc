@@ -1,0 +1,50 @@
+# 27_genus_40hz_dim.ledc — 40 Hz GENUS, DIM comfort / invisible-flicker variant (~30 min)
+# Technique: the 07_genus_40hz protocol delivered for COMFORT via a v2 invisible-flicker
+#            (flicker-free spectral flicker, playbook B1) pair. Two complementary-colour
+#            banks run 40 Hz in ANTIPHASE (amber phase 0 / blue phase 180) at matched dim
+#            brightness, so the mean luminance stays ~flat (little visible flicker) while
+#            the retina still receives the 40 Hz oscillation. Audio 40 Hz / 4% click, dim.
+# Bands: fixed 40 Hz gamma (light antiphase pair + audio click), steady 30 min, fade.
+#
+# EXPERIMENTAL: the 40 Hz amyloid claim is CONTESTED; the entrainment is well established.
+#   The "invisible flicker" comfort effect depends on the two colour banks being on
+#   PHYSICALLY INTERLEAVED pixels (see channel_map recipe) and on an RGB backend; on a
+#   brightness-only (direct) backend or non-interleaved strip it degrades to two dim 40 Hz
+#   zones — still safe (40 Hz is above the danger band), just less "invisible".
+#
+# channel_map recipe (menuconfig CONFIG_LED_CHANNEL_MAP): interleave pixels so alternating
+#   pixels belong to channel 0 (amber bank, mask 1) and channel 1 (blue bank, mask 2), e.g.
+#   for an 8-pixel strip: "0,1,0,1,0,1,0,1". The two masked LED lines then paint the two
+#   antiphase colour banks across the interleaved field.
+#
+# SAFETY / CONTRAINDICATIONS:
+#   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of
+#   photic migraine. Do not use while driving. Experiential, not medical.
+#   40 Hz is ABOVE the 15-25 Hz photosensitive danger band; brightness kept DIM (<=20%);
+#   50% duty keeps a brightness floor; light ramps in 15 s / out 30 s; no saturated-red
+#   strobe (amber + blue, not red); audio capped low (vol 40).
+#
+# LED columns : time freq duty bright R G B mask [env] [phase]   (env 0 = square gate)
+# Audio cols  : A time freq pan vol mod [ch] [freq_r] [wave] [duty] [env]
+
+# --- Ramp-in (00:00 -> 00:15): both antiphase banks ease up together ---
+0 40 50 >0 255 140 0 1 0 0         # AMBER bank (ch1, mask 1): 40 Hz square, phase 0; bright fade-in
+0 40 50 >0 0 120 255 2 0 180       # BLUE  bank (ch2, mask 2): 40 Hz square, phase 180 (antiphase)
+A 0 10000 0 >0 40 1 0 0 4 0        # ch1 GENUS click: 10 kHz carrier, 40 Hz gate, 4% duty; vol fade-in
+S 3000 default 65 "Beginning a gentle forty hertz session. The light is dim and steady to the eye — just relax."
+15000 40 50 20 255 140 0 1 0 0     # amber reaches 20% dim cap
+15000 40 50 20 0 120 255 2 0 180   # blue reaches 20% dim cap (matched -> luminance ~flat)
+A 30000 10000 0 40 40 1 0 0 4 0    # ch1 vol settled 40 (dim), 40 Hz / 4% click held
+S 30000 default 65 "Holding steady at forty hertz. Let it work in the background."
+
+# --- Hold (00:15 -> 29:30 = ~29 min): steady antiphase 40 Hz, dim ---
+#   Both banks hold 40 Hz / 50% / 20% (amber phase 0, blue phase 180); audio holds 40 Hz / 4% click.
+
+# --- Ramp-out (29:30 -> 30:00): simultaneous fade of both banks + audio to 0 ---
+1770000 40 50 >20 255 140 0 1 0 0  # amber brightness ramp-out START 20 ...
+1770000 40 50 >20 0 120 255 2 0 180 # blue brightness ramp-out START 20 ...
+A 1770000 10000 0 >40 40 1 0 0 4 0 # ch1 volume ramp-out START 40 ...
+S 1770000 default 65 "The session is closing now. The light and tone gently fade. Well done."
+1800000 40 50 0 255 140 0 1 0 0    # amber -> 0
+1800000 40 50 0 0 120 255 2 0 180  # blue -> 0
+A 1800000 10000 0 0 40 1 0 0 4 0   # ch1 volume -> 0

@@ -17,6 +17,12 @@ Implementation reports. Reports not tied to a numbered plan live under
   (B2 sine flicker, A2 trapezoid isochronic, V-E1 finer tick, V-E2 phase offset =
   cool/warm invisible flicker, A3 beat jitter); build clean, hardware verify pending;
   B3 safety clamp skipped; per-entry `.ledc` authoring deferred to a consolidated pass.
+- `non_planned_reports/entrainment_authoring_report.md` — authoring effort for
+  `entrainment_authoring_plan.md` (2026-07-03): 6 new + 5 refined sessions (31 total,
+  0-error), new `macros.js` presets/macros (monaural, harmonic stack, breath/rotating-pan
+  LFO, flicker pairs, research carriers + SSVEP colours), browser-only epilepsy opt-in
+  (`safety.js`), and a rewritten `SESSION_DESIGN_GUIDELINES.md`. 183 web tests green.
+  Firmware v2 engine build-clean/pending-flash; `safety_mode` clamp cut.
 - `non_planned_reports/entrainment_techniques_playbook.md` — learning-oriented digest
   (3-agent research, 2026-07-02) of audio/visual/session techniques mined from patents +
   literature, each mapped to a concrete engine change. Flagships: monaural beats,

@@ -175,8 +175,15 @@ esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask);
  */
 void led_matrix_set_carrier(uint8_t wave);
 
-/** @brief Current flicker carrier waveform (0=square, 1=sine, 2=triangle). */
+/** @brief Current flicker carrier waveform (0=square, 1=sine, 2=triangle, 3=trapezoid). */
 uint8_t led_matrix_get_carrier(void);
+
+/** @brief Trapezoid (env=3) edge duration in ms, latched at flicker start (≤60). */
+void led_matrix_set_attack(uint16_t ms);
+
+/** @brief Flicker-rate jitter (anti-habituation): amplitude Hz (0=off, ≤5) + wander
+ *         period ms. Latched per channel at flicker start. */
+void led_matrix_set_jitter(float amp_hz, float period_ms);
 
 /**
  * @brief Set the flicker phase offset (degrees, normalized 0..359) on the channels
@@ -185,6 +192,18 @@ uint8_t led_matrix_get_carrier(void);
  *        flicker. Applied at use-time from the live period (survives freq ramps).
  */
 void led_matrix_set_phase_masked(uint8_t channel_mask, int16_t deg);
+
+/** @brief Per-channel carrier waveform (0=square,1=sine,2=triangle,3=trapezoid) on
+ *         the masked channels. Unlike led_matrix_set_carrier() this takes effect on
+ *         already-running channels too (writes per-channel state, not the global latch). */
+void led_matrix_set_carrier_masked(uint8_t channel_mask, uint8_t wave);
+
+/** @brief Per-channel trapezoid edge duration (ms, ≤60) on the masked channels. */
+void led_matrix_set_attack_masked(uint8_t channel_mask, uint16_t ms);
+
+/** @brief Per-channel flicker-rate jitter (amp Hz ≤5, 0=off; period ms ≥1000) on
+ *         the masked channels. */
+void led_matrix_set_jitter_masked(uint8_t channel_mask, float amp_hz, float period_ms);
 
 /**
  * @brief Update flicker parameters on channels indicated by channel_mask.

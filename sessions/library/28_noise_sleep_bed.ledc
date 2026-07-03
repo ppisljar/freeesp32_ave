@@ -1,0 +1,42 @@
+# 28_noise_sleep_bed.ledc — AM-Noise Sleep Bed (SMOOTH), ~30 min — sleep masking + slow drive
+# Technique: playbook A6 "AM-noise carrier". Broadband pink noise gated slowly at 0.85 Hz
+#            (delta / sleep-onset range) gives a wide, low-fatigue drive that also masks
+#            environmental sound. This is the SMOOTH variant — sine amplitude modulation
+#            (the audio default env, a gentle swell). A crisper pulsed (trapezoid) variant
+#            is 29_noise_sleep_pulsed.ledc.
+# Bands: pink-noise AM at 0.85 Hz (sleep-onset delta); brown-noise steady warm bed; light steady.
+#
+# Engine caveat: this build's AM depth is fixed (~0.1), so the swell is gentle, not the
+#   "deep depth" of the reference — a deeper burst awaits the firmware trapezoid/depth work.
+#
+# SAFETY / CONTRAINDICATIONS:
+#   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of
+#   photic migraine. Do not use while driving. Experiential, not medical.
+#   The light is STEADY (freq 0, no flicker) and dim warm amber (no strobe, no saturated-red
+#   flicker); brightness ramps in 15 s and fades to 0; noise volumes fade in over 60 s and
+#   fade out at the end (never abrupt). A sleep bed — ends dark + silent, no wake-up.
+#
+# LED columns : time freq duty bright R G B mask   (freq 0 = steady warm amber, mask 255)
+# Audio cols  : A time freq pan vol mod [ch] [freq_r] [wave]   (wave 5 pink, 6 brown; mod = AM Hz)
+# Ramp convention = animate-on-start (the >/* prefix sits where a segment BEGINS).
+
+# --- Settle (00:00-01:00): dim amber steady light + noise fade-in ---
+0 0 100 >0 255 90 0 255           # LED steady dim amber; brightness fade-in from 0
+A 0 200 0 >0 0.85 1 0 5           # ch1 pink noise, smooth 0.85 Hz sine AM; vol fade-in
+A 0 100 0 >0 0 2 0 6              # ch2 brown noise, steady warm bed (no AM); vol fade-in
+S 3000 default 65 "Settling in. Let the soft rush of sound carry you toward sleep."
+15000 0 100 12 255 90 0 255        # brightness reaches 12% (dim; >=10 s ramp-in)
+A 60000 200 0 45 0.85 1 0 5        # ch1 pink vol settled 45
+A 60000 100 0 30 0 2 0 6           # ch2 brown vol settled 30
+
+# --- Hold (01:00-28:00 = 27 min): steady dim light + AM pink bed + brown warmth ---
+S 600000 default 65 "Breathing slow. Nothing to do now but drift."
+
+# --- Soft Off (28:00-30:00): brightness + both noise beds fade to 0 (no wake-up) ---
+1680000 0 100 >12 255 90 0 255     # LED brightness ramp-out START 12 ...
+A 1680000 200 0 *45 0.85 1 0 5     # ch1 pink quad fade 45->0
+A 1680000 100 0 *30 0 2 0 6        # ch2 brown quad fade 30->0
+S 1680000 default 65 "The sound is fading now. Let go completely. Sleep."
+1800000 0 100 0 255 90 0 255       # end: brightness 0 (dark)
+A 1800000 200 0 0 0.85 1 0 5       # end: pink vol 0
+A 1800000 100 0 0 0 2 0 6          # end: brown vol 0 (silent)

@@ -23,6 +23,10 @@ import {
     WAVE_TYPES, NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS,
 } from '../model.js';
 import { createCompoundCell, closeOpenPopover, openPopover, cellLabel } from './cell.js';
+import {
+    parsePulseCell, formatPulseCell, parsePulseEnv, formatPulseEnv,
+    parsePulseJitter, formatPulseJitter,
+} from '../pulse.js';
 import { previewSpeech } from '../tts.js';
 import { decodeFile, audioBufferToWav16, wavBlob } from '../bgaudio.js';
 import * as bgstore from '../bgstore.js';
@@ -72,18 +76,34 @@ export function formatTimeMs(ms) {
 
 function cloneCell(c) { return c ? { ...c } : cell(0); }
 
+// Preserve the v2 pulse-field tri-state: undefined (omit) / null (`-` leave
+// unchanged) / value. Only compound cells and the jitter object are deep-copied;
+// enums, numbers, null and undefined pass through untouched.
+function cloneOpt(v) {
+    if (v === undefined || v === null) return v;
+    if (typeof v === 'object') return { ...v };
+    return v;
+}
+
 function cloneRow(r) {
     switch (r.kind) {
         case 'led': return ledRow({
             time: r.time, freq: cloneCell(r.freq), duty: cloneCell(r.duty),
             bright: cloneCell(r.bright), r: cloneCell(r.r), g: cloneCell(r.g),
             b: cloneCell(r.b), mask: r.mask, legacy5: r.legacy5,
+            // v2 pulse fields — tri-state preserved so Duplicate/type-change is lossless.
+            env: cloneOpt(r.env), phase: cloneOpt(r.phase),
+            attack: cloneOpt(r.attack), jitter: cloneOpt(r.jitter),
             inlineComment: r.inlineComment,
         });
         case 'audio': return audioRow({
             time: r.time, freq: cloneCell(r.freq), pan: cloneCell(r.pan),
             vol: cloneCell(r.vol), mod: cloneCell(r.mod), channel: r.channel,
-            freqR: r.freqR, waveType: r.waveType, inlineComment: r.inlineComment,
+            freqR: r.freqR, waveType: r.waveType,
+            // v2 pulse fields — tri-state preserved.
+            duty: cloneOpt(r.duty), env: cloneOpt(r.env), phase: cloneOpt(r.phase),
+            attack: cloneOpt(r.attack), jitter: cloneOpt(r.jitter),
+            inlineComment: r.inlineComment,
         });
         case 'comment': return commentRow(r.text);
         case 'bg': return bgRow(bg(r.bg.url, r.bg.pan, r.bg.loudness));
@@ -385,6 +405,61 @@ export function initTableView(ctx) {
             onChange: (c) => { row[field] = c; commitValue(); },
             resolveTarget: resolve,
         });
+    }
+
+    // ---- v2 pulse-field controls (env / phase / attack / jitter, audio duty) ----
+    // Tri-state convention shared by every control: blank = omit (field absent),
+    // '-' = leave unchanged (null), a value = set. env is a <select> (enum); the
+    // compound fields + jitter are text inputs. Ramps ON pulse fields are a deferred
+    // device feature — author those in the Text view; a numeric edit here sets a step.
+    const LED_ENV_NAMES = ['square', 'sine', 'triangle', 'trapezoid'];
+    const AUDIO_ENV_NAMES = ['square', 'sine', 'triangle', 'trapezoid', 'tremolo'];
+
+    function pulseEnvSelect(row, isAudio) {
+        const names = isAudio ? AUDIO_ENV_NAMES : LED_ENV_NAMES;
+        const sel = document.createElement('select');
+        sel.className = 'gen-wave-select';
+        const mk = (val, label) => { const o = document.createElement('option'); o.value = val; o.textContent = label; sel.appendChild(o); };
+        mk('', '(off)');
+        mk('-', '— leave');
+        names.forEach((n, i) => mk(String(i), i + ' ' + n));
+        sel.value = formatPulseEnv(row.env);
+        sel.addEventListener('change', () => { row.env = parsePulseEnv(sel.value); commitValue(); });
+        return sel;
+    }
+
+    // Text input for a compound-cell pulse field (phase/attack, audio duty).
+    function pulseCellInput(row, fieldName, title) {
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.className = 'gen-num'; inp.placeholder = 'off';
+        inp.title = (title || fieldName) + ' — blank = off, - = leave unchanged, number = set';
+        inp.value = formatPulseCell(row[fieldName]);
+        inp.addEventListener('change', () => { row[fieldName] = parsePulseCell(inp.value); commitValue(); });
+        return inp;
+    }
+
+    // Text input for the jitter field: "amp" or "amp:period_ms".
+    function pulseJitterInput(row) {
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.className = 'gen-num'; inp.placeholder = 'off';
+        inp.title = 'jitter — amp[:period_ms], - = leave unchanged, blank = off';
+        inp.value = formatPulseJitter(row.jitter);
+        inp.addEventListener('change', () => { row.jitter = parsePulseJitter(inp.value); commitValue(); });
+        return inp;
+    }
+
+    // The pulse-field control set for a row (LED or audio), used by the grid
+    // more-row and the mobile card 'more' block.
+    function pulseFields(row) {
+        const wrap = document.createElement('div');
+        wrap.className = 'gen-pulse-fields';
+        const add = (label, el) => wrap.appendChild(field(label, el));
+        if (row.kind === 'audio') add('Duty %', pulseCellInput(row, 'duty', 'Duty %'));
+        add('Env', pulseEnvSelect(row, row.kind === 'audio'));
+        add('Phase°', pulseCellInput(row, 'phase', 'Phase (deg)'));
+        add('Attack ms', pulseCellInput(row, 'attack', 'Attack (ms)'));
+        add('Jitter', pulseJitterInput(row));
+        return wrap;
     }
 
     function actionsMenu(idx) {
@@ -703,6 +778,31 @@ export function initTableView(ctx) {
             tr.appendChild(tdAct);
 
             tbody.appendChild(tr);
+
+            // Per-row 'more' disclosure holding the v2 pulse fields (env/phase/
+            // attack/jitter, audio duty). Hidden until the ⋯ toggle is clicked.
+            if (row.kind === 'led' || row.kind === 'audio') {
+                const moreTr = document.createElement('tr');
+                moreTr.className = 'gen-more-row';
+                moreTr.style.display = 'none';
+                const moreTd = document.createElement('td');
+                moreTd.colSpan = COLS.length;
+                moreTd.appendChild(pulseFields(row));
+                moreTr.appendChild(moreTd);
+                tbody.appendChild(moreTr);
+
+                const tg = document.createElement('button');
+                tg.type = 'button';
+                tg.className = 'gen-more-toggle';
+                tg.textContent = '⋯';
+                tg.title = 'Pulse fields (env / phase / attack / jitter)';
+                tg.addEventListener('click', () => {
+                    const open = moreTr.style.display === 'none';
+                    moreTr.style.display = open ? '' : 'none';
+                    tg.classList.toggle('is-open', open);
+                });
+                tdAct.insertBefore(tg, tdAct.firstChild);
+            }
         });
 
         table.appendChild(tbody);
@@ -763,6 +863,13 @@ export function initTableView(ctx) {
                 card.appendChild(field('Duty', compound(row, idx, 'duty', 'Duty (%)', () => ledRampTarget(idx, row.mask, 'duty'))));
                 card.appendChild(field('Bright', compound(row, idx, 'bright', 'Brightness (%)', () => ledRampTarget(idx, row.mask, 'bright'))));
                 card.appendChild(field('Color', colorSwatch(row)));
+                const more = document.createElement('details');
+                more.className = 'gen-card-more';
+                const sum = document.createElement('summary');
+                sum.textContent = 'pulse ▾';
+                more.appendChild(sum);
+                more.appendChild(pulseFields(row));
+                card.appendChild(more);
             } else if (row.kind === 'audio') {
                 card.appendChild(field('Time', timeCell(row)));
                 card.appendChild(field('Channel', channelSelect(row)));
@@ -777,6 +884,7 @@ export function initTableView(ctx) {
                 more.appendChild(field('Mod', compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))));
                 more.appendChild(field('FreqR', freqRInput(row)));
                 more.appendChild(field('Wave', waveSelect(row)));
+                more.appendChild(pulseFields(row));
                 card.appendChild(more);
             } else if (row.kind === 'bg') {
                 card.appendChild(field('BG', bgInputs(row)));

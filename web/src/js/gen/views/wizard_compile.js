@@ -46,6 +46,17 @@ export const LED_REGION_MASKS = {
     ch58: 0xF0, all: 0xFF,
 };
 
+// v2 pulse fields carried per-layer (layer.pulse) and re-emitted verbatim on every
+// row that layer expands to — the wizard preserves them losslessly across edits.
+const AUDIO_PULSE_FIELDS = ['duty', 'env', 'phase', 'attack', 'jitter'];
+const LED_PULSE_FIELDS = ['env', 'phase', 'attack', 'jitter'];
+// Capture a single row's present pulse fields (null=`-` kept, undefined=omit dropped).
+function capturePulseRow(r, names) {
+    const rec = {};
+    for (const f of names) if (r[f] !== undefined) rec[f] = r[f];
+    return Object.keys(rec).length ? rec : undefined;
+}
+
 // Wizard field name -> the model row Cell field it maps to.
 const AUDIO_FIELD_TO_CELL = { freq: 'freq', pan: 'pan', volume: 'vol', mod: 'mod' };
 const LED_FIELD_TO_CELL = { freq: 'freq', duty: 'duty', bright: 'bright', r: 'r', g: 'g', b: 'b' };
@@ -81,7 +92,7 @@ export function allocateChannels(session) {
         if (Number.isFinite(layer.channel) && layer.channel >= 1 && layer.channel <= NUM_AUDIO_CHANNELS) {
             used.add(layer.channel);
         }
-        if (isStereo(layer) && Number.isFinite(layer.channelR) &&
+        if (needsPair(layer) && Number.isFinite(layer.channelR) &&
             layer.channelR >= 1 && layer.channelR <= NUM_AUDIO_CHANNELS) {
             used.add(layer.channelR);
         }
@@ -105,7 +116,7 @@ export function allocateChannels(session) {
         let ch = (Number.isFinite(layer.channel) && layer.channel >= 1 && layer.channel <= NUM_AUDIO_CHANNELS)
             ? layer.channel : nextFree();
         let chR = null;
-        if (isStereo(layer)) {
+        if (needsPair(layer)) {
             chR = (Number.isFinite(layer.channelR) && layer.channelR >= 1 && layer.channelR <= NUM_AUDIO_CHANNELS)
                 ? layer.channelR : nextFree();
         }
@@ -116,6 +127,15 @@ export function allocateChannels(session) {
 
 function isStereo(layer) {
     return layer && layer.kind === 'binaural' && !!layer.stereo;
+}
+// Monaural: two CENTRE-panned channels (pan=0) at freq / freq+beat. Like stereo
+// it needs a second channel, but the beat forms acoustically (works on one
+// speaker / one ear). Stereo wins if both flags are set.
+function isMonaural(layer) {
+    return layer && layer.kind === 'binaural' && !!layer.monaural && !layer.stereo;
+}
+function needsPair(layer) {
+    return isStereo(layer) || isMonaural(layer);
 }
 
 // ---- slot expansion --------------------------------------------------------
@@ -133,6 +153,9 @@ function field(layer, name) {
 function expandLayer(layer, alloc, t, si, warnings) {
     const slots = [];
     if (!layer) return slots;
+    // Per-layer v2 pulse fields, stamped onto every slot so makeRow/makeOffRow
+    // re-emit them on each expanded row (lossless preservation across edits).
+    const pulse = layer.pulse || null;
 
     if (layer.kind === 'light') {
         const cells = {};
@@ -144,7 +167,7 @@ function expandLayer(layer, alloc, t, si, warnings) {
         }
         slots.push({
             kind: 'led', key: (layer.channelMask & 0xFF) || 0xFF, time: t, si,
-            energy: 'bright', cells, dyn, freqR: 0, waveType: null,
+            pulse, energy: 'bright', cells, dyn, freqR: 0, waveType: null,
         });
         return slots;
     }
@@ -164,7 +187,7 @@ function expandLayer(layer, alloc, t, si, warnings) {
             freq: cell(0), pan: cell(num(panF.value)), vol: cell(num(volF.value)), mod: cell(0),
         };
         slots.push({
-            kind: 'audio', key: alloc.channel, time: t, si, energy: 'vol',
+            kind: 'audio', key: alloc.channel, time: t, si, pulse, energy: 'vol',
             cells, dyn: { pan: panF, vol: volF }, freqR: 0, waveType: wt,
         });
         return slots;
@@ -179,12 +202,30 @@ function expandLayer(layer, alloc, t, si, warnings) {
             const lCells = { freq: cell(base), pan: cell(-100), vol: cell(num(volF.value)), mod: cell(0) };
             const rCells = { freq: cell(base + beat), pan: cell(100), vol: cell(num(volF.value)), mod: cell(0) };
             slots.push({
-                kind: 'audio', key: alloc.channel, time: t, si, energy: 'vol',
+                kind: 'audio', key: alloc.channel, time: t, si, pulse, energy: 'vol',
                 cells: lCells, dyn: { freq: freqF, vol: volF, mod: modF }, freqR: 0, waveType: wave,
             });
             slots.push({
-                kind: 'audio', key: alloc.channelR, time: t, si, energy: 'vol',
+                kind: 'audio', key: alloc.channelR, time: t, si, pulse, energy: 'vol',
                 // R carrier = base + beat; reuse freq ramp/mod intent on the offset value.
+                cells: rCells,
+                dyn: { freq: offsetField(freqF, beat), vol: volF, mod: modF },
+                freqR: 0, waveType: wave,
+            });
+            return slots;
+        }
+        if (isMonaural(layer)) {
+            // Two CENTRE-panned channels (pan=0): freq / freq+beat. The Δf beat
+            // forms acoustically (single speaker / one ear). freq ramps/mods apply
+            // to the carrier on both (R carries the +beat offset).
+            const lCells = { freq: cell(base), pan: cell(0), vol: cell(num(volF.value)), mod: cell(0) };
+            const rCells = { freq: cell(base + beat), pan: cell(0), vol: cell(num(volF.value)), mod: cell(0) };
+            slots.push({
+                kind: 'audio', key: alloc.channel, time: t, si, pulse, energy: 'vol',
+                cells: lCells, dyn: { freq: freqF, vol: volF, mod: modF }, freqR: 0, waveType: wave,
+            });
+            slots.push({
+                kind: 'audio', key: alloc.channelR, time: t, si, pulse, energy: 'vol',
                 cells: rCells,
                 dyn: { freq: offsetField(freqF, beat), vol: volF, mod: modF },
                 freqR: 0, waveType: wave,
@@ -201,7 +242,7 @@ function expandLayer(layer, alloc, t, si, warnings) {
             freq: cell(base), pan: cell(num(panF.value)), vol: cell(num(volF.value)), mod: cell(0),
         };
         slots.push({
-            kind: 'audio', key: alloc.channel, time: t, si, energy: 'vol',
+            kind: 'audio', key: alloc.channel, time: t, si, pulse, energy: 'vol',
             cells, dyn: { freq: freqF, pan: panF, vol: volF, mod: modF },
             freqR: base + beat, waveType: wave,
         });
@@ -214,7 +255,7 @@ function expandLayer(layer, alloc, t, si, warnings) {
         vol: cell(num(volF.value)), mod: cell(num(modF.value)),
     };
     slots.push({
-        kind: 'audio', key: alloc.channel, time: t, si, energy: 'vol',
+        kind: 'audio', key: alloc.channel, time: t, si, pulse, energy: 'vol',
         cells, dyn: { freq: freqF, pan: panF, vol: volF, mod: modF },
         freqR: 0, waveType: wave,
     });
@@ -383,33 +424,33 @@ export function compileSession(session, opts) {
 
 function makeRow(grp, time, slot, cells) {
     if (grp.kind === 'led') {
-        return ledRow({
+        return ledRow(Object.assign({
             time, freq: cells.freq, duty: cells.duty, bright: cells.bright,
             r: cells.r, g: cells.g, b: cells.b, mask: grp.key,
-        });
+        }, slot.pulse || null));
     }
-    return audioRow({
+    return audioRow(Object.assign({
         time, freq: cells.freq, pan: cells.pan, vol: cells.vol, mod: cells.mod,
         channel: grp.key, freqR: slot.freqR, waveType: slot.waveType,
-    });
+    }, slot.pulse || null));
 }
 
 // Terminal off-row: hold non-energy fields steady, zero the energy field
 // (vol for audio, bright for LED) so the layer goes off cleanly.
 function makeOffRow(grp, time, slot) {
     if (grp.kind === 'led') {
-        return ledRow({
+        return ledRow(Object.assign({
             time, freq: cell(num(slot.cells.freq.value)),
             duty: cell(num(slot.cells.duty.value)), bright: cell(0),
             r: cell(num(slot.cells.r.value)), g: cell(num(slot.cells.g.value)),
             b: cell(num(slot.cells.b.value)), mask: grp.key,
-        });
+        }, slot.pulse || null));
     }
-    return audioRow({
+    return audioRow(Object.assign({
         time, freq: cell(num(slot.cells.freq.value)),
         pan: cell(num(slot.cells.pan.value)), vol: cell(0), mod: cell(0),
         channel: grp.key, freqR: slot.freqR, waveType: slot.waveType,
-    });
+    }, slot.pulse || null));
 }
 
 // Drop a row that merely re-holds the previous row's exact step values on the
@@ -547,6 +588,7 @@ function audioRowToLayer(r) {
     return {
         id: 'ch' + r.channel, kind, channel: r.channel, channelR: null, stereo: false,
         wave_type: (r.waveType === undefined) ? null : r.waveType, fields,
+        pulse: capturePulseRow(r, AUDIO_PULSE_FIELDS),
     };
 }
 
@@ -557,6 +599,7 @@ function ledRowToLayer(r) {
             freq: importField(r.freq), duty: importField(r.duty), bright: importField(r.bright),
             r: importField(r.r), g: importField(r.g), b: importField(r.b),
         },
+        pulse: capturePulseRow(r, LED_PULSE_FIELDS),
     };
 }
 

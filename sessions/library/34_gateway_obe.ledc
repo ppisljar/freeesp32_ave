@@ -1,0 +1,92 @@
+# 34_gateway_obe.ledc — Gateway / Out-of-Body Threshold (Monroe septon bed), ~32 min
+# ALTERED STATE: the Monroe "Focus 10" mind-awake / body-asleep threshold used as a launch point
+#   for out-of-body and expanded-awareness experiences. Scaffolding for the practice, not a
+#   guarantee of any state. Arc: alpha 10 induction -> glide to theta 4 Hz (Focus-10) -> deep
+#   multi-carrier hold (16 min) -> gentle return to alpha.
+#
+# V2 FEATURES USED (and why):
+#   * SEPTON multi-carrier STACK (Monroe US 5,356,368) — the 4 Hz theta beat is delivered by
+#     THREE stacked binaural pairs (200/204, 208/212, plus the primary 265->271 / 275) sharing one
+#     4 Hz delta-f. This produces cross-ear binaural AND within-ear monaural beats at once: a
+#     richer, more robust FFR than a single pair (playbook A5, monroe_patents_guide.md 4b).
+#   * EEG-CONTOUR carrier, wave 7 (Monroe US 5,213,562) — one layer uses the non-sinusoidal
+#     EEG-contour carrier shape ("neither sinusoidal, nor square, nor triangular"), 250/254 => a
+#     4 Hz beat from the L/R detune. The patent claims the contour itself aids entrainment
+#     (monroe_patents_guide.md 4c).
+#   * TRAPEZOID isochronic pulse, audio env=3 + duty + attack — a crisp 4 Hz body-buzz drum
+#     (137 Hz, 40% duty, 5 ms click-safe edge) adds a felt isochronic pulse to the smooth beats
+#     (playbook A2).
+#   * PHASED PINK BED with rotating pan (~-100:100 over 6 s) — Monroe's "Phased Pink Sound",
+#     panned L<->R on a ~6 s cycle, held ~-20 dB under the beats; claimed +30% FFR
+#     (monroe_patents_guide.md 4a).
+#   * Audio beat JITTER (0.3 Hz over 53 s, a non-commensurate period) on the primary binaural —
+#     anti-acclimatization wander of the 4 Hz beat (playbook A3).
+#
+# RESEARCH / PATENT CITATION:
+#   Monroe Focus-levels / septon / phased-pink / EEG-contour: reports/session_research/
+#   monroe_patents_guide.md (US 5,213,562, US 5,356,368) and monroe_focus_levels_map.md. All four
+#   Monroe patents are EXPIRED (patent_landscape_ave.md) -> free prior art. "Hemi-Sync" is a
+#   trademark and is deliberately NOT used.
+#
+# SAFETY / CONTRAINDICATIONS:
+#   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of photic
+#   migraine. Do not use while driving or operating machinery. Stop if you feel dizzy or unwell.
+#   EXPERIENTIAL, not medical. Every LED rate is <=10 Hz (below the 15-25 Hz photosensitive band);
+#   warm amber sine flicker, brightness dim (<=22%), ramps in 15 s / out over the return; audio
+#   fades in 60 s. Headphones recommended (binaural). Lie down, eyes closed. Engine note: AM depth
+#   is fixed (~0.1) in this build, so the trapezoid drum is a gentle buzz, not a hard on/off.
+#
+# Duration: ~32 min.  LED cols: time freq duty bright R G B mask env phase attack
+#   Audio: A time freq pan vol mod [ch] [freqR] [wave] [duty] [env] [phase] [attack] [jitter]
+#   (wave 7 = EEG-contour carrier; env 3 = trapezoid gate).
+# Ramp convention = animate-on-start (the > prefix sits where a segment BEGINS).
+
+# --- Phased pink bed (runs throughout, fades in first) ---
+A 0 220 ~-100:100:6000 >0 0 6 0 5             # ch6 phased PINK bed: L<->R pan on 6 s cycle; vol fade-in
+A 90000 220 ~-100:100:6000 15 0 6 0 5         # ch6 pink settled 15 (~-20 dB bed)
+
+# --- Induction / alpha 10 Hz (00:00-02:00): primary binaural + amber light fade in ---
+0 10 50 >0 220 120 0 15 1 0 3                 # amber 10 Hz sine flicker (mask 15); bright fade-in
+A 0 265 0 >0 0 1 275 0 50 4 0 3 0.3:53000     # ch1 PRIMARY binaural: carrier 265 / freqR 275 => 10 Hz; beat jitter 0.3 Hz/53 s
+S 3000 default 65 "Lie back, body heavy and still. We begin at ten hertz, letting the body settle toward sleep while the mind stays awake."
+15000 10 50 22 220 120 0 15 1 0 3             # brightness reaches 22% (>=10 s ramp-in)
+A 120000 >265 0 45 0 1 275 0 50 4 0 3 0.3:53000  # vol settled 45; carrier begins the descent ramp 265->271 (beat 10->4)
+
+# --- Deepen (02:00-12:00): glide alpha 10 -> theta 4 Hz (Focus 10, ~0.6 Hz/min) ---
+120000 >10 50 22 220 120 0 15 1 0 3           # LED flicker tracks the beat 10->4
+S 120000 default 65 "Down and inward. The body sleeps; you remain aware. Approaching the threshold."
+
+# --- FOCUS-10 HOLD (12:00-28:00 = 16 min): septon stack + EEG-contour + trapezoid drum ---
+A 720000 271 0 50 0 1 275 0 50 4 0 3 0.3:53000   # ch1 primary at 4 Hz beat, fuller vol; jitter on
+720000 4 50 ~14:26:12000 220 120 0 15 1 0 3   # LED 4 Hz sine field, 0.1 Hz brightness breath
+A 720000 200 0 >0 0 2 204 0                   # ch2 SEPTON pair 200/204 => 4 Hz; fade in
+A 780000 200 0 25 0 2 204 0                   # ch2 settled 25 (secondary layer)
+A 720000 208 0 >0 0 3 212 0                   # ch3 SEPTON pair 208/212 => 4 Hz; fade in
+A 780000 208 0 22 0 3 212 0                   # ch3 settled 22
+A 720000 250 0 >0 0 4 254 7                   # ch4 EEG-CONTOUR carrier (wave 7) 250/254 => 4 Hz; fade in
+A 780000 250 0 20 0 4 254 7                   # ch4 settled 20 (contour-shaped layer)
+A 720000 137 0 >0 4 5 0 0 40 3 0 5            # ch5 TRAPEZOID iso drum: 137 Hz, 4 Hz gate, 40% duty, 5 ms edge; fade in
+A 780000 137 0 30 4 5 0 0 40 3 0 5            # ch5 drum settled 30
+S 720000 default 65 "You are at the threshold now. Rest in the hum, poised and clear. Let a smooth intention to lift and float form gently."
+S 1200000 default 65 "Steady here. If sensations of movement or floating arise, stay calm and simply observe them."
+
+# --- Return (28:00-31:00): septon/EEG/drum fade, beat 4 -> alpha 10 ---
+A 1680000 200 0 >25 0 2 204 0                 # ch2 fade
+A 1860000 200 0 0 0 2 204 0
+A 1680000 208 0 >22 0 3 212 0                 # ch3 fade
+A 1860000 208 0 0 0 3 212 0
+A 1680000 250 0 >20 0 4 254 7                 # ch4 EEG-contour fade
+A 1860000 250 0 0 0 4 254 7
+A 1680000 137 0 >30 4 5 0 0 40 3 0 5          # ch5 trapezoid drum fade
+A 1860000 137 0 0 4 5 0 0 40 3 0 5
+A 1680000 >271 0 50 0 1 275 0 50 4 0 3 0.3:53000  # ch1 carrier ramps 271->265 (beat 4->10)
+1680000 >4 50 22 220 120 0 15 1 0 3           # LED 4->10 lockstep (drop breath LFO)
+S 1680000 default 65 "Gently returning. Let the body wake with you, carrying the stillness of the threshold home."
+
+# --- Soft close (31:00-32:00): primary + pink + light fade to 0 ---
+A 1860000 265 0 >50 0 1 275 0 50 4 0 3 0.3:53000  # beat back at alpha 10; vol fade 50->0
+1860000 10 50 >22 220 120 0 15 1 0 3          # brightness fade 22->0
+A 1860000 220 ~-100:100:6000 >15 0 6 0 5      # phased pink fade 15->0
+A 1920000 265 0 0 0 1 275 0 50 4 0 3 0.3:53000    # end: ch1 vol 0
+1920000 10 50 0 220 120 0 15 1 0 3            # end: brightness 0
+A 1920000 220 ~-100:100:6000 0 0 6 0 5        # end: pink vol 0

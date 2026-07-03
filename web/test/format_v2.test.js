@@ -84,23 +84,25 @@ test('all library sessions: serialize(parse(x)) is a fixpoint', () => {
     }
 });
 
-test('all library sessions: no v1 line gains trailing pulse tokens', () => {
-    // A v1 session has no env/phase/attack/jitter, so canonicalizing must not add
-    // `-` tokens or extra columns to any LED/audio line.
-    const files = readdirSync(LIB).filter(f => f.endsWith('.ledc'));
-    for (const f of files) {
-        const text = readFileSync(join(LIB, f), 'utf8');
-        const doc = parse(text).doc;
-        for (const row of doc.rows) {
-            if (row.kind === 'led') {
-                assert.equal(row.env, undefined, f + ': LED env leaked');
-                assert.equal(row.phase, undefined, f + ': LED phase leaked');
-                assert.equal(row.jitter, undefined, f + ': LED jitter leaked');
-            } else if (row.kind === 'audio') {
-                assert.equal(row.duty, undefined, f + ': audio duty leaked');
-                assert.equal(row.env, undefined, f + ': audio env leaked');
-                assert.equal(row.jitter, undefined, f + ': audio jitter leaked');
-            }
-        }
+test('v1-format lines do not gain trailing pulse fields when parsed by the v2 parser', () => {
+    // Parser property (not a session-content constraint): a genuinely v1 line —
+    // 5-token legacy or 8-token canonical, with NO trailing tokens — must parse to
+    // undefined pulse fields. (Library sessions may now legitimately USE the v2
+    // fields; byte-stability of every session is covered by the fixpoint test above.)
+    const v1Led = ['1000 8 50 60 1', '1000 8 50 60 0 128 255 1'];
+    for (const line of v1Led) {
+        const row = parse(line).doc.rows.find(r => r.kind === 'led');
+        assert.equal(row.env, undefined, 'LED env: ' + line);
+        assert.equal(row.phase, undefined, 'LED phase: ' + line);
+        assert.equal(row.attack, undefined, 'LED attack: ' + line);
+        assert.equal(row.jitter, undefined, 'LED jitter: ' + line);
+    }
+    const v1Audio = ['A 1000 200 0 60 10', 'A 1000 200 0 60 10 0 210 0'];
+    for (const line of v1Audio) {
+        const row = parse(line).doc.rows.find(r => r.kind === 'audio');
+        assert.equal(row.duty, undefined, 'audio duty: ' + line);
+        assert.equal(row.env, undefined, 'audio env: ' + line);
+        assert.equal(row.phase, undefined, 'audio phase: ' + line);
+        assert.equal(row.jitter, undefined, 'audio jitter: ' + line);
     }
 });

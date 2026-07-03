@@ -1,0 +1,44 @@
+# 26_alpha_breath.ledc — Alpha + Breath (~15 min) — calm-coherence relaxation
+# Technique: playbook §C arc C "Alpha + Breath". Hold a relaxed 10 Hz alpha with a
+#            0.1 Hz (6 breaths/min) breathing LFO on brightness for resonance/coherence
+#            pacing, then a gentle up-ramp to 12 Hz + brighten to emerge alert.
+# Bands: alpha 10 Hz hold (with 0.1 Hz brightness breath) -> lift 10->12 Hz, brighten, end alert.
+#
+# SAFETY / CONTRAINDICATIONS:
+#   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of
+#   photic migraine. Do not use while driving. Experiential, not medical.
+#   Every rate <=12 Hz (below the 15-25 Hz photosensitive band); binaural carrier 240 Hz
+#   (<1000), beat <=12 Hz (<35); brightness capped <=40% with a floor; light ramps in 15 s
+#   and fades out over the final 30 s (both >=10 s); calm teal color (no red).
+#
+# Breath LFO note: the 0.1 Hz swell here is a SYMMETRIC 10 s sine (`~15:35:10000`).
+#   A true asymmetric 4 s-in / 6 s-out pace needs a firmware LFO shape (out of scope);
+#   symmetric coherence pacing ships now.
+#
+# Driver: binaural, freq_r FIXED at 250 Hz (NOT interpolatable). Beat = 250 - carrier:
+#   carrier 240 -> beat 10 | carrier 238 -> beat 12.
+# LED columns: time freq duty bright R G B mask   (mask 255 = all zones)
+# Ramp convention = animate-on-start (the > prefix sits where a segment BEGINS).
+
+# --- Induction (00:00-00:30): 10 Hz alpha, vol + light fade in ---
+0 10 50 >0 0 150 160 255           # LED 10 Hz teal, brightness ramps 0->25% over 15 s
+A 0 240 0 >0 0 1 250 0             # ch1 binaural carrier 240 / R250 = 10 Hz beat; vol fades 0->50
+S 3000 default 65 "Beginning at ten hertz, in alpha. Let your breath find a slow, easy rhythm."
+15000 10 50 25 0 150 160 255       # brightness reaches 25% (ramp-in >=10 s done)
+
+# --- Alpha hold with 0.1 Hz breath (00:30-13:00): brightness swells 15<->35% every 10 s ---
+30000 10 50 ~15:35:10000 0 150 160 255   # breathing brightness LFO (6 breaths/min coherence)
+A 45000 240 0 50 0 1 250 0         # ch1 vol settled 50, beat holds 10 Hz
+S 300000 default 65 "Ride the light as it breathes. In as it brightens, out as it softens."
+S 660000 default 65 "Calm and open, resting in the alpha rhythm."
+
+# --- Alert lift (13:00-15:00): ramp 10->12 Hz and brighten to 40% ---
+780000 >10 50 >20 0 150 160 255    # LED freq 10->12; brightness ramp START 20 -> (preempts LFO)
+A 780000 >240 0 50 0 1 250 0       # carrier 240->238 => beat 10->12 over 2 min
+S 780000 default 65 "Gently rising now, brightening, becoming alert and clear."
+900000 12 50 >40 60 190 210 255    # 12 Hz, brighter cool color; brightness reached 40 then fades ->0
+
+# --- Gentle close (15:00-15:30): flicker brightness + volume fade to 0 over 30 s ---
+A 900000 238 0 >50 0 1 250 0       # beat 12 Hz held; vol 50->0 over 30 s
+930000 12 50 0 60 190 210 255      # end: brightness 0
+A 930000 238 0 0 0 1 250 0         # end: volume 0

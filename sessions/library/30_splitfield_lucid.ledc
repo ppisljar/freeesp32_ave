@@ -1,0 +1,48 @@
+# 30_splitfield_lucid.ledc — Split-Field Lucid (~15 min) — different frequency per eye
+# Technique: playbook B5 "independent split-field / per-eye". The two eyes are driven at
+#            DIFFERENT flicker rates via different channel masks: LEFT eye 16 Hz (a beta
+#            'alertness-within-the-dream' cue) and RIGHT eye 6 Hz (theta / dream). Via the
+#            optic-chiasm crossover this biases the two hemispheres differently. After a
+#            10 Hz alpha induction on BOTH eyes, the field splits, holds, then soft-offs to
+#            dark (lucid sessions never wake you).
+# Bands: induction alpha 10 Hz (both) -> split LEFT 16 Hz / RIGHT 6 Hz -> soft off.
+#
+# channel_map recipe (menuconfig CONFIG_LED_CHANNEL_MAP): map the LEFT-eye pixels to
+#   channel 0 (mask 1) and the RIGHT-eye pixels to channel 1 (mask 2). For glasses with one
+#   pixel per eye: "0,1". For 4 pixels per eye on an 8-pixel strip: "0,0,0,0,1,1,1,1".
+#   The two masked LED lines then drive each eye independently.
+#
+# SAFETY / CONTRAINDICATIONS:
+#   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of
+#   photic migraine. Do not use while driving. Experiential, not medical.
+#   NOTE: the LEFT eye's 16 Hz sits in the 15-25 Hz photosensitive band, so it is kept
+#   DIM (<=18%) and single-eye (never full-field bright) — the validator will WARN on these
+#   rows; the dim, half-field delivery is intentional and within the guidelines' brightness
+#   cap. If in any doubt, reduce brightness further or avoid. Light ramps in 15 s / out over
+#   the final 3 min; cool white (no saturated-red strobe). A lucid session — ends dark.
+#
+# LED columns: time freq duty bright R G B mask   (mask 1 = left eye, 2 = right, 3 = both)
+# Audio: A time freq pan vol mod [ch]   (isochronic 6 Hz theta dream bed)
+# Ramp convention = animate-on-start (the > prefix sits where a segment BEGINS).
+
+# --- Induction (00:00-02:00): BOTH eyes 10 Hz alpha, dim, fade in ---
+0 10 50 >0 180 200 255 3           # both eyes (mask 3) 10 Hz, brightness fade-in from 0
+A 0 200 0 >0 6 1                   # isochronic 6 Hz theta dream bed; vol fade-in
+S 3000 default 65 "Eyes closed, body still. Let a calm alpha rhythm settle you."
+15000 10 50 18 180 200 255 3       # brightness reaches 18% (dim; >=10 s ramp-in)
+A 60000 200 0 45 6 1               # audio bed settled 45
+
+# --- Split field (02:00-12:00): LEFT 16 Hz / RIGHT 6 Hz ---
+120000 16 50 18 180 200 255 1      # LEFT eye (mask 1): 16 Hz alertness cue — DIM (danger-band; lint warn expected)
+120000 6 50 18 180 200 255 2       # RIGHT eye (mask 2): 6 Hz theta / dream
+S 120000 default 65 "One eye quickens, one eye slows. Stay aware as you drift into the dream."
+S 420000 default 65 "If you notice you are dreaming, stay calm and steady. You are lucid."
+
+# --- Soft Off (12:00-15:00): both eyes + audio fade to dark (no wake-up) ---
+720000 16 50 >18 180 200 255 1     # LEFT brightness ramp-out START 18 ...
+720000 6 50 >18 180 200 255 2      # RIGHT brightness ramp-out START 18 ...
+A 720000 200 0 >45 6 1             # audio bed fade START 45 ...
+S 720000 default 65 "Letting the light fade now. Rest, or dream on."
+900000 16 50 0 180 200 255 1       # LEFT -> 0
+900000 6 50 0 180 200 255 2        # RIGHT -> 0
+A 900000 200 0 0 6 1               # audio -> 0

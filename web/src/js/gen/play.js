@@ -16,6 +16,7 @@ import { bounceSession, pushSessionBg } from './bounce.js';
 import { getEngine } from './tts.js';
 import { serialize } from './serialize.js';
 import { showMessage } from '../util.js';
+import { ensureSafetyAccepted } from '../safety.js';
 
 // In-memory cache of the last bounce, keyed by session content + engine, so
 // play/stop/play doesn't re-run the (slow, ~seconds) TTS bounce each time. It
@@ -61,6 +62,15 @@ async function ensureBounce(doc, engine) {
 export async function playSession(doc) {
     if (!doc || !doc.rows || !doc.rows.length) {
         showMessage('Nothing to play', 'error');
+        return;
+    }
+
+    // One-time epilepsy/photosensitivity opt-in before the FIRST flicker
+    // session this browser plays. Declining aborts the play; audio-only
+    // sessions and already-acknowledged browsers pass through silently.
+    const okToPlay = await ensureSafetyAccepted(doc);
+    if (!okToPlay) {
+        showMessage('Playback cancelled — safety notice not accepted', 'info');
         return;
     }
 

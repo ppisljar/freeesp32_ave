@@ -77,8 +77,11 @@ static esp_err_t play_config_handler(httpd_req_t *req);
 static esp_err_t patch_config_handler(httpd_req_t *req);
 static esp_err_t flicker_carrier_handler(httpd_req_t *req);
 static esp_err_t flicker_phase_handler(httpd_req_t *req);
+static esp_err_t flicker_attack_handler(httpd_req_t *req);
+static esp_err_t flicker_jitter_handler(httpd_req_t *req);
 static esp_err_t iso_env_handler(httpd_req_t *req);
 static esp_err_t beat_jitter_handler(httpd_req_t *req);
+static esp_err_t audio_phase_handler(httpd_req_t *req);
 #if CONFIG_BG_SUPPORT_PUSH
 static esp_err_t bg_stream_handler(httpd_req_t *req);   // thin async entry
 static esp_err_t bg_stream_work(httpd_req_t *req);      // real body (worker task)
@@ -331,6 +334,13 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &beat_jitter_uri);
+
+    httpd_uri_t flicker_attack_uri = { .uri = "/api/flicker-attack", .method = HTTP_GET, .handler = flicker_attack_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &flicker_attack_uri);
+    httpd_uri_t flicker_jitter_uri = { .uri = "/api/flicker-jitter", .method = HTTP_GET, .handler = flicker_jitter_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &flicker_jitter_uri);
+    httpd_uri_t audio_phase_uri = { .uri = "/api/audio-phase", .method = HTTP_GET, .handler = audio_phase_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &audio_phase_uri);
 
 #if CONFIG_BG_SUPPORT_PUSH
     httpd_uri_t bg_stream_uri = {
@@ -1419,6 +1429,58 @@ static esp_err_t beat_jitter_handler(httpd_req_t *req)
         }
     }
     audio_generator_set_beat_jitter(amp, period);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// GET /api/flicker-attack?ms=<n>  — trapezoid (env=3) edge duration (complement 2).
+static esp_err_t flicker_attack_handler(httpd_req_t *req)
+{
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 48) {
+        char q[48], val[16];
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
+            httpd_query_key_value(q, "ms", val, sizeof(val)) == ESP_OK) {
+            led_matrix_set_attack((uint16_t)atoi(val));
+        }
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// GET /api/flicker-jitter?amp=<hz>&period=<ms>  — flicker-rate jitter (complement 3).
+static esp_err_t flicker_jitter_handler(httpd_req_t *req)
+{
+    float amp = 0.0f, period = 45000.0f;
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 64) {
+        char q[64], val[16];
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
+            if (httpd_query_key_value(q, "amp",    val, sizeof(val)) == ESP_OK) amp    = strtof(val, NULL);
+            if (httpd_query_key_value(q, "period", val, sizeof(val)) == ESP_OK) period = strtof(val, NULL);
+        }
+    }
+    led_matrix_set_jitter(amp, period);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// GET /api/audio-phase?ch=<0..15>&deg=<0..359>  — audio pulse phase offset (complement 4).
+static esp_err_t audio_phase_handler(httpd_req_t *req)
+{
+    int ch = -1, deg = 0;
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 48) {
+        char q[48], val[16];
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
+            if (httpd_query_key_value(q, "ch",  val, sizeof(val)) == ESP_OK) ch  = atoi(val);
+            if (httpd_query_key_value(q, "deg", val, sizeof(val)) == ESP_OK) deg = atoi(val);
+        }
+    }
+    if (ch >= 0) audio_generator_set_phase(ch, (uint16_t)deg);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;

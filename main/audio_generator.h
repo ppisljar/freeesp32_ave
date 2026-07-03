@@ -106,6 +106,14 @@ typedef struct {
     uint32_t phase_l_q32;
     uint32_t phase_r_q32;
     uint32_t mod_phase_q32;
+    uint32_t mod_phase_offset_q32;   // Complement 4: pulse phase offset (Q32 fraction)
+    // Per-channel isochronic pulse shape (v2 .ledc). Latched from the s_iso_*
+    // globals at channel start; a v2 timeline entry or /api/iso-env can override a
+    // single channel via audio_generator_set_iso_channel() without touching others.
+    uint8_t  iso_env;         // ISO_ENV_* (0 square,1 sine,2 triangle,3 trapezoid,4 tremolo)
+    float    iso_duty;        // on-fraction of the mod cycle (0..1)
+    float    iso_attack_ms;   // raised edge duration (ms, click-safe ≥2)
+    float    iso_depth;       // 0 = use params.mod_depth; >0 overrides depth
     uint64_t samples_generated;
     uint64_t total_samples;
     bool active;
@@ -199,12 +207,34 @@ esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* p
 void audio_generator_set_iso(uint8_t env, float duty_pct, float attack_ms, float depth_pct);
 
 /**
+ * @brief Per-channel isochronic pulse shape override (v2 .ledc timeline wiring).
+ *        Each argument passed as its "leave unchanged" sentinel is not written:
+ *        env < 0, duty_pct < 0, attack_ms < 0, depth_pct < 0. This is how the
+ *        `-` field of a .ledc audio line maps to "don't touch this channel's value".
+ *        (depth_pct == 0 is meaningful: clears the override → uses params.mod_depth.)
+ * @param channel     Audio channel index [0, NUM_AUDIO_CHANNELS).
+ * @param env         ISO_ENV_* (0 square,1 sine,2 triangle,3 trapezoid,4 tremolo); <0 = leave.
+ * @param duty_pct    On-fraction percent (>0 to set; <=0 = leave).
+ * @param attack_ms   Raised edge duration ms (>=0 to set; <0 = leave).
+ * @param depth_pct   Depth override percent (>=0 to set; <0 = leave).
+ */
+void audio_generator_set_iso_channel(int channel, int env, float duty_pct,
+                                     float attack_ms, float depth_pct);
+
+/**
  * @brief Binaural beat-offset jitter for anti-habituation (entrainment_firmware_plan A3).
  *        Adds a slow ±amp_hz sine wander to the binaural beat. Global; default off.
  * @param amp_hz     Jitter amplitude in Hz (0 = off; ±0.1–0.3 typical).
  * @param period_ms  Full wander cycle in ms (>=1000 to set; 30–90 s typical).
  */
 void audio_generator_set_beat_jitter(float amp_hz, float period_ms);
+
+/**
+ * @brief Set a channel's isochronic pulse phase offset in degrees (0..359)
+ *        (entrainment_firmware_plan complement 4). Per-channel; only relative
+ *        phase between channels is meaningful.
+ */
+void audio_generator_set_phase(int channel, uint16_t deg);
 
 /**
  * @brief Stop audio generation on a channel
@@ -369,6 +399,11 @@ esp_err_t audio_generator_clear_mod_locked(int channel, audio_param_t param);
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if channel or pointer invalid
  */
 esp_err_t audio_generator_get_current_freq_r(int channel, float *out);
+
+/* _locked variant — reads live right-ear frequency without taking the mutex.
+ * Caller must already hold audio_gen_mutex (timeline dispatch path). Used so a
+ * '-' freqR field leaves a binaural channel's detune unchanged. */
+esp_err_t audio_generator_get_current_freq_r_locked(int channel, float *out);
 
 /** Log one line per active sweep across all channels (current value,
  *  start->target window, % done, seconds remaining). Snapshots state under

@@ -1,6 +1,14 @@
 # Entrainment Techniques — Authoring, Presets & Web-UI Plan
 
-> **STATUS (2026-07-03): PLANNED, not started.** The techniques from the 3-agent
+> **STATUS (2026-07-03): DONE (all 10 steps).** Sessions (5 refined + 6 new, all
+> `validate_session.mjs` 0-error), web macros/presets, epilepsy opt-in UI, and the
+> guidelines/report all landed; 183 web tests pass, bundle builds. Independently
+> verified (0 critical / 0 high). Step 9's "surface the `safety_mode` device setting"
+> was documented rather than wired because the firmware clamp (B3) was cut — the opt-in
+> is browser-only. Report: `reports/non_planned_reports/entrainment_authoring_report.md`.
+> NOTE: sessions `07/27/28/29` use v2 pulse fields — flash the v2 firmware before pushing
+> the library or those trailing fields won't render.
+> The techniques from the 3-agent
 > research (see `reports/non_planned_reports/entrainment_techniques_playbook.md`)
 > that need **NO firmware** — they're achievable with existing `.ledc` features and
 > the existing web generator. This is mostly preset tables, session files, editor

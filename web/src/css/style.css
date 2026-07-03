@@ -136,6 +136,16 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .gen-time-hint { font-size: 10px; color: #999; font-family: monospace; }
 .gen-num { width: 64px; font-size: 12px; padding: 2px 4px; }
 
+/* v2 pulse fields: per-row 'more' disclosure (env / phase / attack / jitter, audio duty). */
+.gen-more-toggle { font-size: 13px; line-height: 1; padding: 2px 6px; margin-right: 4px;
+    border: 1px solid #ccc; border-radius: 4px; background: #f7f7f7; cursor: pointer; color: #555; }
+.gen-more-toggle.is-open { background: #007bff; border-color: #007bff; color: #fff; }
+.gen-more-row > td { background: #f2f6ff; padding: 6px 10px; }
+.gen-pulse-fields { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+.gen-pulse-fields .gen-card-field { display: flex; flex-direction: column; gap: 2px; }
+.gen-pulse-fields .gen-card-label { font-size: 10px; color: #667; text-transform: uppercase; letter-spacing: .03em; }
+.gen-pulse-fields .gen-num { width: 72px; }
+
 /* 8 channel buttons in a fixed 4-wide grid => 2 compact rows, not 8.
    Presets ('4' / 'all') span the full width on a third row. */
 .gen-mask-chips { display: inline-grid; grid-template-columns: repeat(4, 22px); gap: 2px; width: max-content; }
@@ -185,7 +195,7 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-box { background: #fff; border-radius: 8px; padding: 18px 20px; max-width: 460px; width: calc(100% - 40px); box-shadow: 0 8px 30px rgba(0,0,0,0.3); display: flex; flex-direction: column; gap: 8px; }
 .modal-box h3 { margin: 0 0 4px 0; color: #333; font-size: 16px; }
-.modal-msg { font-size: 13px; color: #666; margin-bottom: 6px; }
+.modal-msg { font-size: 13px; color: #666; margin-bottom: 6px; white-space: pre-line; }
 .modal-opt { text-align: left; background: #eef2f8; color: #234; border: 1px solid #ccd4e0; border-radius: 6px; padding: 10px 12px; font-size: 14px; margin: 0; }
 .modal-opt:hover { background: #dce6f5; }
 .modal-cancel { background: transparent; color: #888; border: none; font-size: 13px; margin: 4px 0 0 0; align-self: flex-end; }

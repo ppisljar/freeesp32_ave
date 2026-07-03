@@ -52,6 +52,28 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
 static esp_err_t parse_bg_line(const char *tokens[], size_t token_count, config_bg_entry_t *bg_entry);
 static float parse_value_with_interpolation(const char *str, config_interpolation_t *interp);
 static void  parse_mod_extras(const char *str, float *out_end, float *out_period_ms);
+
+// v2 skip sentinel: a lone "-" means "leave this field unchanged". A negative
+// NUMBER like "-50" has more than one char, so pan/etc. still parse normally.
+static inline bool tok_is_dash(const char *t) {
+    return t && t[0] == '-' && t[1] == '\0';
+}
+// Parse a v2 pulse-field step value that may carry an interp glyph (>,*,~,^,/,\,_).
+// The glyph is ignored here — sweeps/modulation on the new pulse fields are a
+// follow-up (step value only for now).
+static inline float parse_v2_value(const char *t) {
+    config_interpolation_t dummy;
+    return parse_value_with_interpolation(t, &dummy);
+}
+// Parse a jitter token "amp" or "amp:period_ms". Returns amp; *period_ms updated
+// only when a ':period' suffix is present (else left at the caller's default).
+static inline float parse_jitter_token(const char *t, float *period_ms) {
+    config_interpolation_t dummy;
+    float amp = parse_value_with_interpolation(t, &dummy);
+    const char *colon = strchr(t, ':');
+    if (colon) *period_ms = (float)atof(colon + 1);
+    return amp;
+}
 static void timeline_timing_callback(uint64_t timestamp_us, void *user_data);
 static void timeline_execution_task(void *pvParameters);
 // execute_timeline_entry_ctx has full timeline context for sweep wiring.
@@ -1275,84 +1297,108 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
     // Legacy format:   time freq duty bright channel_mask          (5 tokens)
     // Canonical format: time freq duty bright R G B channel_mask   (8 tokens)
     // Format v2 (ledc_format.md): 8..12 = canonical + optional [env phase attack
-    // jitter]. The new pulse fields are PARSE-TOLERATED here (the line loads) but
-    // not yet applied to the engine — that wiring is a follow-up; use the
-    // /api/flicker-carrier|flicker-phase endpoints meanwhile. 9-token old RGBW is
-    // gone; a v2 line just has more trailing tokens (different meaning).
+    // jitter]. Any field may be '-' (leave unchanged): the present-bit stays clear
+    // and the execute path substitutes the channel's live value so the write is a
+    // no-op. 9-token old RGBW is gone; a v2 line just has more trailing tokens.
     if (token_count != 5 && (token_count < 8 || token_count > 12)) {
         ESP_LOGW(TAG, "LED line has %zu tokens; expected 5 (legacy) or 8..12 (canonical + [env phase attack jitter]) — skipping", token_count);
         return ESP_ERR_INVALID_ARG;
     }
-    if (token_count > 8) {
-        ESP_LOGI(TAG, "LED line: v2 pulse fields present (%zu tokens) — parsed but not yet applied to the engine", token_count);
-    }
 
     memset(led_entry, 0, sizeof(config_led_entry_t));
+    led_entry->present = 0;
 
     // time — always plain integer
     led_entry->time_ms = (uint32_t)atol(tokens[0]);
 
-    // freq, duty, brightness — support interpolation prefixes on all three
-    led_entry->frequency  = parse_value_with_interpolation(tokens[1], &led_entry->freq_interp);
-    float duty_f          = parse_value_with_interpolation(tokens[2], &led_entry->duty_interp);
-    float bright_f        = parse_value_with_interpolation(tokens[3], &led_entry->brightness_interp);
-    led_entry->duty_cycle = (uint8_t)duty_f;
-    led_entry->brightness = (uint8_t)bright_f;
-
-    // Capture triangle modulation params (end + period) for fields that use ^.
-    if (config_interp_is_modulation(led_entry->freq_interp)) {
-        parse_mod_extras(tokens[1], &led_entry->freq_mod_end, &led_entry->freq_mod_period_ms);
+    // freq, duty, brightness — each may be '-' (leave unchanged) or a value with an
+    // optional interp prefix. '-' clears the present bit (execute substitutes live).
+    if (!tok_is_dash(tokens[1])) {
+        led_entry->frequency = parse_value_with_interpolation(tokens[1], &led_entry->freq_interp);
+        led_entry->present |= LED_SET_FREQ;
+        if (config_interp_is_modulation(led_entry->freq_interp))
+            parse_mod_extras(tokens[1], &led_entry->freq_mod_end, &led_entry->freq_mod_period_ms);
     }
-    if (config_interp_is_modulation(led_entry->duty_interp)) {
-        float end_f, period_f;
-        parse_mod_extras(tokens[2], &end_f, &period_f);
-        led_entry->duty_mod_end       = (uint8_t)end_f;
-        led_entry->duty_mod_period_ms = (uint32_t)period_f;
+    if (!tok_is_dash(tokens[2])) {
+        led_entry->duty_cycle = (uint8_t)parse_value_with_interpolation(tokens[2], &led_entry->duty_interp);
+        led_entry->present |= LED_SET_DUTY;
+        if (config_interp_is_modulation(led_entry->duty_interp)) {
+            float end_f, period_f;
+            parse_mod_extras(tokens[2], &end_f, &period_f);
+            led_entry->duty_mod_end       = (uint8_t)end_f;
+            led_entry->duty_mod_period_ms = (uint32_t)period_f;
+        }
     }
-    if (config_interp_is_modulation(led_entry->brightness_interp)) {
-        float end_f, period_f;
-        parse_mod_extras(tokens[3], &end_f, &period_f);
-        led_entry->bright_mod_end       = (uint8_t)end_f;
-        led_entry->bright_mod_period_ms = (uint32_t)period_f;
+    if (!tok_is_dash(tokens[3])) {
+        led_entry->brightness = (uint8_t)parse_value_with_interpolation(tokens[3], &led_entry->brightness_interp);
+        led_entry->present |= LED_SET_BRIGHT;
+        if (config_interp_is_modulation(led_entry->brightness_interp)) {
+            float end_f, period_f;
+            parse_mod_extras(tokens[3], &end_f, &period_f);
+            led_entry->bright_mod_end       = (uint8_t)end_f;
+            led_entry->bright_mod_period_ms = (uint32_t)period_f;
+        }
     }
 
     if (token_count >= 8) {
-        // Canonical 8-token format (+ optional v2 pulse fields at tokens[8..]).
-        // R G B carry independent interp prefixes; tokens[8..] ignored for now.
-        float r_f = parse_value_with_interpolation(tokens[4], &led_entry->r_interp);
-        float g_f = parse_value_with_interpolation(tokens[5], &led_entry->g_interp);
-        float b_f = parse_value_with_interpolation(tokens[6], &led_entry->b_interp);
-        led_entry->r = clamp_u8_field(r_f, "R");
-        led_entry->g = clamp_u8_field(g_f, "G");
-        led_entry->b = clamp_u8_field(b_f, "B");
+        // Canonical: R G B (each '-'-able) then channel_mask.
+        if (!tok_is_dash(tokens[4])) {
+            led_entry->r = clamp_u8_field(parse_value_with_interpolation(tokens[4], &led_entry->r_interp), "R");
+            led_entry->present |= LED_SET_R;
+            if (config_interp_is_modulation(led_entry->r_interp)) {
+                float end_f, period_f; parse_mod_extras(tokens[4], &end_f, &period_f);
+                led_entry->r_mod_end = clamp_u8_field(end_f, "R^end");
+                led_entry->r_mod_period_ms = (uint32_t)period_f;
+            }
+        }
+        if (!tok_is_dash(tokens[5])) {
+            led_entry->g = clamp_u8_field(parse_value_with_interpolation(tokens[5], &led_entry->g_interp), "G");
+            led_entry->present |= LED_SET_G;
+            if (config_interp_is_modulation(led_entry->g_interp)) {
+                float end_f, period_f; parse_mod_extras(tokens[5], &end_f, &period_f);
+                led_entry->g_mod_end = clamp_u8_field(end_f, "G^end");
+                led_entry->g_mod_period_ms = (uint32_t)period_f;
+            }
+        }
+        if (!tok_is_dash(tokens[6])) {
+            led_entry->b = clamp_u8_field(parse_value_with_interpolation(tokens[6], &led_entry->b_interp), "B");
+            led_entry->present |= LED_SET_B;
+            if (config_interp_is_modulation(led_entry->b_interp)) {
+                float end_f, period_f; parse_mod_extras(tokens[6], &end_f, &period_f);
+                led_entry->b_mod_end = clamp_u8_field(end_f, "B^end");
+                led_entry->b_mod_period_ms = (uint32_t)period_f;
+            }
+        }
         led_entry->channel_mask = (uint8_t)atoi(tokens[7]);
-
-        // Triangle extras for color channels
-        float end_f, period_f;
-        if (config_interp_is_modulation(led_entry->r_interp)) {
-            parse_mod_extras(tokens[4], &end_f, &period_f);
-            led_entry->r_mod_end = clamp_u8_field(end_f, "R^end");
-            led_entry->r_mod_period_ms = (uint32_t)period_f;
-        }
-        if (config_interp_is_modulation(led_entry->g_interp)) {
-            parse_mod_extras(tokens[5], &end_f, &period_f);
-            led_entry->g_mod_end = clamp_u8_field(end_f, "G^end");
-            led_entry->g_mod_period_ms = (uint32_t)period_f;
-        }
-        if (config_interp_is_modulation(led_entry->b_interp)) {
-            parse_mod_extras(tokens[6], &end_f, &period_f);
-            led_entry->b_mod_end = clamp_u8_field(end_f, "B^end");
-            led_entry->b_mod_period_ms = (uint32_t)period_f;
-        }
     } else {
-        // Legacy 5-token format: default RGB = full white; no interp on colors
+        // Legacy 5-token format: default RGB = full white (explicitly set).
         led_entry->r = 255;
         led_entry->g = 255;
         led_entry->b = 255;
-        led_entry->r_interp = CONFIG_INTERP_NONE;
-        led_entry->g_interp = CONFIG_INTERP_NONE;
-        led_entry->b_interp = CONFIG_INTERP_NONE;
+        led_entry->present |= LED_SET_R | LED_SET_G | LED_SET_B;
         led_entry->channel_mask = (uint8_t)atoi(tokens[4]);
+    }
+
+    // ---- v2 trailing pulse fields (positional): [8]=env [9]=phase [10]=attack [11]=jitter ----
+    if (token_count >= 9 && !tok_is_dash(tokens[8])) {
+        int env = (int)parse_v2_value(tokens[8]);
+        led_entry->env = (env >= 0 && env <= 3) ? (uint8_t)env : 0;   // 0..3 (square/sine/tri/trapezoid)
+        led_entry->present |= LED_SET_ENV;
+    }
+    if (token_count >= 10 && !tok_is_dash(tokens[9])) {
+        int d = (int)parse_v2_value(tokens[9]) % 360; if (d < 0) d += 360;
+        led_entry->phase_deg = (uint16_t)d;
+        led_entry->present |= LED_SET_PHASE;
+    }
+    if (token_count >= 11 && !tok_is_dash(tokens[10])) {
+        float a = parse_v2_value(tokens[10]);
+        led_entry->attack_ms = (uint16_t)(a < 0.0f ? 0.0f : a);
+        led_entry->present |= LED_SET_ATTACK;
+    }
+    if (token_count >= 12 && !tok_is_dash(tokens[11])) {
+        led_entry->jitter_period_ms = 45000.0f;   // default wander period if only amp given
+        led_entry->jitter_amp_hz    = parse_jitter_token(tokens[11], &led_entry->jitter_period_ms);
+        led_entry->present |= LED_SET_JITTER;
     }
 
     // Reject channel_mask == 0 — no channel to drive
@@ -1369,72 +1415,86 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
     if (token_count < 5) {
         return ESP_ERR_INVALID_ARG; // Need at least time, freq, pan, volume, modulation
     }
-    // Format v2 (ledc_format.md): tokens[8..12] = optional [duty env phase attack
-    // jitter]. Parse-tolerated (already ignored below) but not yet applied to the
-    // engine — wiring is a follow-up; use /api/iso-env|beat-jitter meanwhile.
-    if (token_count > 8) {
-        ESP_LOGI(TAG, "Audio line: v2 pulse fields present (%zu tokens) — parsed but not yet applied to the engine", token_count);
-    }
-
+    // Format v2 (ledc_format.md): after [ch freqR waveType], tokens[8..12] carry the
+    // optional pulse fields [duty env phase attack jitter]. Any field may be '-'
+    // (leave unchanged): its present bit stays clear and the execute path keeps the
+    // channel's live value.
     memset(audio_entry, 0, sizeof(config_audio_entry_t));
+    audio_entry->present = 0;
 
     // Parse time (always numeric)
     audio_entry->time_ms = atol(tokens[0]);
 
-    // Parse frequency with interpolation support
-    audio_entry->frequency = parse_value_with_interpolation(tokens[1], &audio_entry->freq_interp);
-
-    // Parse pan with interpolation support
-    audio_entry->pan = parse_value_with_interpolation(tokens[2], &audio_entry->pan_interp);
-
-    // Parse volume with interpolation support
-    audio_entry->volume = parse_value_with_interpolation(tokens[3], &audio_entry->volume_interp);
-
-    // Parse modulation with interpolation support
-    audio_entry->modulation = parse_value_with_interpolation(tokens[4], &audio_entry->mod_interp);
-
-    // Capture triangle modulation extras for any field that uses ^.
-    if (config_interp_is_modulation(audio_entry->freq_interp)) {
-        parse_mod_extras(tokens[1], &audio_entry->freq_mod_end, &audio_entry->freq_mod_period_ms);
+    // freq / pan / volume / modulation — each '-'-able, interp-prefix capable.
+    if (!tok_is_dash(tokens[1])) {
+        audio_entry->frequency = parse_value_with_interpolation(tokens[1], &audio_entry->freq_interp);
+        audio_entry->present |= AUD_SET_FREQ;
+        if (config_interp_is_modulation(audio_entry->freq_interp))
+            parse_mod_extras(tokens[1], &audio_entry->freq_mod_end, &audio_entry->freq_mod_period_ms);
     }
-    if (config_interp_is_modulation(audio_entry->pan_interp)) {
-        parse_mod_extras(tokens[2], &audio_entry->pan_mod_end, &audio_entry->pan_mod_period_ms);
+    if (!tok_is_dash(tokens[2])) {
+        audio_entry->pan = parse_value_with_interpolation(tokens[2], &audio_entry->pan_interp);
+        audio_entry->present |= AUD_SET_PAN;
+        if (config_interp_is_modulation(audio_entry->pan_interp))
+            parse_mod_extras(tokens[2], &audio_entry->pan_mod_end, &audio_entry->pan_mod_period_ms);
     }
-    if (config_interp_is_modulation(audio_entry->volume_interp)) {
-        parse_mod_extras(tokens[3], &audio_entry->vol_mod_end, &audio_entry->vol_mod_period_ms);
+    if (!tok_is_dash(tokens[3])) {
+        audio_entry->volume = parse_value_with_interpolation(tokens[3], &audio_entry->volume_interp);
+        audio_entry->present |= AUD_SET_VOL;
+        if (config_interp_is_modulation(audio_entry->volume_interp))
+            parse_mod_extras(tokens[3], &audio_entry->vol_mod_end, &audio_entry->vol_mod_period_ms);
     }
-    if (config_interp_is_modulation(audio_entry->mod_interp)) {
-        parse_mod_extras(tokens[4], &audio_entry->mod_mod_end, &audio_entry->mod_mod_period_ms);
-    }
-
-    // Parse channel (optional, defaults to 0)
-    if (token_count >= 6) {
-        audio_entry->channel = atoi(tokens[5]);
-    } else {
-        audio_entry->channel = 0;
+    if (!tok_is_dash(tokens[4])) {
+        audio_entry->modulation = parse_value_with_interpolation(tokens[4], &audio_entry->mod_interp);
+        audio_entry->present |= AUD_SET_MOD;
+        if (config_interp_is_modulation(audio_entry->mod_interp))
+            parse_mod_extras(tokens[4], &audio_entry->mod_mod_end, &audio_entry->mod_mod_period_ms);
     }
 
-    // Token 6 (optional): freq_r — right channel frequency for binaural beat.
-    // If absent or <= 0 or out of range, set to 0.0 which means "same as left"
-    // (audio_generator_start_channel_locked interprets 0 as copy of freq_l).
-    if (token_count >= 7) {
+    // Channel (optional, defaults to 0). Selector — not '-'-able.
+    audio_entry->channel = (token_count >= 6 && !tok_is_dash(tokens[5])) ? atoi(tokens[5]) : 0;
+
+    // Token 6 (optional): freq_r — right-ear frequency for binaural beat. '-'/absent
+    // → leave (present bit clear); 0/out-of-range → 0.0 ("same as left").
+    if (token_count >= 7 && !tok_is_dash(tokens[6])) {
         float freq_r = atof(tokens[6]);
-        audio_entry->frequency_r = (freq_r > 0.0f && freq_r <= (AUDIO_GEN_SAMPLE_RATE / 2.0f))
-                                   ? freq_r : 0.0f;
-    } else {
-        audio_entry->frequency_r = 0.0f;
+        audio_entry->frequency_r = (freq_r > 0.0f && freq_r <= (AUDIO_GEN_SAMPLE_RATE / 2.0f)) ? freq_r : 0.0f;
+        audio_entry->present |= AUD_SET_FREQR;
     }
 
-    // Token 7 (optional): wave_type — integer 0-6 mapped to audio_wave_type_t.
-    // Defaults to 0 (AUDIO_WAVE_SINE) if absent or out of range.
-    if (token_count >= 8) {
-        int wave_type_int = atoi(tokens[7]);
-        audio_entry->wave_type = (wave_type_int >= 0 && wave_type_int < AUDIO_WAVE_COUNT)
-                                 ? (uint8_t)wave_type_int : 0;
+    // Token 7 (optional): wave_type — 0..6 → audio_wave_type_t. '-'/absent → leave.
+    if (token_count >= 8 && !tok_is_dash(tokens[7])) {
+        int wt = atoi(tokens[7]);
+        audio_entry->wave_type = (wt >= 0 && wt < AUDIO_WAVE_COUNT) ? (uint8_t)wt : 0;
         audio_entry->has_wave_type = true;
-    } else {
-        audio_entry->wave_type = 0;
-        audio_entry->has_wave_type = false;
+        audio_entry->present |= AUD_SET_WAVE;
+    }
+
+    // ---- v2 trailing pulse fields: [8]=duty [9]=env [10]=phase [11]=attack [12]=jitter ----
+    if (token_count >= 9 && !tok_is_dash(tokens[8])) {
+        float d = parse_v2_value(tokens[8]);
+        audio_entry->duty_pct = (d < 0.0f) ? 0.0f : (d > 100.0f ? 100.0f : d);
+        audio_entry->present |= AUD_SET_DUTY;
+    }
+    if (token_count >= 10 && !tok_is_dash(tokens[9])) {
+        int env = (int)parse_v2_value(tokens[9]);
+        audio_entry->env = (env >= 0 && env <= 4) ? (uint8_t)env : 4;   // 0..4 (…/tremolo)
+        audio_entry->present |= AUD_SET_ENV;
+    }
+    if (token_count >= 11 && !tok_is_dash(tokens[10])) {
+        int d = (int)parse_v2_value(tokens[10]) % 360; if (d < 0) d += 360;
+        audio_entry->phase_deg = (uint16_t)d;
+        audio_entry->present |= AUD_SET_PHASE;
+    }
+    if (token_count >= 12 && !tok_is_dash(tokens[11])) {
+        float a = parse_v2_value(tokens[11]);
+        audio_entry->attack_ms = (a < 0.0f) ? 0.0f : a;
+        audio_entry->present |= AUD_SET_ATTACK;
+    }
+    if (token_count >= 13 && !tok_is_dash(tokens[12])) {
+        audio_entry->jitter_period_ms = 45000.0f;  // default wander period if only amp given
+        audio_entry->jitter_amp_hz    = parse_jitter_token(tokens[12], &audio_entry->jitter_period_ms);
+        audio_entry->present |= AUD_SET_JITTER;
     }
 
     return ESP_OK;
@@ -2029,12 +2089,42 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                  (unsigned)audio->channel);
         #undef INTERP_GLYPH
 
+        // Smart update-vs-start (Step 5.3): if the channel is already running,
+        // update its params without restarting so there is no audible click or
+        // phase reset.  Only start from scratch when the channel is inactive.
+        // Determine this FIRST — the v2 '-' skip needs the channel's live values.
+        esp_err_t ret;
+        bool ch_active;
+        if (lock_held) {
+            ch_active = audio_generator_is_active_locked(audio->channel);
+        } else {
+            ch_active = audio_manager_is_channel_active(audio->channel);
+        }
+
+        // Effective core params. For a v2 '-' field (present bit clear), keep the
+        // channel's LIVE value so the write is a no-op ("leave unchanged"). Only the
+        // lock_held timeline path can read live values safely (the _locked getters);
+        // the rare non-locked path falls back to the parsed default.
+        float eff_freq   = audio->frequency;
+        float eff_amp    = audio->volume / 100.0f;   // 0-100 → 0.0-1.0
+        float eff_pan    = audio->pan / 100.0f;      // -100/+100 → -1.0/+1.0
+        float eff_mod    = audio->modulation;
+        float eff_freq_r = audio->frequency_r;
+        if (ch_active && lock_held) {
+            float v;
+            if (!(audio->present & AUD_SET_FREQ)  && audio_generator_get_param_locked(audio->channel, AUDIO_PARAM_FREQUENCY, &v) == ESP_OK) eff_freq = v;
+            if (!(audio->present & AUD_SET_VOL)   && audio_generator_get_param_locked(audio->channel, AUDIO_PARAM_AMPLITUDE, &v) == ESP_OK) eff_amp  = v;
+            if (!(audio->present & AUD_SET_PAN)   && audio_generator_get_param_locked(audio->channel, AUDIO_PARAM_PAN,       &v) == ESP_OK) eff_pan  = v;
+            if (!(audio->present & AUD_SET_MOD)   && audio_generator_get_param_locked(audio->channel, AUDIO_PARAM_MOD_FREQ,  &v) == ESP_OK) eff_mod  = v;
+            if (!(audio->present & AUD_SET_FREQR) && audio_generator_get_current_freq_r_locked(audio->channel, &v) == ESP_OK) eff_freq_r = v;
+        }
+
         audio_gen_params_t gen_params = {
-            .frequency   = audio->frequency,
-            .frequency_r = audio->frequency_r,
-            .amplitude   = audio->volume / 100.0f,   // 0-100 → 0.0-1.0
-            .pan         = audio->pan / 100.0f,      // -100/+100 → -1.0/+1.0
-            .mod_frequency = audio->modulation,
+            .frequency   = eff_freq,
+            .frequency_r = eff_freq_r,
+            .amplitude   = eff_amp,
+            .pan         = eff_pan,
+            .mod_frequency = eff_mod,
             // mod_depth hardcoded per spec (no field defined); Phase 4 may
             // expose a Kconfig override.
             .mod_depth   = 0.1f,
@@ -2045,17 +2135,6 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             .sweep_target = 0.0f,
             .duration_ms = 86400000   // 24 h — effectively continuous
         };
-
-        // Smart update-vs-start (Step 5.3): if the channel is already running,
-        // update its params without restarting so there is no audible click or
-        // phase reset.  Only start from scratch when the channel is inactive.
-        esp_err_t ret;
-        bool ch_active;
-        if (lock_held) {
-            ch_active = audio_generator_is_active_locked(audio->channel);
-        } else {
-            ch_active = audio_manager_is_channel_active(audio->channel);
-        }
 
         if (ch_active) {
             if (lock_held) {
@@ -2080,6 +2159,24 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             }
             ESP_LOGD(TAG, "Audio channel %d %s successfully", audio->channel,
                      ch_active_after ? "updated" : "started");
+
+            // ---- v2 pulse-field wiring (per-channel; '-'/absent → leave) ----
+            // env/duty/attack go through the per-channel iso override; each field
+            // not present is passed as its "leave" sentinel so untouched values
+            // stay. phase is per-channel. beat jitter is a session-wide setting
+            // (global engine) applied when the field is present.
+            if (audio->present & (AUD_SET_ENV | AUD_SET_DUTY | AUD_SET_ATTACK)) {
+                int   env_arg    = (audio->present & AUD_SET_ENV)    ? (int)audio->env       : -1;
+                float duty_arg   = (audio->present & AUD_SET_DUTY)   ? audio->duty_pct       : -1.0f;
+                float attack_arg = (audio->present & AUD_SET_ATTACK) ? audio->attack_ms      : -1.0f;
+                audio_generator_set_iso_channel(audio->channel, env_arg, duty_arg, attack_arg, -1.0f);
+            }
+            if (audio->present & AUD_SET_PHASE) {
+                audio_generator_set_phase(audio->channel, audio->phase_deg);
+            }
+            if (audio->present & AUD_SET_JITTER) {
+                audio_generator_set_beat_jitter(audio->jitter_amp_hz, audio->jitter_period_ms);
+            }
 
             // ---- Modulation wiring (new in mod_engine phase) ----
             // Stop any previously-active modulations on this channel's fields.
@@ -2243,6 +2340,33 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     // LED entry
     // ------------------------------------------------------------------
     const config_led_entry_t *led = &entry->data.led;
+
+    // v2 '-' skip: if any core field (freq/duty/bright/R/G/B) is absent, substitute
+    // the LIVE value of the lowest channel in the mask so applying it is a no-op
+    // ("leave unchanged"). A multi-bit mask with divergent live values collapses to
+    // the low bit's value for the '-' fields — an unusual authoring choice.
+    config_led_entry_t led_eff;
+    if ((led->present & LED_SET_CORE) != LED_SET_CORE) {
+        led_eff = *led;
+        int lowbit = -1;
+        for (int b = 0; b < NUM_LED_CHANNELS; b++) {
+            if (led->channel_mask & (1u << b)) { lowbit = b; break; }
+        }
+        if (lowbit >= 0) {
+            led_matrix_channel_snapshot_t snap[NUM_LED_CHANNELS];
+            int n = led_matrix_get_snapshot(snap, NUM_LED_CHANNELS);
+            if (lowbit < n) {
+                const led_matrix_channel_snapshot_t *s = &snap[lowbit];
+                if (!(led->present & LED_SET_FREQ))   led_eff.frequency  = s->freq;
+                if (!(led->present & LED_SET_DUTY))   led_eff.duty_cycle = s->duty;
+                if (!(led->present & LED_SET_BRIGHT)) led_eff.brightness = s->brightness;
+                if (!(led->present & LED_SET_R))      led_eff.r = s->r;
+                if (!(led->present & LED_SET_G))      led_eff.g = s->g;
+                if (!(led->present & LED_SET_B))      led_eff.b = s->b;
+            }
+        }
+        led = &led_eff;
+    }
 
     // Layer 2 (Plan 007 Step 2.3): compute the transport-clock anchor for this
     // entry.  logical_anchor_us = T0 + entry->time_ms * 1000.
@@ -2525,6 +2649,15 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     }
 
     } /* end else (freq > 0) */
+
+    // ---- v2 pulse-field wiring (per-channel_mask; only fields the line SET) ----
+    // Applied in both branches (stop and start): carrier/attack/jitter write
+    // per-channel state (latched at next start too), phase is applied at use-time.
+    // A field left '-' (present bit clear) is not written → channel keeps its value.
+    if (led->present & LED_SET_ENV)    led_matrix_set_carrier_masked(led->channel_mask, led->env);
+    if (led->present & LED_SET_PHASE)  led_matrix_set_phase_masked(led->channel_mask, (int16_t)led->phase_deg);
+    if (led->present & LED_SET_ATTACK) led_matrix_set_attack_masked(led->channel_mask, led->attack_ms);
+    if (led->present & LED_SET_JITTER) led_matrix_set_jitter_masked(led->channel_mask, led->jitter_amp_hz, led->jitter_period_ms);
 
     // Re-acquire audio lock now that LED dispatch (including any vTaskDelays) is complete.
     if (lock_held) {

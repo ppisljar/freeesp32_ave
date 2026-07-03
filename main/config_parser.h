@@ -50,6 +50,41 @@ static inline bool config_interp_is_modulation(config_interpolation_t i)
         || i == CONFIG_INTERP_SQUARE;
 }
 
+/* ---------------------------------------------------------------------------
+ * Format v2 "present" bitmasks (ledc_format.md).
+ *
+ * Every positional field can be written as `-` (or simply omitted as a trailing
+ * token) meaning "leave this channel's current value unchanged". The parser
+ * records which fields the line ACTUALLY sets in config_*_entry_t.present; the
+ * execute path substitutes the channel's live value for any field whose bit is
+ * clear, so applying it is a no-op ("leave unchanged" / device skip-semantics).
+ * A cleared bit is NEVER treated as 0 — that would silently zero the field.
+ * ------------------------------------------------------------------------- */
+#define LED_SET_FREQ    (1u << 0)
+#define LED_SET_DUTY    (1u << 1)
+#define LED_SET_BRIGHT  (1u << 2)
+#define LED_SET_R       (1u << 3)
+#define LED_SET_G       (1u << 4)
+#define LED_SET_B       (1u << 5)
+#define LED_SET_ENV     (1u << 6)   // carrier waveform (env column)
+#define LED_SET_PHASE   (1u << 7)
+#define LED_SET_ATTACK  (1u << 8)
+#define LED_SET_JITTER  (1u << 9)
+#define LED_SET_CORE    (LED_SET_FREQ|LED_SET_DUTY|LED_SET_BRIGHT|LED_SET_R|LED_SET_G|LED_SET_B)
+
+#define AUD_SET_FREQ    (1u << 0)
+#define AUD_SET_PAN     (1u << 1)
+#define AUD_SET_VOL     (1u << 2)
+#define AUD_SET_MOD     (1u << 3)
+#define AUD_SET_FREQR   (1u << 4)
+#define AUD_SET_WAVE    (1u << 5)
+#define AUD_SET_DUTY    (1u << 6)
+#define AUD_SET_ENV     (1u << 7)
+#define AUD_SET_PHASE   (1u << 8)
+#define AUD_SET_ATTACK  (1u << 9)
+#define AUD_SET_JITTER  (1u << 10)
+#define AUD_SET_CORE    (AUD_SET_FREQ|AUD_SET_PAN|AUD_SET_VOL|AUD_SET_MOD)
+
 /* Modulation extras: each interpolatable field carries two extra floats
  * — the wave's "end" value (other extreme of the oscillation; the entry's
  * regular field value is the "start") and the period in ms (full cycle
@@ -78,6 +113,14 @@ typedef struct {
     uint32_t bright_mod_period_ms;
     uint8_t  r_mod_end, g_mod_end, b_mod_end;
     uint32_t r_mod_period_ms, g_mod_period_ms, b_mod_period_ms;
+    // Format v2 pulse fields (ledc_format.md). Applied per-channel_mask after the
+    // flicker start/update. Validity gated by the matching LED_SET_* bit in `present`.
+    uint8_t  env;             // carrier waveform 0..3 (square/sine/triangle/trapezoid)
+    uint16_t phase_deg;       // 0..359
+    uint16_t attack_ms;       // trapezoid edge duration (ms)
+    float    jitter_amp_hz;   // flicker-rate jitter amplitude (Hz, 0=off)
+    float    jitter_period_ms;// flicker-rate jitter wander period (ms)
+    uint16_t present;         // LED_SET_* bitmask: which fields this line sets ('-'/absent → leave)
 } config_led_entry_t;
 
 typedef struct {
@@ -99,6 +142,15 @@ typedef struct {
     float    pan_mod_end,    pan_mod_period_ms;
     float    vol_mod_end,    vol_mod_period_ms;
     float    mod_mod_end,    mod_mod_period_ms;
+    // Format v2 pulse fields (ledc_format.md). Applied to `channel` after the
+    // start/update. Validity gated by the matching AUD_SET_* bit in `present`.
+    float    duty_pct;        // isochronic on-fraction (%)
+    uint8_t  env;             // ISO_ENV_* 0..4 (square/sine/triangle/trapezoid/tremolo)
+    uint16_t phase_deg;       // 0..359
+    float    attack_ms;       // raised edge duration (ms)
+    float    jitter_amp_hz;   // beat-offset jitter amplitude (Hz, 0=off)
+    float    jitter_period_ms;// beat-offset jitter period (ms)
+    uint16_t present;         // AUD_SET_* bitmask: which fields this line sets ('-'/absent → leave)
 } config_audio_entry_t;
 
 /**

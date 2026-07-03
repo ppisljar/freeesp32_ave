@@ -14,7 +14,14 @@ import { WAVE_TYPES } from '../model.js';
 import { field, ramp, mod, fieldHasRamp, fieldHasMod } from '../field.js';
 import { compileSession, sessionFromDoc, LED_REGION_MASKS } from './wizard_compile.js';
 import { patchLine } from '../transport.js';
-import { BRAINWAVE_PRESETS, COLOR_PRESETS, NOISE_PRESETS } from '../macros.js';
+import {
+    BRAINWAVE_PRESETS, COLOR_PRESETS, NOISE_PRESETS,
+    harmonicCarriers, breathMod, rotatingPanMod,
+} from '../macros.js';
+import {
+    parsePulseCell, formatPulseCell, parsePulseEnv, formatPulseEnv,
+    parsePulseJitter, formatPulseJitter,
+} from '../pulse.js';
 
 let uid = 0;
 function newId(p) { return (p || 'id') + (++uid) + '_' + Math.random().toString(36).slice(2, 6); }
@@ -247,6 +254,15 @@ export function initWizardView(ctx) {
                 layer.fields.r.value = p.r; layer.fields.g.value = p.g; layer.fields.b.value = p.b; changed();
             }));
             card.appendChild(sliderRow('Brightness', layer.fields.bright, 0, 100, 1));
+            // One-click breath swell (A8): 0.1 Hz sine on brightness (6 breaths/min).
+            const bl = el('div', 'gen-wiz-presets');
+            bl.appendChild(el('span', 'gen-wiz-flabel', 'Breath'));
+            bl.appendChild(button('🫁 Breath swell (0.1 Hz)', 'gen-wiz-preset', () => {
+                layer.fields.bright.value = 50;            // swing low
+                layer.fields.bright.mod = breathMod({});   // sine 50→100 over 10 s
+                changed();
+            }));
+            card.appendChild(bl);
             const cf = dynamicsEditor(layer.fields.bright); card.appendChild(cf);
             card.appendChild(sliderRow('Flicker Hz', layer.fields.freq, 0, 60, 0.1));
             card.appendChild(advancedLight(layer));
@@ -256,7 +272,9 @@ export function initWizardView(ctx) {
         // audio kinds
         if (layer.kind === 'binaural') {
             card.appendChild(presetBar('Brainwave', BRAINWAVE_PRESETS, (p) => {
-                layer.fields.beat.value = p.beat; changed();
+                layer.fields.beat.value = p.beat;
+                if (p.carrier !== undefined) layer.fields.freq.value = p.carrier; // A4 research carrier
+                changed();
             }));
             card.appendChild(sliderRow('Carrier Hz', layer.fields.freq, 20, 1000, 1,
                 liveAudio(layer, 'freq')));
@@ -300,6 +318,50 @@ export function initWizardView(ctx) {
         };
     }
 
+    // v2 pulse-shape controls for a layer (env/phase/attack/jitter, audio duty).
+    // Layer-level: applies to every row the layer expands to. Stored in layer.pulse
+    // (created lazily; removed when emptied). Blank = off, - = leave unchanged.
+    function pulseRows(layer, isAudio) {
+        const frag = document.createDocumentFragment();
+        const read = () => layer.pulse || {};
+        function apply(f, val) {
+            if (!layer.pulse) layer.pulse = {};
+            if (val === undefined) delete layer.pulse[f]; else layer.pulse[f] = val;
+            if (!Object.keys(layer.pulse).length) delete layer.pulse;
+            changed();
+        }
+        frag.appendChild(el('div', 'gen-wiz-flabel', 'Pulse shape  (blank = off · - = leave unchanged)'));
+
+        const erow = el('div', 'gen-wiz-subrow');
+        erow.appendChild(el('span', 'gen-wiz-flabel', 'Env'));
+        const esel = el('select');
+        const names = isAudio
+            ? ['square', 'sine', 'triangle', 'trapezoid', 'tremolo']
+            : ['square', 'sine', 'triangle', 'trapezoid'];
+        const mk = (v, lbl) => { const o = el('option', null, lbl); o.value = v; esel.appendChild(o); };
+        mk('', '(off)'); mk('-', '— leave');
+        names.forEach((n, i) => mk(String(i), i + ' ' + n));
+        esel.value = formatPulseEnv(read().env);
+        esel.addEventListener('change', () => apply('env', parsePulseEnv(esel.value)));
+        erow.appendChild(esel);
+        frag.appendChild(erow);
+
+        function textRow(label, f, fmt, parse) {
+            const row = el('div', 'gen-wiz-subrow');
+            row.appendChild(el('span', 'gen-wiz-flabel', label));
+            const inp = el('input', 'gen-wiz-num'); inp.type = 'text'; inp.placeholder = 'off';
+            inp.value = fmt(read()[f]);
+            inp.addEventListener('change', () => apply(f, parse(inp.value)));
+            row.appendChild(inp);
+            frag.appendChild(row);
+        }
+        if (isAudio) textRow('Duty %', 'duty', formatPulseCell, parsePulseCell);
+        textRow('Phase°', 'phase', formatPulseCell, parsePulseCell);
+        textRow('Attack ms', 'attack', formatPulseCell, parsePulseCell);
+        textRow('Jitter', 'jitter', formatPulseJitter, parsePulseJitter);
+        return frag;
+    }
+
     function advancedAudio(layer, opts) {
         const det = el('details', 'gen-wiz-adv');
         det.appendChild(el('summary', null, '▸ Advanced'));
@@ -317,7 +379,7 @@ export function initWizardView(ctx) {
         });
         wrow.appendChild(wsel);
         det.appendChild(wrow);
-        // Stereo toggle (binaural)
+        // Stereo / monaural toggles (binaural)
         if (opts.stereo) {
             const srow = el('div', 'gen-wiz-subrow');
             const lab = el('label', null, ' True-stereo (two hard-panned channels)');
@@ -326,6 +388,36 @@ export function initWizardView(ctx) {
             lab.prepend(cb);
             srow.appendChild(lab);
             det.appendChild(srow);
+
+            // Monaural: two centre-panned channels — the beat forms in the air, so
+            // it works on a single speaker / one ear (A4). Stereo wins if both set.
+            const mrow = el('div', 'gen-wiz-subrow');
+            const mlab = el('label', null, ' Monaural (centre-panned pair · works on speakers)');
+            const mcb = el('input'); mcb.type = 'checkbox'; mcb.checked = !!layer.monaural;
+            mcb.addEventListener('change', () => { layer.monaural = mcb.checked; changed(); });
+            mlab.prepend(mcb);
+            mrow.appendChild(mlab);
+            det.appendChild(mrow);
+        }
+        // One-click LFO macros (A8): rotating pan + breath-paced volume swell.
+        if (layer.fields.pan || layer.fields.volume) {
+            const lfo = el('div', 'gen-wiz-subrow');
+            lfo.appendChild(el('span', 'gen-wiz-flabel', 'LFO'));
+            if (layer.fields.pan) {
+                lfo.appendChild(button('↻ Rotate pan', 'gen-wiz-preset', () => {
+                    layer.fields.pan.value = -100;              // swing start (left)
+                    layer.fields.pan.mod = rotatingPanMod({});  // sine -100→100 over 15 s
+                    changed();
+                }));
+            }
+            if (layer.fields.volume) {
+                lfo.appendChild(button('🫁 Breath vol', 'gen-wiz-preset', () => {
+                    layer.fields.volume.value = 50;             // swing low
+                    layer.fields.volume.mod = breathMod({});    // sine 50→100, 0.1 Hz
+                    changed();
+                }));
+            }
+            det.appendChild(lfo);
         }
         // Manual channel pin
         const crow = el('div', 'gen-wiz-subrow');
@@ -339,6 +431,7 @@ export function initWizardView(ctx) {
         });
         crow.appendChild(cin);
         det.appendChild(crow);
+        det.appendChild(pulseRows(layer, true));
         return det;
     }
 
@@ -352,6 +445,7 @@ export function initWizardView(ctx) {
         det.appendChild(sliderRow('B', layer.fields.b, 0, 255, 1));
         det.appendChild(dynamicsEditor(layer.fields.b));
         det.appendChild(sliderRow('Duty %', layer.fields.duty, 0, 100, 1));
+        det.appendChild(pulseRows(layer, false));
         return det;
     }
 
@@ -492,6 +586,20 @@ export function initWizardView(ctx) {
             const seg = newSegment();
             seg.name = 'Binaural';
             seg.layers.push(newLayer('binaural'));
+            session.segments.push(seg); structureChanged();
+        }));
+        // Harmonic stack (A5): octave carriers sharing one beat Δf, 1/N-scaled so
+        // the summed level stays in headroom. Each octave is a mono-binaural layer.
+        addSeg.appendChild(button('+ Harmonic stack', 'gen-wiz-addbtn', () => {
+            const seg = newSegment();
+            seg.name = 'Harmonic stack';
+            harmonicCarriers({ base: 100, beat: 6, count: 3 }).forEach((c) => {
+                const l = newLayer('binaural');
+                l.fields.freq.value = c.carrier;
+                l.fields.beat.value = c.beat;
+                l.fields.volume.value = c.volume;
+                seg.layers.push(l);
+            });
             session.segments.push(seg); structureChanged();
         }));
         main.appendChild(addSeg);

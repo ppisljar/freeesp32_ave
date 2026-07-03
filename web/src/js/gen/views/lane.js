@@ -20,6 +20,10 @@ import {
 import { createLaneCanvas } from './lane_canvas.js';
 import { createUndoStack } from '../undo.js';
 import { buildCellEditor, openPopover, closeOpenPopover } from './cell.js';
+import {
+    parsePulseCell, formatPulseCell, parsePulseEnv, formatPulseEnv,
+    parsePulseJitter, formatPulseJitter,
+} from '../pulse.js';
 import { getState } from '../transport.js';
 
 function fakeAnchor(x, y) {
@@ -193,7 +197,62 @@ export function initLaneView(ctx) {
         item('Set curve: linear  >', () => { undo.push(); setShape(kf, 'lin'); commitFromLanes(); });
         item('Set curve: quadratic  *', () => { undo.push(); setShape(kf, 'quad'); commitFromLanes(); });
         item('Convert to modulation (sine)', () => { undo.push(); setShape(kf, 'sine'); commitFromLanes(); });
+        item('Pulse fields at this time…', () => { openPulseInspector(lane, kf.t, pt); });
         openPopover(fakeAnchor(pt.x, pt.y), menu, 'Keyframe');
+    }
+
+    // Edit the v2 pulse fields (env/phase/attack/jitter, audio duty) for this
+    // lane at time `t`. Stored in the time-keyed lane.pulse sidecar (see
+    // lane_serialize.js) — not a sublane, since pulse fields are step-only.
+    function openPulseInspector(lane, t, pt) {
+        undo.push();
+        if (!lane.pulse) lane.pulse = {};
+        const rec = Object.assign({}, lane.pulse[t]);
+        const isAudio = lane.kind === 'audio';
+        const form = document.createElement('div');
+        form.className = 'gen-cell-editor gen-pulse-fields';
+
+        function apply(fieldName, val) {
+            if (val === undefined) delete rec[fieldName];
+            else rec[fieldName] = val;
+            if (Object.keys(rec).length) lane.pulse[t] = rec;
+            else delete lane.pulse[t];
+            commitFromLanes();
+        }
+        function labeled(text, el) {
+            const l = document.createElement('label');
+            l.className = 'gen-cell-field';
+            l.append(text);
+            l.appendChild(el);
+            form.appendChild(l);
+        }
+        function textField(text, fieldName, fmt, parse) {
+            const inp = document.createElement('input');
+            inp.type = 'text'; inp.className = 'gen-num';
+            inp.placeholder = 'off'; inp.value = fmt(rec[fieldName]);
+            inp.title = 'blank = off · - = leave unchanged · value = set';
+            inp.addEventListener('change', () => apply(fieldName, parse(inp.value)));
+            labeled(text, inp);
+        }
+
+        // env — select
+        const envSel = document.createElement('select');
+        const names = isAudio
+            ? ['square', 'sine', 'triangle', 'trapezoid', 'tremolo']
+            : ['square', 'sine', 'triangle', 'trapezoid'];
+        const mk = (v, lbl) => { const o = document.createElement('option'); o.value = v; o.textContent = lbl; envSel.appendChild(o); };
+        mk('', '(off)'); mk('-', '— leave');
+        names.forEach((n, i) => mk(String(i), i + ' ' + n));
+        envSel.value = formatPulseEnv(rec.env);
+        envSel.addEventListener('change', () => apply('env', parsePulseEnv(envSel.value)));
+
+        if (isAudio) textField('Duty %', 'duty', formatPulseCell, parsePulseCell);
+        labeled('Env', envSel);
+        textField('Phase°', 'phase', formatPulseCell, parsePulseCell);
+        textField('Attack ms', 'attack', formatPulseCell, parsePulseCell);
+        textField('Jitter', 'jitter', formatPulseJitter, parsePulseJitter);
+
+        openPopover(fakeAnchor(pt.x, pt.y), form, lane.name + ' · pulse @ ' + t + 'ms');
     }
 
     function setShape(kf, shape) {
