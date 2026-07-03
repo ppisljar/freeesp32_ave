@@ -69,6 +69,24 @@ typedef struct {
     volatile uint64_t cycle_start_time_us; // Timestamp of current cycle start (ISR-owned)
     volatile uint64_t latched_on_time_us;  // ON-time latched at cycle boundary; prevents mid-cycle duty glitch
 
+    // B2 (entrainment_firmware_plan): carrier waveform of the flicker itself.
+    // SQUARE (default) keeps the exact legacy on/off behaviour. SINE/TRIANGLE make
+    // the per-tick output a smooth brightness curve (output_level) — clean single-
+    // frequency drive, far less fatigue, and (with V-E2 antiphase) luminance-flat
+    // "invisible" flicker because a raised-sine antiphase pair sums to a constant.
+    // The shape is LUMINANCE-LINEAR on purpose (no perceptual gamma) so antiphase
+    // pairs cancel in photons; PWM/brightness is ~linear in luminance.
+    uint8_t           carrier_waveform;    // LED_CARRIER_*; latched at channel start
+    volatile uint8_t  output_level;        // non-square: ISR-computed 0..brightness output
+
+    // V-E2 (entrainment_firmware_plan): flicker phase offset in DEGREES (0..359).
+    // Applied at USE-TIME in the ISR (delay = deg * live_period / 360), so it stays
+    // a fixed *phase* through frequency ramps, not a fixed delay. Two channels that
+    // share a transport origin (same .ledc time / peer-piggyback) re-anchor in
+    // lockstep, so a 180° offset gives rock-solid antiphase → luminance-flat
+    // "invisible" flicker for a complementary-colour (e.g. cool/warm) pair.
+    volatile int16_t  phase_offset_deg;    // 0..359
+
     // Sweep state — written by led_matrix_start_sweep_masked() (task context),
     // read at cycle boundaries inside the ISR.  6 parameters × led_sweep_param_t.
     led_sweep_param_t sw_freq;        // milliHz units
@@ -115,6 +133,25 @@ static led_flicker_state_t flicker_state[NUM_LED_CHANNELS] = {
         .sweep_duration_us = 0,
     },
 };
+
+// Flicker carrier waveforms (B2). SQUARE = legacy on/off; SINE/TRIANGLE = smooth.
+#define LED_CARRIER_SQUARE   0u
+#define LED_CARRIER_SINE     1u
+#define LED_CARRIER_TRIANGLE 2u
+
+// Module-wide carrier default, latched into each channel at flicker start. Set via
+// led_matrix_set_carrier(). Default SQUARE → every existing session behaves identically.
+static volatile uint8_t s_flicker_carrier = LED_CARRIER_SQUARE;
+
+// V-E1 (entrainment_firmware_plan) — flicker ISR tick sizing. The tick scales UP
+// with the highest active flicker frequency so edges/phase stay accurate (clean
+// antiphase for invisible flicker needs fine edges at 40 Hz). At MULT=250 a 40 Hz
+// flicker gets 250 ticks/cycle (0.4% edge error) vs the old fixed 1 kHz (8%). The
+// tick only ever increases within a session; MAX caps ISR CPU (~8%/8ch at 10 kHz).
+#define LED_FLICKER_TICK_MULT  250u    // ISR ticks per flicker cycle target
+#define LED_FLICKER_TICK_MIN   1000u   // floor (Hz) — low-frequency flicker
+#define LED_FLICKER_TICK_MAX   10000u  // ceiling (Hz) — CPU guard
+static uint32_t s_flicker_tick_hz = 0; // current ISR tick rate (Hz); 0 = not yet set
 
 // One shared hardware timer drives all 4 channels; the ISR iterates over them.
 static gptimer_handle_t s_flicker_timer = NULL;
@@ -517,6 +554,36 @@ static inline int32_t IRAM_ATTR led_eval_mod_iram(const led_mod_slot_t *m, uint6
     return m->start_q + scaled;
 }
 
+/*
+ * B2 — per-tick flicker CARRIER output level (0..brightness) for non-square
+ * carriers. IRAM-safe / 32-bit-only (same rules as led_eval_mod_iram: no 64-bit
+ * ops, no flash libgcc helpers). SINE reuses the parabolic (1−cos(2πx))/2 ≈
+ * 4x(1−x) approximation; TRIANGLE is the linear fold. The shape is
+ * LUMINANCE-LINEAR (no perceptual gamma) so a 180°-antiphase pair of raised
+ * sines sums to a constant → luminance-flat "invisible" flicker.
+ */
+static inline uint8_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t elapsed_us,
+                                                       uint32_t cycle_us, uint8_t brightness) {
+    if (cycle_us == 0u) return brightness;
+    // phase_q16 = elapsed_us * 65536 / cycle_us — rescale to stay 32-bit.
+    uint32_t period = cycle_us;
+    uint32_t t      = elapsed_us;
+    while (period > 0xFFFFu) { period >>= 1; t >>= 1; }
+    uint32_t phase_q16 = (t << 16) / period;      // native UDIVMOD
+    if (phase_q16 > 65536u) phase_q16 = 65536u;
+    uint32_t shape_q16;
+    if (wave == LED_CARRIER_TRIANGLE) {
+        shape_q16 = (phase_q16 < 32768u) ? (phase_q16 << 1) : (131072u - (phase_q16 << 1));
+    } else { // SINE (parabola 4·x·(1−x))
+        uint32_t p_q8      = phase_q16 >> 8;       // 0..256
+        uint32_t one_minus = 256u - p_q8;
+        shape_q16          = (p_q8 * one_minus) << 2;
+        if (shape_q16 > 65536u) shape_q16 = 65536u;
+    }
+    // output = brightness * shape / 65536; brightness ≤100, product ≤6.5e6 fits u32.
+    return (uint8_t)(((uint32_t)brightness * shape_q16) >> 16);
+}
+
 /**
  * @brief Hardware timer alarm callback for LED flicker control (minimal ISR)
  *
@@ -645,14 +712,39 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
         }
         portEXIT_CRITICAL_ISR(&s_flicker_mux);
 
-        // Use the latch computed at the last cycle boundary — duty changes take
-        // effect at cycle boundaries, not mid-cycle.
-        bool should_be_on = (elapsed_us < s->latched_on_time_us);
+        // V-E2: apply the phase offset at use-time from the LIVE period, so it is a
+        // fixed phase (not a fixed delay) and survives frequency ramps. 32-bit safe:
+        // deg≤359, cycle_us≤1e7 (flicker ≥0.1 Hz) → product <4.3e9 fits uint32.
+        uint32_t eff_elapsed = (uint32_t)elapsed_us;
+        if (s->phase_offset_deg != 0) {
+            uint32_t cyc = (uint32_t)cycle_duration_us;
+            uint32_t off = ((uint32_t)s->phase_offset_deg * cyc) / 360u;
+            eff_elapsed += off;
+            if (eff_elapsed >= cyc) eff_elapsed -= cyc;   // wrap (eff < 2*cyc)
+        }
 
-        if (should_be_on != s->led_state) {
-            s->led_state = should_be_on;
-            s->led_dirty = true;
-            any_dirty = true;
+        if (s->carrier_waveform == LED_CARRIER_SQUARE) {
+            // Legacy path (phase-offset aware). Duty-gated on/off; dirty at edges.
+            bool should_be_on = (eff_elapsed < (uint32_t)s->latched_on_time_us);
+            if (should_be_on != s->led_state) {
+                s->led_state = should_be_on;
+                s->led_dirty = true;
+                any_dirty = true;
+            }
+        } else {
+            // B2 smooth carrier — output_level follows a per-tick brightness curve.
+            // Dirty whenever the level changes (≈ every tick), so the task refreshes
+            // the strip continuously. Cheap for DIRECT/DOTSTAR; heavier for NEOPIXEL.
+            uint8_t lvl = led_carrier_level_iram(s->carrier_waveform,
+                                                 eff_elapsed,
+                                                 (uint32_t)cycle_duration_us,
+                                                 s->brightness);
+            if (lvl != s->output_level) {
+                s->output_level = lvl;
+                s->led_state    = (lvl > 0u);   // keep active/exit bookkeeping sane
+                s->led_dirty    = true;
+                any_dirty       = true;
+            }
         }
     }
 
@@ -711,6 +803,7 @@ static void led_flicker_task(void *arg) {
         // is adequate — the ISR's cycle-boundary block takes the same mux.
         bool    ch_active[NUM_LED_CHANNELS], ch_led_state[NUM_LED_CHANNELS];
         uint8_t ch_brightness[NUM_LED_CHANNELS], ch_red[NUM_LED_CHANNELS], ch_green[NUM_LED_CHANNELS], ch_blue[NUM_LED_CHANNELS];
+        uint8_t ch_carrier[NUM_LED_CHANNELS], ch_output[NUM_LED_CHANNELS];
         for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
             led_flicker_state_t *s = &flicker_state[ch];
             portENTER_CRITICAL(&s_flicker_mux);
@@ -720,6 +813,8 @@ static void led_flicker_task(void *arg) {
             ch_red[ch]        = s->red;
             ch_green[ch]      = s->green;
             ch_blue[ch]       = s->blue;
+            ch_carrier[ch]    = s->carrier_waveform;
+            ch_output[ch]     = s->output_level;
             portEXIT_CRITICAL(&s_flicker_mux);
         }
 
@@ -732,11 +827,16 @@ static void led_flicker_task(void *arg) {
         // zero duty — semantically equivalent to the old "write RGB=0" path
         // but portable across all three backends.
         for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
-            if (!ch_active[ch] || !ch_led_state[ch]) {
+            if (!ch_active[ch]) {
                 led_strip_set_channel(matrix_handle, ch, 0, 0, 0, 0);
-            } else {
+            } else if (ch_carrier[ch] == LED_CARRIER_SQUARE) {
+                // Legacy square: brightness during ON half, 0 during OFF half.
                 led_strip_set_channel(matrix_handle, ch,
-                                      ch_brightness[ch],
+                                      ch_led_state[ch] ? ch_brightness[ch] : 0,
+                                      ch_red[ch], ch_green[ch], ch_blue[ch]);
+            } else {
+                // B2 smooth carrier: drive the per-tick output level directly.
+                led_strip_set_channel(matrix_handle, ch, ch_output[ch],
                                       ch_red[ch], ch_green[ch], ch_blue[ch]);
             }
         }
@@ -814,11 +914,10 @@ static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz)
             return ret;
         }
 
-        // Timer resolution: 100× the highest frequency channel, minimum 1 kHz.
-        // This gives at least 100 ISR ticks per flicker cycle for duty accuracy.
-        uint32_t timer_freq_hz = (min_freq_milliHz * 100) / 1000;
-        if (timer_freq_hz < 1000) timer_freq_hz = 1000;
-        uint64_t alarm_period_us = 1000000ULL / timer_freq_hz;
+        // Start at the floor tick; the scale-up step below raises it to match the
+        // requested frequency (V-E1). Initial value must be non-zero for start().
+        s_flicker_tick_hz = LED_FLICKER_TICK_MIN;
+        uint64_t alarm_period_us = 1000000ULL / s_flicker_tick_hz;
 
         gptimer_alarm_config_t alarm_config = {
             .reload_count = 0,
@@ -839,6 +938,27 @@ static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz)
             gptimer_del_timer(s_flicker_timer);
             s_flicker_timer = NULL;
             return ret;
+        }
+    }
+
+    // V-E1: raise the ISR tick to match the requested frequency (never lower it
+    // within a session — the highest active frequency wins). gptimer alarm can be
+    // reconfigured on a running timer, so this applies immediately.
+    {
+        uint32_t desired = (min_freq_milliHz / 1000u) * LED_FLICKER_TICK_MULT;
+        if (desired < LED_FLICKER_TICK_MIN) desired = LED_FLICKER_TICK_MIN;
+        if (desired > LED_FLICKER_TICK_MAX) desired = LED_FLICKER_TICK_MAX;
+        if (desired > s_flicker_tick_hz && s_flicker_timer != NULL) {
+            gptimer_alarm_config_t ac = {
+                .reload_count = 0,
+                .alarm_count  = 1000000ULL / desired,
+                .flags.auto_reload_on_alarm = true,
+            };
+            if (gptimer_set_alarm_action(s_flicker_timer, &ac) == ESP_OK) {
+                s_flicker_tick_hz = desired;
+                ESP_LOGI(TAG, "flicker tick raised to %u Hz (for %.1f Hz flicker)",
+                         (unsigned)desired, (double)min_freq_milliHz / 1000.0);
+            }
         }
     }
     return ESP_OK;
@@ -920,6 +1040,8 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         s->frequency_milliHz   = freq_milliHz;
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
+        s->carrier_waveform    = s_flicker_carrier;   // B2: latch the current carrier
+        s->output_level        = 0;
         // Only reset the cycle origin and force the LED off on FIRST activation.
         // When the channel is already running, preserve cycle_start_time_us so the
         // ISR continues the existing rhythm — resetting it here would produce a
@@ -986,6 +1108,43 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         portEXIT_CRITICAL(&s_flicker_mux);
     }
     return ESP_OK;
+}
+
+/**
+ * @brief Set the flicker CARRIER waveform (B2), latched by each channel at its
+ *        next flicker start. 0=SQUARE (legacy on/off), 1=SINE, 2=TRIANGLE.
+ *        SINE/TRIANGLE give smooth, low-fatigue single-frequency drive and, with
+ *        an antiphase pair (V-E2), luminance-flat "invisible" flicker.
+ */
+void led_matrix_set_carrier(uint8_t wave)
+{
+    s_flicker_carrier = (wave > LED_CARRIER_TRIANGLE) ? LED_CARRIER_SQUARE : wave;
+}
+
+/**
+ * @brief Current flicker carrier waveform (0=square,1=sine,2=triangle).
+ */
+uint8_t led_matrix_get_carrier(void)
+{
+    return s_flicker_carrier;
+}
+
+/**
+ * @brief Set the flicker PHASE offset (degrees, normalized 0..359) on the channels
+ *        in `channel_mask` (V-E2). Applied at use-time from the live period, so it
+ *        stays a fixed phase through frequency ramps. 180° on one of a
+ *        complementary-colour pair (sharing the same start time) gives antiphase /
+ *        luminance-flat "invisible" flicker.
+ */
+void led_matrix_set_phase_masked(uint8_t channel_mask, int16_t deg)
+{
+    deg %= 360; if (deg < 0) deg += 360;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        portENTER_CRITICAL(&s_flicker_mux);
+        flicker_state[ch].phase_offset_deg = deg;
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
 }
 
 /**

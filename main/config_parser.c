@@ -1274,10 +1274,17 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
 {
     // Legacy format:   time freq duty bright channel_mask          (5 tokens)
     // Canonical format: time freq duty bright R G B channel_mask   (8 tokens)
-    // 9-token (old RGBW) format is no longer accepted — re-save as 8-field.
-    if (token_count != 5 && token_count != 8) {
-        ESP_LOGW(TAG, "LED line has %zu tokens; expected 5 (legacy) or 8 (canonical: time freq duty bright R G B mask) — skipping", token_count);
+    // Format v2 (ledc_format.md): 8..12 = canonical + optional [env phase attack
+    // jitter]. The new pulse fields are PARSE-TOLERATED here (the line loads) but
+    // not yet applied to the engine — that wiring is a follow-up; use the
+    // /api/flicker-carrier|flicker-phase endpoints meanwhile. 9-token old RGBW is
+    // gone; a v2 line just has more trailing tokens (different meaning).
+    if (token_count != 5 && (token_count < 8 || token_count > 12)) {
+        ESP_LOGW(TAG, "LED line has %zu tokens; expected 5 (legacy) or 8..12 (canonical + [env phase attack jitter]) — skipping", token_count);
         return ESP_ERR_INVALID_ARG;
+    }
+    if (token_count > 8) {
+        ESP_LOGI(TAG, "LED line: v2 pulse fields present (%zu tokens) — parsed but not yet applied to the engine", token_count);
     }
 
     memset(led_entry, 0, sizeof(config_led_entry_t));
@@ -1309,8 +1316,9 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
         led_entry->bright_mod_period_ms = (uint32_t)period_f;
     }
 
-    if (token_count == 8) {
-        // Canonical 8-token format: R G B carry independent interp prefixes
+    if (token_count >= 8) {
+        // Canonical 8-token format (+ optional v2 pulse fields at tokens[8..]).
+        // R G B carry independent interp prefixes; tokens[8..] ignored for now.
         float r_f = parse_value_with_interpolation(tokens[4], &led_entry->r_interp);
         float g_f = parse_value_with_interpolation(tokens[5], &led_entry->g_interp);
         float b_f = parse_value_with_interpolation(tokens[6], &led_entry->b_interp);
@@ -1360,6 +1368,12 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
 {
     if (token_count < 5) {
         return ESP_ERR_INVALID_ARG; // Need at least time, freq, pan, volume, modulation
+    }
+    // Format v2 (ledc_format.md): tokens[8..12] = optional [duty env phase attack
+    // jitter]. Parse-tolerated (already ignored below) but not yet applied to the
+    // engine — wiring is a follow-up; use /api/iso-env|beat-jitter meanwhile.
+    if (token_count > 8) {
+        ESP_LOGI(TAG, "Audio line: v2 pulse fields present (%zu tokens) — parsed but not yet applied to the engine", token_count);
     }
 
     memset(audio_entry, 0, sizeof(config_audio_entry_t));

@@ -119,13 +119,21 @@ export function ledRow(opts) {
     return {
         kind: 'led',
         time: opts.time || 0,
-        freq:   opts.freq   || cell(0),
-        duty:   opts.duty   || cell(0),
-        bright: opts.bright || cell(0),
-        r:      opts.r      || cell(255),
-        g:      opts.g      || cell(255),
-        b:      opts.b      || cell(255),
+        // `=== undefined` (not `||`) so an explicit null (`-` = leave unchanged) survives.
+        freq:   (opts.freq   === undefined) ? cell(0)   : opts.freq,
+        duty:   (opts.duty   === undefined) ? cell(0)   : opts.duty,
+        bright: (opts.bright === undefined) ? cell(0)   : opts.bright,
+        r:      (opts.r      === undefined) ? cell(255) : opts.r,
+        g:      (opts.g      === undefined) ? cell(255) : opts.g,
+        b:      (opts.b      === undefined) ? cell(255) : opts.b,
         mask:   (opts.mask === undefined) ? 1 : opts.mask, // 1..255
+        // NEW pulse fields (format v2). undefined = absent (omit, use default);
+        // null = `-` (leave unchanged). env: enum int; phase/attack: compound cells;
+        // jitter: {amp, period} | number. See ledc_format.md.
+        env:    opts.env,      // 0 square 1 sine 2 tri 3 trapezoid 4 tremolo; LED default 0
+        phase:  opts.phase,    // compound cell, degrees
+        attack: opts.attack,   // compound cell, ms
+        jitter: opts.jitter,   // {amp, period} | number(amp) | null(-) | undefined(off)
         legacy5: !!opts.legacy5, // true only if imported as 5-field & unedited
         inlineComment: opts.inlineComment || '',
     };
@@ -135,13 +143,20 @@ export function audioRow(opts) {
     return {
         kind: 'audio',
         time: opts.time || 0,
-        freq: opts.freq || cell(0),
-        pan:  opts.pan  || cell(0),
-        vol:  opts.vol  || cell(0),
-        mod:  opts.mod  || cell(0),
+        // `=== undefined` (not `||`) so an explicit null (`-` = leave unchanged) survives.
+        freq: (opts.freq === undefined) ? cell(0) : opts.freq,
+        pan:  (opts.pan  === undefined) ? cell(0) : opts.pan,
+        vol:  (opts.vol  === undefined) ? cell(0) : opts.vol,
+        mod:  (opts.mod  === undefined) ? cell(0) : opts.mod,
         channel:  (opts.channel  === undefined) ? null : opts.channel,  // 1..16; null => omit token
         freqR:    (opts.freqR    === undefined) ? 0    : opts.freqR,    // 0 => mono / omit token
         waveType: (opts.waveType === undefined) ? null : opts.waveType, // 0..6; null => omit token
+        // NEW pulse fields (format v2) — same conventions as ledRow. audio env default 4.
+        duty:   opts.duty,     // compound cell, %
+        env:    opts.env,      // 0..4; audio default 4 (bipolar sine tremolo = legacy)
+        phase:  opts.phase,    // compound cell, degrees
+        attack: opts.attack,   // compound cell, ms
+        jitter: opts.jitter,   // {amp, period} | number | null | undefined
         inlineComment: opts.inlineComment || '',
     };
 }

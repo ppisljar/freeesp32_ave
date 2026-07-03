@@ -110,10 +110,87 @@ static audio_gen_channel_t audio_channels[NUM_AUDIO_CHANNELS];
 static bool generator_initialized = false;
 static SemaphoreHandle_t audio_gen_mutex = NULL;
 
+// A2 (entrainment_firmware_plan) — isochronic envelope config. Global for now
+// (temporary control until the per-channel .ledc authoring hook is designed),
+// read in fill_buffer at the modulation stage. Defaults reproduce the legacy
+// SINE amplitude-modulation exactly (env=SINE, depth override off).
+// env values match ledc_format.md: 0 square, 1 sine, 2 triangle, 3 trapezoid
+// (unipolar gates), 4 sine tremolo (bipolar, legacy audio). Audio default = 4.
+#define ISO_ENV_SQUARE    0u
+#define ISO_ENV_SINE      1u
+#define ISO_ENV_TRIANGLE  2u
+#define ISO_ENV_TRAPEZOID 3u
+#define ISO_ENV_TREMOLO   4u
+static volatile uint8_t s_iso_env        = ISO_ENV_TREMOLO; // legacy bipolar sine tremolo
+static volatile float   s_iso_duty       = 0.5f;         // on-fraction of the mod cycle (0..1)
+static volatile float   s_iso_attack_ms  = 3.0f;         // raised edge duration (click-safe ≥2 ms)
+static volatile float   s_iso_depth      = 0.0f;         // >0 overrides mod_depth (test aid)
+
 // Internal functions
 static float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type);
 static inline void apply_modulation(float* sample, uint32_t mod_phase_q32, float mod_depth);
 static inline void apply_panning(float input, float pan, float* left, float* right);
+
+// A2 — trapezoid isochronic gate. mod_phase_q32 → phase 0..1; returns 0..1
+// envelope: linear attack over `attack_frac` of the cycle, hold, linear decay,
+// then off for the remainder past `duty`. Runs in the audio task (float math ok).
+static inline float iso_trapezoid_env(uint32_t mod_phase_q32, float duty, float attack_frac) {
+    float ph = (float)mod_phase_q32 * (1.0f / 4294967296.0f); // 0..1
+    if (ph >= duty) return 0.0f;                              // off region
+    float a = attack_frac;
+    if (a > duty * 0.5f) a = duty * 0.5f;                     // clamp → triangle at most
+    if (a <= 0.0f) return 1.0f;                               // hard square within duty
+    if (ph < a)          return ph / a;                       // attack ramp 0→1
+    if (ph > duty - a)   return (duty - ph) / a;              // decay ramp 1→0
+    return 1.0f;                                              // hold
+}
+
+// Unified unipolar pulse gate g∈[0,1] for env 0..3 (square/sine/triangle/trapezoid).
+// square uses `duty`; sine/triangle are full-cycle shapes; trapezoid uses duty+attack.
+static inline float iso_gate(uint32_t mod_phase_q32, uint8_t env, float duty, float attack_frac) {
+    float ph = (float)mod_phase_q32 * (1.0f / 4294967296.0f); // 0..1
+    switch (env) {
+        case ISO_ENV_SQUARE:   return (ph < duty) ? 1.0f : 0.0f;
+        case ISO_ENV_TRIANGLE: return (ph < 0.5f) ? (2.0f * ph) : (2.0f - 2.0f * ph);
+        case ISO_ENV_TRAPEZOID:return iso_trapezoid_env(mod_phase_q32, duty, attack_frac);
+        case ISO_ENV_SINE:
+        default: {             // raised sine ≈ 4·ph·(1−ph) (matches (1−cos)/2)
+            float g = 4.0f * ph * (1.0f - ph);
+            return g > 1.0f ? 1.0f : g;
+        }
+    }
+}
+
+// A2 setter — env (0=sine,1=trapezoid), duty %, attack ms, depth % (0 = don't override).
+void audio_generator_set_iso(uint8_t env, float duty_pct, float attack_ms, float depth_pct) {
+    s_iso_env       = (env <= ISO_ENV_TREMOLO) ? env : ISO_ENV_TREMOLO;
+    if (duty_pct   > 0.0f) s_iso_duty      = (duty_pct   > 100.0f ? 100.0f : duty_pct)   * 0.01f;
+    if (attack_ms >= 0.0f) s_iso_attack_ms = attack_ms;
+    s_iso_depth = (depth_pct <= 0.0f) ? 0.0f : (depth_pct > 100.0f ? 1.0f : depth_pct * 0.01f);
+}
+
+// A3 (entrainment_firmware_plan) — binaural beat-offset jitter for anti-habituation.
+// Adds a slow ±s_beat_jitter_hz sine wander to the binaural beat (freq_diff), so a
+// steady beat keeps moving and the brain doesn't adapt. Global; default off =
+// binaural byte-identical. Applied per-buffer in fill_buffer.
+static volatile float s_beat_jitter_hz        = 0.0f;     // amplitude Hz (0 = off)
+static volatile float s_beat_jitter_period_ms = 45000.0f; // full cycle (30–90 s typical)
+
+static inline float fast_sin_q32(uint32_t phase_q32);     // defined below
+
+static inline float beat_jitter_offset(void) {
+    float amp = s_beat_jitter_hz;
+    if (amp <= 0.0f || s_beat_jitter_period_ms < 1.0f) return 0.0f;
+    uint64_t t_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    float ph = (float)(t_ms % (uint64_t)s_beat_jitter_period_ms) / s_beat_jitter_period_ms; // 0..1
+    return amp * fast_sin_q32((uint32_t)(ph * 4294967296.0f));
+}
+
+// A3 setter — amplitude Hz (0 = off) and full-cycle period ms.
+void audio_generator_set_beat_jitter(float amp_hz, float period_ms) {
+    s_beat_jitter_hz        = (amp_hz < 0.0f) ? 0.0f : amp_hz;
+    if (period_ms >= 1000.0f) s_beat_jitter_period_ms = period_ms;
+}
 
 static inline float fast_sin_q32(uint32_t phase_q32) {
     uint32_t idx  = (phase_q32 >> SINE_LUT_INDEX_SHIFT) & SINE_LUT_MASK;
@@ -756,9 +833,10 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                 }
             }
             // Preserve binaural beat frequency offset after any carrier sweep update.
+            // A3: add a slow anti-habituation jitter to the beat (default off = no-op).
             if (channel->params.frequency_r > 0.0f) {
                 float freq_diff = channel->params.frequency_r - channel->params.frequency;
-                channel->current_freq_r = channel->current_freq + freq_diff;
+                channel->current_freq_r = channel->current_freq + freq_diff + beat_jitter_offset();
             }
 
             // --- Implicit amplitude ramp (de-click) ---
@@ -1125,9 +1203,21 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             // Apply modulation if enabled; current_mod_freq drives the accumulator
             // so that mod-frequency sweeps take effect sample-accurately.
             if (channel->current_mod_freq > 0 && channel->params.mod_depth > 0) {
-                apply_modulation(&sample_l, channel->mod_phase_q32, channel->params.mod_depth);
-                apply_modulation(&sample_r, channel->mod_phase_q32, channel->params.mod_depth);
-
+                // A2: depth may be globally overridden for isochronic testing.
+                float depth = (s_iso_depth > 0.0f) ? s_iso_depth : channel->params.mod_depth;
+                if (s_iso_env == ISO_ENV_TREMOLO) {
+                    // Legacy SINE amplitude modulation (bipolar tremolo) — unchanged.
+                    apply_modulation(&sample_l, channel->mod_phase_q32, depth);
+                    apply_modulation(&sample_r, channel->mod_phase_q32, depth);
+                } else {
+                    // Unipolar GATE (square/sine/triangle/trapezoid): gates DOWN to
+                    // (1-depth) — classic isochronic pulse `sample *= (1-depth)+depth*g`.
+                    float attack_frac = s_iso_attack_ms * channel->current_mod_freq * 0.001f;
+                    float g = iso_gate(channel->mod_phase_q32, s_iso_env, s_iso_duty, attack_frac);
+                    float m = (1.0f - depth) + depth * g;
+                    sample_l *= m;
+                    sample_r *= m;
+                }
                 channel->mod_phase_q32 += (uint32_t)(channel->current_mod_freq * Q32_PER_HZ);
             }
 

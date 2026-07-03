@@ -17,7 +17,7 @@
 // LUT; the 5 ms de-click amp ramps are approximated by a short fade-in). All
 // formulas are cited against audio_generator.c so they can be re-verified.
 
-import { SAMPLE_RATE } from './model.js';
+import { SAMPLE_RATE, cell } from './model.js';
 
 const Q32 = 4294967296;                 // 2^32
 const Q32_PER_HZ = Q32 / SAMPLE_RATE;   // matches audio_generator.c:68
@@ -113,13 +113,26 @@ export function extractAudioChannels(doc) {
         if (!channels.has(ch)) channels.set(ch, []);
         channels.get(ch).push({
             time: row.time || 0,
+            // Keep raw (may be null = `-` "leave unchanged"); resolved below.
             freq: row.freq, pan: row.pan, vol: row.vol, mod: row.mod,
-            freqR: row.freqR || 0,
-            wave: (row.waveType == null) ? 0 : row.waveType,
+            freqR: (row.freqR == null) ? 0 : row.freqR,
+            wave: row.waveType,   // null = absent/`-` → carried below
         });
         if ((row.time || 0) > maxTimeMs) maxTimeMs = row.time || 0;
     }
-    for (const list of channels.values()) list.sort((a, b) => a.time - b.time);
+    // Resolve the `-` sentinel: a null field carries the previous entry's value
+    // for that channel (default at the channel's first entry).
+    for (const list of channels.values()) {
+        list.sort((a, b) => a.time - b.time);
+        const cur = { freq: cell(0), pan: cell(0), vol: cell(0), mod: cell(0), wave: 0 };
+        for (const e of list) {
+            if (e.freq == null) e.freq = cur.freq; else cur.freq = e.freq;
+            if (e.pan  == null) e.pan  = cur.pan;  else cur.pan  = e.pan;
+            if (e.vol  == null) e.vol  = cur.vol;  else cur.vol  = e.vol;
+            if (e.mod  == null) e.mod  = cur.mod;  else cur.mod  = e.mod;
+            if (e.wave == null) e.wave = cur.wave; else cur.wave = e.wave;
+        }
+    }
     return { channels, maxTimeMs };
 }
 

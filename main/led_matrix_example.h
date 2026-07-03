@@ -169,6 +169,24 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
 esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask);
 
 /**
+ * @brief Set the flicker carrier waveform (0=square, 1=sine, 2=triangle),
+ *        latched by each channel at its next flicker start (entrainment_firmware_plan
+ *        step B2). Default square = legacy on/off behaviour.
+ */
+void led_matrix_set_carrier(uint8_t wave);
+
+/** @brief Current flicker carrier waveform (0=square, 1=sine, 2=triangle). */
+uint8_t led_matrix_get_carrier(void);
+
+/**
+ * @brief Set the flicker phase offset (degrees, normalized 0..359) on the channels
+ *        in channel_mask (entrainment_firmware_plan V-E2). 180° on one channel of a
+ *        complementary-colour pair yields antiphase / luminance-flat "invisible"
+ *        flicker. Applied at use-time from the live period (survives freq ramps).
+ */
+void led_matrix_set_phase_masked(uint8_t channel_mask, int16_t deg);
+
+/**
  * @brief Update flicker parameters on channels indicated by channel_mask.
  *
  * @param channel_mask Bitmask 0x01-0xFF.

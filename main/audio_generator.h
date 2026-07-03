@@ -189,6 +189,24 @@ esp_err_t audio_generator_init(void);
 esp_err_t audio_generator_start_channel(int channel, const audio_gen_params_t* params);
 
 /**
+ * @brief Set the isochronic modulation envelope (entrainment_firmware_plan A2).
+ *        Global (device-wide) until the per-channel .ledc hook is added.
+ * @param env         0 = sine amplitude modulation (legacy), 1 = trapezoid gate.
+ * @param duty_pct    On-fraction of the mod cycle, percent (>0 to set; 0 = keep).
+ * @param attack_ms   Raised edge duration in ms (>=0 to set; click-safe ≥2 ms).
+ * @param depth_pct   Overrides mod_depth for all channels, percent (0 = don't override).
+ */
+void audio_generator_set_iso(uint8_t env, float duty_pct, float attack_ms, float depth_pct);
+
+/**
+ * @brief Binaural beat-offset jitter for anti-habituation (entrainment_firmware_plan A3).
+ *        Adds a slow ±amp_hz sine wander to the binaural beat. Global; default off.
+ * @param amp_hz     Jitter amplitude in Hz (0 = off; ±0.1–0.3 typical).
+ * @param period_ms  Full wander cycle in ms (>=1000 to set; 30–90 s typical).
+ */
+void audio_generator_set_beat_jitter(float amp_hz, float period_ms);
+
+/**
  * @brief Stop audio generation on a channel
  *
  * @param channel Channel number

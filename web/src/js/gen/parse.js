@@ -28,6 +28,7 @@ export function parseCell(token) {
     if (token === undefined || token === null || token === '') {
         return cell(0);
     }
+    if (token === '-') return null;   // `-` sentinel = leave unchanged
     const ch = token[0];
     const interp = GLYPH_TO_INTERP[ch];
     if (!interp) {
@@ -71,38 +72,66 @@ function tokenize(s) {
     return t.split(/[ \t]+/);
 }
 
-// Parse the tokens of an LED line (5 legacy or 8 canonical). Mirrors
-// parse_led_line. Returns { row } or { error }.
+// --- Optional / sentinel-aware field helpers (format v2) --------------------
+// undefined = token absent (field omitted); null = `-` (leave unchanged).
+function tokAt(tokens, i) { return i < tokens.length ? tokens[i] : undefined; }
+function optCell(tokens, i) { const t = tokAt(tokens, i); return t === undefined ? undefined : parseCell(t); }
+function optInt(tokens, i) {
+    const t = tokAt(tokens, i);
+    if (t === undefined) return undefined;
+    if (t === '-') return null;
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) ? n : 0;
+}
+function parseMask(t) { return t === '-' ? null : (parseInt(t, 10) || 0); }
+function optJitter(tokens, i) {
+    const t = tokAt(tokens, i);
+    if (t === undefined) return undefined;
+    if (t === '-') return null;
+    const parts = String(t).split(':');
+    const amp = parseFloat(parts[0]) || 0;
+    const period = parts.length > 1 ? (parseFloat(parts[1]) || 0) : undefined;
+    return { amp, period };
+}
+
+// Parse the tokens of an LED line: 5 (legacy) or 8..12 (canonical + optional
+// env/phase/attack/jitter). Mirrors parse_led_line. Returns { row } or { error }.
 function parseLed(tokens, comment) {
-    if (tokens.length !== 5 && tokens.length !== 8) {
+    if (tokens.length !== 5 && (tokens.length < 8 || tokens.length > 12)) {
         return { error: 'LED line has ' + tokens.length +
-                 ' tokens; expected 5 (legacy) or 8 (time freq duty bright R G B mask)' };
+                 ' tokens; expected 5 (legacy) or 8..12 (time freq duty bright R G B mask [env phase attack jitter])' };
     }
     const time = parseInt(tokens[0], 10) || 0;
     const freq = parseCell(tokens[1]);
     const duty = parseCell(tokens[2]);
     const bright = parseCell(tokens[3]);
     let r, g, b, mask, legacy5;
-    if (tokens.length === 8) {
+    if (tokens.length >= 8) {
         r = parseCell(tokens[4]);
         g = parseCell(tokens[5]);
         b = parseCell(tokens[6]);
-        mask = parseInt(tokens[7], 10) || 0;
+        mask = parseMask(tokens[7]);
         legacy5 = false;
     } else {
         // Legacy 5-field: default RGB = full white, no color interp.
         r = cell(255); g = cell(255); b = cell(255);
-        mask = parseInt(tokens[4], 10) || 0;
+        mask = parseMask(tokens[4]);
         legacy5 = true;
     }
-    // mask == 0 is rejected by the firmware.
+    // mask == 0 is rejected by the firmware (null = `-` unchanged is allowed).
     if (mask === 0) {
         return { error: 'LED line has channel_mask=0 (rejected by firmware)' };
     }
-    return { row: ledRow({ time, freq, duty, bright, r, g, b, mask, legacy5, inlineComment: comment }) };
+    // Optional pulse fields (canonical lines only): env phase attack jitter.
+    const env    = optInt(tokens, 8);
+    const phase  = optCell(tokens, 9);
+    const attack = optCell(tokens, 10);
+    const jitter = optJitter(tokens, 11);
+    return { row: ledRow({ time, freq, duty, bright, r, g, b, mask, legacy5,
+                           env, phase, attack, jitter, inlineComment: comment }) };
 }
 
-// Parse the tokens AFTER the leading 'A' of an audio line (5..8 tokens).
+// Parse the tokens AFTER the leading 'A' of an audio line: 5..13 tokens.
 // Mirrors parse_audio_line. Returns { row } or { error }.
 function parseAudio(tokens, comment) {
     if (tokens.length < 5) {
@@ -114,25 +143,33 @@ function parseAudio(tokens, comment) {
     const vol = parseCell(tokens[3]);
     const mod = parseCell(tokens[4]);
 
-    // channel (token 6): present → literal int; absent → null (firmware default 0)
+    // channel (token 6): present → literal int; absent / `-` → null (firmware default).
     let channel = null;
-    if (tokens.length >= 6) channel = parseInt(tokens[5], 10) || 0;
+    if (tokens.length >= 6 && tokens[5] !== '-') channel = parseInt(tokens[5], 10) || 0;
 
-    // freq_r (token 7): present → atof, validated (>0 && <= Nyquist) else 0.
+    // freq_r (token 7): present → atof, validated (>0 && <= Nyquist) else 0; `-` → 0.
     let freqR = 0;
-    if (tokens.length >= 7) {
+    if (tokens.length >= 7 && tokens[6] !== '-') {
         const fr = parseFloat(tokens[6]) || 0;
         freqR = (fr > 0 && fr <= NYQUIST) ? fr : 0;
     }
 
-    // wave_type (token 8): present → int 0..6 (else 0); null when absent.
+    // wave_type (token 8): present → int 0..6 (else 0); absent / `-` → null.
     let waveType = null;
-    if (tokens.length >= 8) {
+    if (tokens.length >= 8 && tokens[7] !== '-') {
         const wt = parseInt(tokens[7], 10);
         waveType = (Number.isFinite(wt) && wt >= 0 && wt < WAVE_COUNT) ? wt : 0;
     }
 
-    return { row: audioRow({ time, freq, pan, vol, mod, channel, freqR, waveType, inlineComment: comment }) };
+    // Optional pulse fields (format v2): duty env phase attack jitter.
+    const duty   = optCell(tokens, 8);
+    const env    = optInt(tokens, 9);
+    const phase  = optCell(tokens, 10);
+    const attack = optCell(tokens, 11);
+    const jitter = optJitter(tokens, 12);
+
+    return { row: audioRow({ time, freq, pan, vol, mod, channel, freqR, waveType,
+                             duty, env, phase, attack, jitter, inlineComment: comment }) };
 }
 
 // Parse the tokens AFTER the leading 'BG' keyword (url pan loudness).

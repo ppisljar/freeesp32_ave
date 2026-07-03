@@ -75,6 +75,10 @@ static esp_err_t stop_handler(httpd_req_t *req);
 static esp_err_t example_handler(httpd_req_t *req);
 static esp_err_t play_config_handler(httpd_req_t *req);
 static esp_err_t patch_config_handler(httpd_req_t *req);
+static esp_err_t flicker_carrier_handler(httpd_req_t *req);
+static esp_err_t flicker_phase_handler(httpd_req_t *req);
+static esp_err_t iso_env_handler(httpd_req_t *req);
+static esp_err_t beat_jitter_handler(httpd_req_t *req);
 #if CONFIG_BG_SUPPORT_PUSH
 static esp_err_t bg_stream_handler(httpd_req_t *req);   // thin async entry
 static esp_err_t bg_stream_work(httpd_req_t *req);      // real body (worker task)
@@ -295,6 +299,38 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &patch_config_uri);
+
+    httpd_uri_t flicker_carrier_uri = {
+        .uri = "/api/flicker-carrier",
+        .method = HTTP_GET,
+        .handler = flicker_carrier_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &flicker_carrier_uri);
+
+    httpd_uri_t iso_env_uri = {
+        .uri = "/api/iso-env",
+        .method = HTTP_GET,
+        .handler = iso_env_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &iso_env_uri);
+
+    httpd_uri_t flicker_phase_uri = {
+        .uri = "/api/flicker-phase",
+        .method = HTTP_GET,
+        .handler = flicker_phase_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &flicker_phase_uri);
+
+    httpd_uri_t beat_jitter_uri = {
+        .uri = "/api/beat-jitter",
+        .method = HTTP_GET,
+        .handler = beat_jitter_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &beat_jitter_uri);
 
 #if CONFIG_BG_SUPPORT_PUSH
     httpd_uri_t bg_stream_uri = {
@@ -1301,6 +1337,90 @@ static esp_err_t patch_config_handler(httpd_req_t *req)
     }
 
     httpd_resp_send(req, "Patch applied", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// GET /api/flicker-carrier[?wave=0|1|2]  — device-wide flicker carrier waveform
+// (0=square,1=sine,2=triangle). Sets it when ?wave= is present; always returns
+// the current value. Temporary control surface for the B2 carrier while the
+// per-session .ledc authoring hook is decided (entrainment_firmware_plan).
+static esp_err_t flicker_carrier_handler(httpd_req_t *req)
+{
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 64) {
+        char q[64], val[16];
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK &&
+            httpd_query_key_value(q, "wave", val, sizeof(val)) == ESP_OK) {
+            led_matrix_set_carrier((uint8_t)atoi(val));
+        }
+    }
+    uint8_t w = led_matrix_get_carrier();
+    const char *name = (w == 1) ? "sine" : (w == 2) ? "triangle" : "square";
+    char body[64];
+    int n = snprintf(body, sizeof(body), "{\"wave\":%u,\"name\":\"%s\"}", (unsigned)w, name);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, body, n);
+    return ESP_OK;
+}
+
+// GET /api/iso-env?env=0|1&duty=<pct>&attack=<ms>&depth=<pct>
+// Sets the device-wide isochronic envelope (0=sine legacy, 1=trapezoid gate).
+// Temporary control for A2 while the per-channel .ledc hook is decided.
+static esp_err_t iso_env_handler(httpd_req_t *req)
+{
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 128) {
+        char q[128], val[16];
+        uint8_t env = 0; float duty = 0, attack = -1, depth = 0;
+        bool have = false;
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
+            if (httpd_query_key_value(q, "env",    val, sizeof(val)) == ESP_OK) { env    = (uint8_t)atoi(val); have = true; }
+            if (httpd_query_key_value(q, "duty",   val, sizeof(val)) == ESP_OK) { duty   = strtof(val, NULL); }
+            if (httpd_query_key_value(q, "attack", val, sizeof(val)) == ESP_OK) { attack = strtof(val, NULL); }
+            if (httpd_query_key_value(q, "depth",  val, sizeof(val)) == ESP_OK) { depth  = strtof(val, NULL); }
+            if (have) audio_generator_set_iso(env, duty, attack, depth);
+        }
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// GET /api/flicker-phase?mask=<1..255>&deg=<0..359>
+// Sets the flicker phase offset on the masked channels (V-E2). e.g. mask=2 deg=180
+// makes channel 2 antiphase to channel 1 for cool/warm "invisible" flicker.
+static esp_err_t flicker_phase_handler(httpd_req_t *req)
+{
+    int mask = 0, deg = 0;
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 64) {
+        char q[64], val[16];
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
+            if (httpd_query_key_value(q, "mask", val, sizeof(val)) == ESP_OK) mask = atoi(val);
+            if (httpd_query_key_value(q, "deg",  val, sizeof(val)) == ESP_OK) deg  = atoi(val);
+        }
+    }
+    if (mask > 0) led_matrix_set_phase_masked((uint8_t)mask, (int16_t)deg);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// GET /api/beat-jitter?amp=<hz>&period=<ms>  — binaural anti-habituation jitter (A3).
+static esp_err_t beat_jitter_handler(httpd_req_t *req)
+{
+    float amp = 0.0f, period = 45000.0f;
+    size_t qlen = httpd_req_get_url_query_len(req) + 1;
+    if (qlen > 1 && qlen < 64) {
+        char q[64], val[16];
+        if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
+            if (httpd_query_key_value(q, "amp",    val, sizeof(val)) == ESP_OK) amp    = strtof(val, NULL);
+            if (httpd_query_key_value(q, "period", val, sizeof(val)) == ESP_OK) period = strtof(val, NULL);
+        }
+    }
+    audio_generator_set_beat_jitter(amp, period);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
 

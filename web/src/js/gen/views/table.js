@@ -213,6 +213,7 @@ export function initTableView(ctx) {
     }
 
     function maskChips(row) {
+        if (row.mask === null) return unchangedChip('mask');
         const wrap = document.createElement('span');
         wrap.className = 'gen-mask-chips';
         const chips = [];
@@ -299,6 +300,7 @@ export function initTableView(ctx) {
     }
 
     function colorSwatch(row) {
+        if (row.r === null || row.g === null || row.b === null) return unchangedChip('color');
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'gen-swatch';
@@ -365,7 +367,18 @@ export function initTableView(ctx) {
         return btn;
     }
 
+    // A read-only "—" chip shown for a `-` (leave-unchanged / null) field. Editing
+    // `-` fields in the grid is a later UI task; for now they render safely.
+    function unchangedChip(title) {
+        const s = document.createElement('span');
+        s.className = 'gen-unchanged';
+        s.textContent = '—';
+        s.title = (title ? title + ': ' : '') + 'leave unchanged (-)';
+        return s;
+    }
+
     function compound(row, idx, field, title, resolve) {
+        if (row[field] === null) return unchangedChip(title);
         return createCompoundCell({
             title: title,
             getCell: () => row[field],

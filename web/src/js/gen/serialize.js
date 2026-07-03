@@ -29,6 +29,7 @@ function fmt(n) {
 //   lin  → '>value'      quad → '*value'
 //   periodic → '<glyph>start:end:period'  (always explicit end + period)
 export function cellStr(c) {
+    if (c === null) return '-';   // `-` sentinel = leave unchanged (format v2)
     if (!c) return '0';
     const glyph = INTERP_GLYPHS[c.interp] || '';
     if (c.interp === 'none') return fmt(c.value);
@@ -40,13 +41,39 @@ export function cellStr(c) {
     return glyph + fmt(c.value) + ':' + fmt(end) + ':' + fmt(period);
 }
 
+// --- format v2 pulse-field rendering (undefined = absent, null = `-`) -------
+// Render one field to a token string, or undefined if absent.
+function envStr(e)  { return e === undefined ? undefined : (e === null ? '-' : fmt(e)); }
+function cellTok(c) { return c === undefined ? undefined : cellStr(c); } // cellStr(null)='-'
+function jitterStr(j) {
+    if (j === undefined) return undefined;
+    if (j === null) return '-';
+    return (j.period === undefined || j.period === null)
+        ? fmt(j.amp) : (fmt(j.amp) + ':' + fmt(j.period));
+}
+// Given rendered optional fields (undefined | string), drop trailing absent ones;
+// absent-in-the-middle becomes `-` so positions stay aligned.
+function trailingTokens(rendered) {
+    let last = -1;
+    for (let i = 0; i < rendered.length; i++) if (rendered[i] !== undefined) last = i;
+    if (last < 0) return [];
+    const out = [];
+    for (let i = 0; i <= last; i++) out.push(rendered[i] === undefined ? '-' : rendered[i]);
+    return out;
+}
+
 function serializeLed(row) {
     const parts = [fmt(row.time), cellStr(row.freq), cellStr(row.duty), cellStr(row.bright)];
     if (!row.legacy5) {
         // 8-field canonical (bug #5): always emit R G B.
         parts.push(cellStr(row.r), cellStr(row.g), cellStr(row.b));
     }
-    parts.push(fmt(row.mask)); // real OR'd mask (bug #1)
+    parts.push(row.mask === null ? '-' : fmt(row.mask)); // real OR'd mask (bug #1)
+    // NEW pulse fields (canonical lines only): env phase attack jitter.
+    if (!row.legacy5) {
+        parts.push(...trailingTokens([envStr(row.env), cellTok(row.phase),
+                                      cellTok(row.attack), jitterStr(row.jitter)]));
+    }
     let line = parts.join(' ');
     if (row.inlineComment) line += ' # ' + row.inlineComment;
     return line;
@@ -57,15 +84,25 @@ function serializeAudio(row) {
     const parts = ['A', fmt(row.time), cellStr(row.freq), cellStr(row.pan),
                    cellStr(row.vol), cellStr(row.mod)];
 
-    // Minimal trailing tokens with the positional-placeholder rule.
+    // NEW pulse fields (format v2): duty env phase attack jitter.
+    const newTrail = trailingTokens([cellTok(row.duty), envStr(row.env),
+                                     cellTok(row.phase), cellTok(row.attack), jitterStr(row.jitter)]);
+    const hasNew = newTrail.length > 0;
+
+    // Minimal trailing tokens with the positional-placeholder rule. When any new
+    // pulse field is present, the carrier optionals (channel/freqR/waveType) must
+    // be emitted too so the new fields land at the right positions.
     const emitWave = row.waveType !== null && row.waveType !== undefined; // bug #3/#6
     const freqRPos = (row.freqR && row.freqR > 0);                        // bug #4
-    const emitFreqR = emitWave || freqRPos; // wave_type forces the freq_r slot
+    const emitFreqR = emitWave || freqRPos || hasNew; // wave_type / new fields force the freq_r slot
     const emitChannel = emitFreqR || (row.channel !== null && row.channel !== undefined);
 
     if (emitChannel) parts.push(fmt(row.channel === null || row.channel === undefined ? 0 : row.channel));
     if (emitFreqR)   parts.push(fmt(freqRPos ? row.freqR : 0)); // 0 placeholder when wave but no freq_r
-    if (emitWave)    parts.push(fmt(row.waveType));
+    if (emitWave)      parts.push(fmt(row.waveType));
+    else if (hasNew)   parts.push(fmt(0)); // waveType placeholder (sine) so duty aligns
+
+    parts.push(...newTrail);
 
     let line = parts.join(' ');
     if (row.inlineComment) line += ' # ' + row.inlineComment;

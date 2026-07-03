@@ -11,6 +11,7 @@ A **low-cost, open-source alternative** to commercial AVE / mind machines such a
 - MindPlace **Kasina**
 - **roXiva lamp**
 - Lumenate **Nova**
+- **Lucia N°03**
 
 ## What it does
 
