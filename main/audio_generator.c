@@ -74,6 +74,11 @@ static const char* TAG = "audio_generator";
 // latency.  Cost: ~2 cy/sample average across all channels (negligible).
 #define AUDIO_AMP_RAMP_SAMPLES  220u
 
+// Level scale applied to noise generators (white/pink/brown) only. They are
+// normalized to ~±1.0 peak, which is very hot vs. their nominal amplitude, so
+// noise at vol 100 was overpowering. 0.5 makes vol 100 ≈ the old vol 50.
+#define AUDIO_NOISE_LEVEL_SCALE 0.5f
+
 static float sine_lut[SINE_LUT_SIZE];
 
 // EEG-contour lookup table (AUDIO_WAVE_EEG_CONTOUR).  A single-cycle,
@@ -654,27 +659,16 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     // Clear output buffer
     memset(output_buffer, 0, samples * 2 * sizeof(float)); // Stereo
 
-    // Sum-aware headroom.  Scale the mix only by as much as needed to keep the
-    // summed channel amplitudes within the ±1.0 ceiling: gain = min(1, 1/Σamp),
-    // where Σamp is the sum of active channels' current envelope amplitudes
-    // (worst case: all carriers peak same-sign, same-panned).
-    //
-    // This replaces the old count-based 1/N_active.  1/N attenuated EVERY channel
-    // whenever ANY channel was added — even when the sum stayed well under 1.0 —
-    // so enabling a 3rd quiet channel audibly ducked the established ones (e.g.
-    // 09_lucid_hypnagogic at t=8:00: a binaural dropped ~9.5 dB the instant two
-    // faders opened, though the mix summed to only 0.81).  Sum-aware leaves the
-    // others untouched while Σamp ≤ 1.0 and attenuates only for genuinely hot
-    // mixes (e.g. the multi-carrier Gateway sessions summing ~5×).
-    //
-    // Σamp uses current_amp (the live per-channel envelope), so a fade-in
-    // contributes gradually and gain never steps.  Pan-aware per-L/R summing is
-    // a possible future refinement; the mono sum is a safe conservative bound.
-    float amp_sum = 0.0f;
-    for (int ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
-        if (audio_channels[ch].active) amp_sum += audio_channels[ch].current_amp;
-    }
-    float new_target = (amp_sum > 1.0f) ? (1.0f / amp_sum) : 1.0f;
+    // Fixed headroom divisor: scale EVERY channel by 1/NUM_AUDIO_CHANNELS so that
+    // even all channels at full amplitude, same-panned, sum to exactly ±1.0 — a
+    // hard guarantee against any overflow regardless of how many channels are
+    // active or what their content is (brown-noise crest, tone alignment, etc.).
+    // Constant gain, so it can never introduce a level step/click when channels
+    // start or stop. Trade-off: the mix is 1/N of channel amplitude, so overall
+    // level is lower — raise per-channel volumes (or the master-volume cap) to
+    // compensate. (Chosen over sum-aware min(1,1/Σamp), which bounded nominal
+    // amplitudes but let instantaneous peaks cross the ceiling and distort.)
+    float new_target = 1.0f / (float)NUM_AUDIO_CHANNELS;
 
     // Arm a smoothing ramp whenever the target gain changes, so a mix crossing
     // the ceiling (or dropping back under it) slews over AUDIO_AMP_RAMP_SAMPLES
@@ -874,6 +868,15 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             uint64_t e0 = channel->samples_generated - channel->sweeps[AUDIO_PARAM_MOD_FREQ].start_sample;
             mod_progress = (float)(uint32_t)e0 * mod_step;
         }
+
+        // Noise generators (white/pink/brown) are normalized to ~±1.0 PEAK, so
+        // they are very hot for their nominal amplitude (high crest factor).
+        // Scale them by AUDIO_NOISE_LEVEL_SCALE so a noise channel at vol 100 is
+        // about as loud as it used to be at vol 50 — quieter, more headroom, and
+        // better balanced against the tone carriers (which are left untouched).
+        const bool  is_noise_ch = (channel->wave_type >= AUDIO_WAVE_NOISE_WHITE &&
+                                   channel->wave_type <= AUDIO_WAVE_NOISE_BROWN);
+        const float carrier_scale = is_noise_ch ? AUDIO_NOISE_LEVEL_SCALE : 1.0f;
 
         for (size_t i = 0; i < samples; i++) {
             // --- Frequency ---
@@ -1256,8 +1259,8 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                     break;
             }
 
-            float sample_l = channel->current_amp * raw_l;
-            float sample_r = channel->current_amp * raw_r;
+            float sample_l = channel->current_amp * carrier_scale * raw_l;
+            float sample_r = channel->current_amp * carrier_scale * raw_r;
 
             // Apply modulation if enabled; current_mod_freq drives the accumulator
             // so that mod-frequency sweeps take effect sample-accurately.

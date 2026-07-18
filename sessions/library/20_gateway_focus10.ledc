@@ -38,8 +38,8 @@ A 0 200 ~-100:100:6000 >0 0 7 0 5   # ch7 phased pink bed; pan L<->R 6 s LFO; vo
 S 2000 default 65 "Settle in. Let the breath slow and the body grow heavy, softening from head to toe."
 20000 4 50 20 90 0 200 5        # brightness reaches 20% (ramp-in >=15 s done)
 30000 4 50 ~12:22:10000 90 0 200 5   # breathing LFO: brightness sine 12<->22% over 10 s
-A 60000 100 0 30 0 1 101.5 7  # ch1 delta holds vol 30 through the session
-A 60000 200 ~-100:100:6000 8 0 7 0 5   # ch7 pink bed holds vol 8; pan LFO continues
+A 60000 100 0 60 0 1 101.5 7  # ch1 delta holds vol 30 through the session
+A 60000 200 ~-100:100:6000 16 0 7 0 5   # ch7 pink bed holds vol 8; pan LFO continues
 
 # --- Focus-10 establishment (03:00-08:00): bring in the septon theta stack ---
 S 180000 default 65 "Entering Focus Ten. The body drifts toward sleep while the mind stays clear, awake, and watchful."
@@ -48,11 +48,11 @@ A 180000 204 0 >0 0 5 208 7  # ch5 septon 204->208; vol fades 0->22 over 45 s
 A 180000 208 0 >0 0 6 212 7  # ch6 septon 208->212; vol fades 0->22 over 45 s
 A 180000 250 0 >0 0 3 254 7  # ch3 250[4.0] theta; vol fades 0->30 over 45 s
 A 180000 300 0 >0 0 4 304 7  # ch4 300[4.0] theta; vol fades 0->30 over 45 s
-A 225000 200 0 22 0 2 204 7  # ch2 septon holds 22
-A 225000 204 0 22 0 5 208 7  # ch5 septon holds 22
-A 225000 208 0 22 0 6 212 7  # ch6 septon holds 22
-A 225000 250 0 30 0 3 254 7  # ch3 theta holds 30
-A 225000 300 0 30 0 4 304 7  # ch4 theta holds 30
+A 225000 200 0 44 0 2 204 7  # ch2 septon holds 22
+A 225000 204 0 44 0 5 208 7  # ch5 septon holds 22
+A 225000 208 0 44 0 6 212 7  # ch6 septon holds 22
+A 225000 250 0 60 0 3 254 7  # ch3 theta holds 30
+A 225000 300 0 60 0 4 304 7  # ch4 theta holds 30
 
 # --- Long steady hold (08:00-26:00 = 18 min): full F10 stack, no changes ---
 S 480000 default 65 "Mind awake, body asleep. Rest in this open, effortless stillness."
@@ -60,13 +60,13 @@ S 960000 default 65 "Nothing to do here. Simply notice, and let awareness float,
 
 # --- Gentle return + soft fade (26:00-30:00): fade the stack, bed, and light to zero ---
 S 1560000 default 65 "Beginning to return now. Draw your awareness gently back toward the body."
-A 1560000 100 0 >30 0 1 101.5 7  # ch1 delta vol 30->0 over 4 min
-A 1560000 200 0 >22 0 2 204 7  # ch2 septon vol 22->0
-A 1560000 204 0 >22 0 5 208 7  # ch5 septon vol 22->0
-A 1560000 208 0 >22 0 6 212 7  # ch6 septon vol 22->0
-A 1560000 250 0 >30 0 3 254 7  # ch3 theta vol 30->0
-A 1560000 300 0 >30 0 4 304 7  # ch4 theta vol 30->0
-A 1560000 200 ~-100:100:6000 >8 0 7 0 5   # ch7 pink bed vol 8->0; pan LFO continues
+A 1560000 100 0 >60 0 1 101.5 7  # ch1 delta vol 30->0 over 4 min
+A 1560000 200 0 >44 0 2 204 7  # ch2 septon vol 22->0
+A 1560000 204 0 >44 0 5 208 7  # ch5 septon vol 22->0
+A 1560000 208 0 >44 0 6 212 7  # ch6 septon vol 22->0
+A 1560000 250 0 >60 0 3 254 7  # ch3 theta vol 30->0
+A 1560000 300 0 >60 0 4 304 7  # ch4 theta vol 30->0
+A 1560000 200 ~-100:100:6000 >16 0 7 0 5   # ch7 pink bed vol 8->0; pan LFO continues
 1560000 4 50 >20 90 0 200 5     # LED brightness 20->0 over the return (preempts LFO)
 S 1770000 default 65 "Coming fully back to the room, calm, clear, and rested."
 A 1800000 100 0 0 0 1 101.5 7  # end: ch1 volume 0

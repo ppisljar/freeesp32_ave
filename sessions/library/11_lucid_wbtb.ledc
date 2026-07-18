@@ -45,15 +45,15 @@
 
 # ---- ch1: binaural driver — carrier glide, freq_r FIXED 210 (beat=210-carrier)
 A 0      200 0 >0 0 1 210 0               # t=00:00 carrier 200 => 10 Hz beat; vol fade-in from 0
-A 30000  >200 0 40 0 1 210 0              # t=00:30 vol 40 reached; carrier glide START 200->204
-A 240000 >204 0 40 0 1 210 0              # t=04:00 beat 6 Hz; carrier glides 204->205
-A 540000 205 0 >40 0 1 210 0              # t=09:00 beat 5 Hz; SOFT OFF: vol 40 -> 0
+A 30000  >200 0 80 0 1 210 0              # t=00:30 vol 40 reached; carrier glide START 200->204
+A 240000 >204 0 80 0 1 210 0              # t=04:00 beat 6 Hz; carrier glides 204->205
+A 540000 205 0 >80 0 1 210 0              # t=09:00 beat 5 Hz; SOFT OFF: vol 40 -> 0
 A 720000 205 0 0 0 1 210 0                # t=12:00 silent
 
 # ---- ch2: 40 Hz gamma lucidity cue — AUDIO ISOCHRONIC ONLY (Voss), joins theta
 A 240000 250 0 >0 40 2                    # t=04:00 carrier 250, isochronic mod 40 Hz; vol fade-in from 0
-A 300000 250 0 15 40 2                    # t=05:00 gamma cue steady at low vol 15
-A 540000 250 0 >15 40 2                   # t=09:00 SOFT OFF: gamma vol 15 -> 0
+A 300000 250 0 30 40 2                    # t=05:00 gamma cue steady at low vol 15
+A 540000 250 0 >30 40 2                   # t=09:00 SOFT OFF: gamma vol 15 -> 0
 A 720000 250 0 0 40 2                     # t=12:00 silent
 
 # ---- Speech markers (sparse, calm, at phase transitions) ----------------------

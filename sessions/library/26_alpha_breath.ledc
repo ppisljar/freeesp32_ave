@@ -28,17 +28,17 @@ S 3000 default 65 "Beginning at ten hertz, in alpha. Let your breath find a slow
 
 # --- Alpha hold with 0.1 Hz breath (00:30-13:00): brightness swells 15<->35% every 10 s ---
 30000 10 50 ~15:35:10000 0 150 160 5   # breathing brightness LFO (6 breaths/min coherence)
-A 45000 240 0 50 0 1 250 0         # ch1 vol settled 50, beat holds 10 Hz
+A 45000 240 0 100 0 1 250 0         # ch1 vol settled 50, beat holds 10 Hz
 S 300000 default 65 "Ride the light as it breathes. In as it brightens, out as it softens."
 S 660000 default 65 "Calm and open, resting in the alpha rhythm."
 
 # --- Alert lift (13:00-15:00): ramp 10->12 Hz and brighten to 40% ---
 780000 >10 50 >20 0 150 160 5    # LED freq 10->12; brightness ramp START 20 -> (preempts LFO)
-A 780000 >240 0 50 0 1 250 0       # carrier 240->238 => beat 10->12 over 2 min
+A 780000 >240 0 100 0 1 250 0       # carrier 240->238 => beat 10->12 over 2 min
 S 780000 default 65 "Gently rising now, brightening, becoming alert and clear."
 900000 12 50 >40 60 190 210 5    # 12 Hz, brighter cool color; brightness reached 40 then fades ->0
 
 # --- Gentle close (15:00-15:30): flicker brightness + volume fade to 0 over 30 s ---
-A 900000 238 0 >50 0 1 250 0       # beat 12 Hz held; vol 50->0 over 30 s
+A 900000 238 0 >100 0 1 250 0       # beat 12 Hz held; vol 50->0 over 30 s
 930000 12 50 0 60 190 210 5      # end: brightness 0
 A 930000 238 0 0 0 1 250 0         # end: volume 0

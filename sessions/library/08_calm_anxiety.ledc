@@ -23,11 +23,11 @@ S 3000 default 65 "Settling now at twelve hertz. Let your breathing slow, gently
 30000 0 50 ~12:28:10000 0 60 180 5   # gentle breathing; the only LED motion (no strobe, freq stays 0)
 
 # --- t=45 s: volume fade-in (0->50 over 45 s) complete; carrier continues sliding ---
-A 45000 >370.5 0 50 0 1 382 0    # vol 50 reached; carrier mid-slide (>370.5 -> next 372); beat ~11.5 Hz
+A 45000 >370.5 0 100 0 1 382 0    # vol 50 reached; carrier mid-slide (>370.5 -> next 372); beat ~11.5 Hz
 S 45000 default 65 "Easing down toward alpha. There is nothing you need to do right now."
 
 # --- t=3:00: alpha reached — carrier 372 vs fixed freq_r 382 => beat 10 Hz -----
-A 180000 372 0 50 0 1 382 0      # carrier 372 (beat 10 Hz); steady blue + breathing; HOLD begins
+A 180000 372 0 100 0 1 382 0      # carrier 372 (beat 10 Hz); steady blue + breathing; HOLD begins
 S 180000 default 65 "You've reached alpha, ten hertz. Rest here, calm and safe. You are okay."
 
 # --- HOLD 3:00 -> 24:30 (~21 min at alpha 10 Hz; dwell >> 6 min) ---------------
@@ -35,7 +35,7 @@ S 180000 default 65 "You've reached alpha, ten hertz. Rest here, calm and safe. 
 # Stays calm-alert alpha (no down-shift to theta) — this is not a bedtime preset.
 
 # --- t=24:30: begin soft close (gentle, stays in alpha) -----------------------
-A 1470000 372 0 >50 0 1 382 0    # carrier holds 372; vol >50 ramps toward 0 over the last 30 s
+A 1470000 372 0 >100 0 1 382 0    # carrier holds 372; vol >50 ramps toward 0 over the last 30 s
 S 1470000 default 65 "Slowly returning now, still calm and clear. Carry this ease with you."
 1470000 0 50 >12 0 60 180 5     # brightness >12 (LFO floor) ramps toward 0 over the last 30 s (>=10 s)
 
