@@ -158,6 +158,55 @@ void diagnostics_clear_logs(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * Subsystem health — boot is non-fatal; each subsystem records ok/failed here
+ * so the web server always comes up and the diagnostics page can warn about
+ * anything that didn't start. Written once per subsystem at boot (single-
+ * threaded app_main), read from the httpd task; a plain array + no lock is
+ * safe because writes finish before the web server (hence any reader) exists.
+ * ------------------------------------------------------------------------- */
+#define DIAG_HEALTH_MAX 12
+static struct { char name[16]; bool ok; char msg[64]; bool used; } s_health[DIAG_HEALTH_MAX];
+
+void diagnostics_health_set(const char *name, bool ok, const char *msg)
+{
+    if (!name) return;
+    int free_slot = -1;
+    for (int i = 0; i < DIAG_HEALTH_MAX; i++) {
+        if (s_health[i].used && strncmp(s_health[i].name, name, sizeof(s_health[i].name)) == 0) {
+            free_slot = i; break;                 /* update existing */
+        }
+        if (free_slot < 0 && !s_health[i].used) free_slot = i;
+    }
+    if (free_slot < 0) return;                     /* table full — drop */
+    s_health[free_slot].used = true;
+    s_health[free_slot].ok = ok;
+    strlcpy(s_health[free_slot].name, name, sizeof(s_health[free_slot].name));
+    strlcpy(s_health[free_slot].msg, msg ? msg : "", sizeof(s_health[free_slot].msg));
+    if (!ok) ESP_LOGW(TAG, "subsystem '%s' DEGRADED: %s", name, msg ? msg : "(failed)");
+}
+
+size_t diagnostics_health_json(char *out, size_t out_size)
+{
+    if (!out || out_size == 0) return 0;
+    size_t n = 0;
+    n += snprintf(out + n, out_size - n, "{");
+    bool first = true;
+    for (int i = 0; i < DIAG_HEALTH_MAX && n < out_size; i++) {
+        if (!s_health[i].used) continue;
+        if (s_health[i].ok) {
+            n += snprintf(out + n, out_size - n, "%s\"%s\":{\"ok\":true}",
+                          first ? "" : ",", s_health[i].name);
+        } else {
+            n += snprintf(out + n, out_size - n, "%s\"%s\":{\"ok\":false,\"msg\":\"%s\"}",
+                          first ? "" : ",", s_health[i].name, s_health[i].msg);
+        }
+        first = false;
+    }
+    if (n < out_size) n += snprintf(out + n, out_size - n, "}");
+    return n;
+}
+
+/* ---------------------------------------------------------------------------
  * Layer 3 — core dump retrieval (compiled in only with coredump-to-flash)
  * --------------------------------------------------------------------------- */
 

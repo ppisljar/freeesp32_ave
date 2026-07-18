@@ -60,6 +60,25 @@ size_t diagnostics_logs_size(void);
 void diagnostics_clear_logs(void);
 
 /**
+ * @brief Record the health of a boot subsystem (audio, led, timing, wifi, …).
+ *
+ * Boot init is non-fatal: each subsystem reports ok/failed here instead of
+ * aborting app_main, so the web server always comes up for recovery. The
+ * diagnostics web page reads these back (via /api/state "diag":{"health":…})
+ * and warns about anything that failed. `name` is copied (<=15 chars kept);
+ * `msg` is a short reason for failures (may be NULL). Safe to call repeatedly
+ * with the same name (last value wins).
+ */
+void diagnostics_health_set(const char *name, bool ok, const char *msg);
+
+/**
+ * @brief Emit the recorded subsystem health as a JSON object, e.g.
+ *        {"timing":{"ok":true},"audio":{"ok":false,"msg":"ESP_ERR_NOT_FOUND"}}
+ * Writes up to out_size bytes (NUL-terminated); returns bytes written.
+ */
+size_t diagnostics_health_json(char *out, size_t out_size);
+
+/**
  * @brief Whether a core dump image is stored in flash.
  * @param size_out  If non-NULL and a dump is present, receives its size in bytes.
  * @return true if a valid core dump is present (always false when coredump-to-

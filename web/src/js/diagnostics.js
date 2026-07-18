@@ -79,6 +79,40 @@ async function loadState() {
             'build, dumps are never captured — see the diagnostics plan, Layer 3.)';
         $('diagCdActions').style.display = 'none';
     }
+
+    // Subsystem health. Boot is non-fatal: each subsystem reports ok/failed, so
+    // the device always comes up (in recovery mode) even if audio/LED/etc. can't
+    // init. Warn prominently about anything degraded; show a chip per subsystem.
+    const hEl = $('diagSubsystems');
+    if (hEl) {
+        const health = d.health || {};
+        const keys = Object.keys(health);
+        const failed = keys.filter(k => health[k] && health[k].ok === false);
+        let html = '';
+        if (failed.length) {
+            html += '<div class="diag-card diag-card-alert"><strong>⚠ ' + failed.length +
+                ' subsystem' + (failed.length > 1 ? 's' : '') + ' degraded</strong> — the device ' +
+                'booted in recovery mode so you can fix it from the web UI. Check wiring and the ' +
+                'Settings page (codec/pins/LED backend):<ul style="margin:6px 0 0 18px;">';
+            failed.forEach(k => { html += '<li><b>' + esc(k) + '</b>: ' + esc(health[k].msg || 'failed') + '</li>'; });
+            html += '</ul></div>';
+        }
+        if (keys.length) {
+            html += '<div class="diag-health-grid">';
+            keys.forEach(k => {
+                const ok = health[k].ok !== false;
+                html += '<span class="diag-chip ' + (ok ? 'diag-chip-ok' : 'diag-chip-bad') + '" title="' +
+                    esc(health[k].msg || (ok ? 'ok' : 'failed')) + '">' + (ok ? '✓' : '✗') + ' ' + esc(k) + '</span>';
+            });
+            html += '</div>';
+        }
+        hEl.innerHTML = html;
+    }
+}
+
+function esc(x) {
+    return String(x == null ? '' : x).replace(/[&<>"]/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 async function loadLogs() {

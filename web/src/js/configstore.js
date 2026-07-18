@@ -1,34 +1,27 @@
-// Unified .ledc config store across three sources:
-//   - generator: external server ({generatorUrl}/ledc...), only if a URL is set
+// Unified .ledc config store across two sources:
 //   - spiffs:    device, dedicated cfgfs partition (/api/configs...)
 //   - local:     browser localStorage (key prefix "ledc:")
-// The dropdown lists configs from all available sources (grouped by source);
+// The dropdown lists configs from both sources (grouped by source);
 // Save / Save As route to the chosen source.
-import { appConfig, showMessage } from './util.js';
+// (The old external "generator (server)" source was removed — it blocked the
+//  dropdown while an unreachable generatorUrl timed out.)
+import { showMessage } from './util.js';
 
 const LOCAL_PREFIX = 'ledc:';
 const NAME_RE = /^[A-Za-z0-9._-]+\.ledc$/;
 
 // Currently-loaded config (so plain Save knows where to write).
-let currentSrc = null;     // 'generator' | 'spiffs' | 'local'
+let currentSrc = null;     // 'spiffs' | 'local'
 let currentName = null;
 // Last-fetched name lists per source (for overwrite checks).
-const lastLists = { generator: [], spiffs: [], local: [] };
+const lastLists = { spiffs: [], local: [] };
 
-const SRC_LABEL = { generator: 'Generator (server)', spiffs: 'Device (SPIFFS)', local: 'Browser (local)' };
+const SRC_LABEL = { spiffs: 'Device (SPIFFS)', local: 'Browser (local)' };
 
 // Exposed for config.js report upload (tags the report with the config name).
 export function getCurrentConfigName() { return currentName; }
 
-function genAvailable() { return !!(appConfig.generatorUrl && appConfig.generatorUrl.trim()); }
-
 // ---- per-source list/load/save -------------------------------------------
-function listGenerator() {
-    if (!genAvailable()) return Promise.resolve(null); // null = source not present
-    return fetch(appConfig.generatorUrl + '/ledc')
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(d => d.files || []);
-}
 function listSpiffs() {
     return fetch('/api/configs')
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -44,10 +37,6 @@ function listLocal() {
 }
 
 function loadFromSource(src, name) {
-    if (src === 'generator') {
-        return fetch(appConfig.generatorUrl + '/ledc/' + encodeURIComponent(name))
-            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
-    }
     if (src === 'spiffs') {
         return fetch('/api/configs/' + encodeURIComponent(name))
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
@@ -58,11 +47,6 @@ function loadFromSource(src, name) {
 }
 
 function saveToSource(src, name, body) {
-    if (src === 'generator') {
-        return fetch(appConfig.generatorUrl + '/ledc/' + encodeURIComponent(name),
-            { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body })
-            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json().catch(() => ({ saved: name })); });
-    }
     if (src === 'spiffs') {
         return fetch('/api/configs/' + encodeURIComponent(name),
             { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body })
@@ -77,7 +61,6 @@ function saveToSource(src, name, body) {
 export function refreshConfigList() {
     const dd = document.getElementById('ledcDropdown');
     const sources = [
-        ['generator', listGenerator()],
         ['spiffs', listSpiffs()],
         ['local', listLocal()],
     ];
@@ -85,7 +68,6 @@ export function refreshConfigList() {
         dd.innerHTML = '';
         results.forEach((res, i) => {
             const src = sources[i][0];
-            if (src === 'generator' && res.status === 'fulfilled' && res.value === null) return; // no URL → omit group
             const group = document.createElement('optgroup');
             group.label = SRC_LABEL[src];
             if (res.status === 'fulfilled' && res.value) {
@@ -104,7 +86,7 @@ export function refreshConfigList() {
             } else {
                 lastLists[src] = [];
                 const o = document.createElement('option');
-                o.textContent = '(' + (src === 'generator' ? 'unreachable' : 'unavailable') + ')';
+                o.textContent = '(unavailable)';
                 o.disabled = true; group.appendChild(o);
             }
             dd.appendChild(group);
@@ -168,9 +150,7 @@ export function saveAsDialog() {
     back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
     const box = document.createElement('div');
     box.style.cssText = 'background:#fff;padding:20px;border-radius:8px;min-width:300px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-size:14px;';
-    const dests = [];
-    if (genAvailable()) dests.push('generator');
-    dests.push('spiffs', 'local');
+    const dests = ['spiffs', 'local'];
     const defaultDest = (currentSrc && dests.includes(currentSrc)) ? currentSrc : dests[0];
     box.innerHTML =
         '<h3 style="margin:0 0 12px 0;">Save Config As</h3>'
@@ -204,7 +184,6 @@ export function saveAsDialog() {
 // A source that fails to list resolves to names:[] (with an `error` flag).
 export function fetchConfigGroups() {
     const sources = [
-        ['generator', listGenerator()],
         ['spiffs', listSpiffs()],
         ['local', listLocal()],
     ];
@@ -212,7 +191,6 @@ export function fetchConfigGroups() {
         const groups = [];
         results.forEach((res, i) => {
             const src = sources[i][0];
-            if (src === 'generator' && res.status === 'fulfilled' && res.value === null) return; // no URL
             if (res.status === 'fulfilled' && res.value) {
                 lastLists[src] = res.value;
                 groups.push({ src, label: SRC_LABEL[src], names: res.value });

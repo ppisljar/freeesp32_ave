@@ -13,14 +13,57 @@ import { showMessage } from '../util.js';
 
 const REPO   = 'ppisljar/freeesp32_ave';
 const BRANCH = 'main';
-const INDEX_URL = `https://raw.githubusercontent.com/${REPO}/${BRANCH}/sessions/community.json`;
-const rawUrl = (path, file) => `https://raw.githubusercontent.com/${REPO}/${BRANCH}/${path}/${file}`;
+// Fully-qualified `refs/heads/<branch>` form (what GitHub's "Raw" button emits).
+const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}`;
+const INDEX_URL = `${RAW_BASE}/sessions/community.json`;
+const rawUrl = (path, file) => `${RAW_BASE}/${path}/${file}`;
 
 let loaded = false;
 
 function esc(x) {
     return String(x == null ? '' : x).replace(/[&<>"]/g, c =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// FNV-1a (32-bit) over the UTF-8 bytes of the whitespace-trailing-normalized text.
+// crypto.subtle is unavailable on this HTTP origin, so this pure-JS hash is used to
+// tell whether the device's copy of a session matches the online one. Must stay
+// byte-for-byte identical to the Python generator in sessions/community.json.
+function contentHash(text) {
+    const norm = String(text).replace(/\r\n/g, '\n').replace(/\s+$/, '');
+    const bytes = new TextEncoder().encode(norm);   // UTF-8, matches Python .encode('utf-8')
+    let h = 0x811c9dc5;
+    for (let i = 0; i < bytes.length; i++) { h ^= bytes[i]; h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+function setBadge(root, file, cls, text) {
+    const el = root.querySelector('.comm-card[data-file="' + (window.CSS ? CSS.escape(file) : file) + '"] [data-badge]');
+    if (el) { el.className = 'comm-badge ' + cls; el.textContent = text; }
+}
+
+// Presence (GET /api/configs) + per-present-file freshness (device content hash vs
+// the index hash). Runs after the list renders so badges fill in progressively.
+async function refreshStatus(sessions, path, root) {
+    let devSet = new Set();
+    try {
+        const j = await fetch('/api/configs').then(r => r.json());
+        devSet = new Set(j.files || []);
+    } catch (e) { return; }   // device unreachable → leave badges neutral
+    for (const s of sessions) {
+        if (!devSet.has(s.file)) { setBadge(root, s.file, 'comm-badge-avail', 'available'); continue; }
+        // Present on device — compare content unless the index has no hash.
+        if (!s.hash) { setBadge(root, s.file, 'comm-badge-ondev', 'on device'); continue; }
+        setBadge(root, s.file, 'comm-badge-check', 'checking…');
+        try {
+            const devTxt = await fetch('/api/configs/' + encodeURIComponent(s.file)).then(r => r.text());
+            const same = contentHash(devTxt) === s.hash;
+            setBadge(root, s.file, same ? 'comm-badge-ok' : 'comm-badge-update',
+                     same ? '✓ on device' : '⬆ update available');
+        } catch (e) {
+            setBadge(root, s.file, 'comm-badge-ondev', 'on device');
+        }
+    }
 }
 
 // Called by the generator when the Community subtab is shown. Fetches once.
@@ -56,8 +99,11 @@ function renderList(root, idx) {
     sessions.forEach(s => {
         const card = document.createElement('div');
         card.className = 'comm-card';
+        card.dataset.file = s.file;
         card.innerHTML =
-            `<div class="comm-title">${esc(s.title || s.file)} <span class="comm-file">${esc(s.file)}</span></div>` +
+            `<div class="comm-title">${esc(s.title || s.file)}` +
+              ` <span class="comm-badge" data-badge></span>` +
+              ` <span class="comm-file">${esc(s.file)}</span></div>` +
             `<div class="comm-short">${esc(s.short || '')}</div>` +
             `<div class="comm-long" style="display:none">${esc(s.long || '')}</div>` +
             `<div class="comm-actions">` +
@@ -71,10 +117,15 @@ function renderList(root, idx) {
             l.style.display = open ? '' : 'none';
             e.target.textContent = open ? 'Details ▴' : 'Details ▾';
         });
+        // After a Save, re-check this one card's status so the badge updates.
         card.querySelector('[data-act="load"]').addEventListener('click', () => loadInto(path, s));
-        card.querySelector('[data-act="save"]').addEventListener('click', () => saveToDevice(path, s));
+        card.querySelector('[data-act="save"]').addEventListener('click', () =>
+            saveToDevice(path, s).then(() => refreshStatus([s], path, root)));
         root.appendChild(card);
     });
+
+    // Presence + freshness badges fill in progressively (device may be unreachable).
+    refreshStatus(sessions, path, root);
 }
 
 function fetchLedc(path, s) {
@@ -93,7 +144,7 @@ function loadInto(path, s) {
 }
 
 function saveToDevice(path, s) {
-    fetchLedc(path, s).then(txt =>
+    return fetchLedc(path, s).then(txt =>
         saveConfigText('spiffs', s.file, txt)   // 'spiffs' = device PUT /api/configs/<name>
             .then(() => showMessage('Saved "' + s.file + '" to device', 'success'))
     ).catch(err => showMessage('Save failed: ' + err.message, 'error'));

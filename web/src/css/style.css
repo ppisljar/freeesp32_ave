@@ -418,3 +418,18 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .comm-actions { display:flex; gap:8px; align-items:center; margin-top:6px; }
 .comm-actions button { padding:4px 10px; font-size:12px; cursor:pointer; }
 .comm-actions button.primary { background:#28a745; color:#fff; border:none; border-radius:4px; }
+
+/* Community status badges */
+.comm-badge { font-size:11px; padding:1px 7px; border-radius:10px; vertical-align:middle; font-weight:500; }
+.comm-badge:empty { display:none; }
+.comm-badge-avail  { background:#eef2f7; color:#5a6b7b; }   /* online-only, not downloaded */
+.comm-badge-ondev  { background:#e6f4ea; color:#1e7e34; }   /* present, hash unknown */
+.comm-badge-ok     { background:#e6f4ea; color:#1e7e34; }   /* present + up to date */
+.comm-badge-update { background:#fff3cd; color:#8a6d00; }   /* present but online differs */
+.comm-badge-check  { background:#f0f0f0; color:#999; }      /* checking… */
+
+/* Diagnostics subsystem-health chips */
+.diag-health-grid { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+.diag-chip { font-size:12px; padding:2px 9px; border-radius:12px; font-weight:500; }
+.diag-chip-ok  { background:#e6f4ea; color:#1e7e34; }
+.diag-chip-bad { background:#fdecea; color:#b0201a; }

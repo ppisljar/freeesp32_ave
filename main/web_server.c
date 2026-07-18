@@ -1918,16 +1918,16 @@ static esp_err_t state_handler(httpd_req_t *req)
     bool tl_running     = (config_parser_get_timeline_position() > 0);
     uint32_t tl_pos     = config_parser_get_timeline_position();
 
-    /* 4 KB buffer is plenty for 8 LED + 16 audio channels with the chosen
-     * precision. If channel counts grow much larger, switch to a streaming
-     * write via httpd_resp_send_chunk. */
-    char *buf = (char *)malloc(4096);
+    /* 5 KB buffer: 8 LED + 16 audio channels + the diag subsystem-health object.
+     * If channel counts grow much larger, switch to a streaming write via
+     * httpd_resp_send_chunk. */
+    char *buf = (char *)malloc(5120);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
     char *p   = buf;
-    char *end = buf + 4096;
+    char *end = buf + 5120;
 
     #define APPEND(...) do { \
         int _n = snprintf(p, end - p, __VA_ARGS__); \
@@ -1981,15 +1981,17 @@ static esp_err_t state_handler(httpd_req_t *req)
      * core dump is waiting to be retrieved (see diagnostics.c / GET /api/logs). */
     size_t cd_size = 0;
     bool cd_present = diagnostics_coredump_present(&cd_size);
+    char health_buf[640];
+    diagnostics_health_json(health_buf, sizeof(health_buf));
     APPEND("\"diag\":{\"reset_reason\":\"%s\",\"uptime_ms\":%llu,"
            "\"free_heap\":%u,\"free_psram\":%u,\"log_bytes\":%u,"
-           "\"coredump\":{\"present\":%s,\"size\":%u}}}",
+           "\"coredump\":{\"present\":%s,\"size\":%u},\"health\":%s}}",
            diagnostics_reset_reason_str(),
            (unsigned long long)(esp_timer_get_time() / 1000),
            (unsigned)esp_get_free_heap_size(),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
            (unsigned)diagnostics_logs_size(),
-           cd_present ? "true" : "false", (unsigned)cd_size);
+           cd_present ? "true" : "false", (unsigned)cd_size, health_buf);
 
     #undef APPEND
 

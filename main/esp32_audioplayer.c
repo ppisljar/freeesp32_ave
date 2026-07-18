@@ -264,24 +264,32 @@ void app_main(void)
         ESP_LOGW(TAG, "settings_init returned %s — using in-RAM defaults", esp_err_to_name(ret));
     }
 
+    // Boot is NON-FATAL from here on: if a subsystem (timing, audio, LED …)
+    // can't init, we log it, record its health for the diagnostics page, and
+    // KEEP GOING so WiFi + the web server always come up. That way a bad
+    // codec/pin setting is fixable from the browser instead of bricking boot.
+    // core_ok gates the audio pipeline (timeline needs timing + memory pools).
+    bool core_ok = true;
+
     // Initialize timing engine (hardware-precision timing)
     ret = timing_engine_init();
+    if (ret == ESP_OK) ret = timing_engine_start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize timing engine: %s", esp_err_to_name(ret));
-        return;
+        ESP_LOGE(TAG, "Timing engine failed: %s — continuing for recovery (audio disabled)", esp_err_to_name(ret));
+        diagnostics_health_set("timing", false, esp_err_to_name(ret));
+        core_ok = false;
+    } else {
+        ESP_LOGI(TAG, "Master timing engine operational");
+        diagnostics_health_set("timing", true, NULL);
     }
-
-    ret = timing_engine_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start timing engine: %s", esp_err_to_name(ret));
-        return;
-    }
-    ESP_LOGI(TAG, "Master timing engine operational");
 
     ret = memory_pool_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize memory pools: %s", esp_err_to_name(ret));
-        return;
+        ESP_LOGE(TAG, "Memory pool init failed: %s — continuing for recovery (audio disabled)", esp_err_to_name(ret));
+        diagnostics_health_set("mempool", false, esp_err_to_name(ret));
+        core_ok = false;
+    } else {
+        diagnostics_health_set("mempool", true, NULL);
     }
 
     // WiFi / config_parser / web_server init MOVED to AFTER the soak (see below).
@@ -289,21 +297,29 @@ void app_main(void)
     // underruns producing residual LED flicker — running the baseline soak
     // before WiFi comes up gives a clean reading of LED + audio behaviour.
 
-    // Initialize LED matrix
+    // Initialize LED matrix (already non-fatal; now also reports health)
     ret = led_matrix_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize LED matrix: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "LED matrix init failed: %s — continuing (fix backend/pins in Settings)", esp_err_to_name(ret));
+        diagnostics_health_set("led", false, esp_err_to_name(ret));
     } else {
-        ESP_LOGI(TAG, "LED matrix initialized on GPIO 12");
-        // Quick LED test — disabled during soak validation to keep startup clean.
-        // led_matrix_test_pattern();
+        ESP_LOGI(TAG, "LED matrix initialized");
+        diagnostics_health_set("led", true, NULL);
     }
 
-    // Initialize audio manager
+    // Initialize audio manager. THE key non-fatal change: a missing/mis-configured
+    // codec (e.g. ES8388 selected but the board has a passive PCM5102A) used to
+    // abort app_main here, killing WiFi/web and stranding the device with no way
+    // to fix the setting. Now we log, record health, and continue.
+    bool audio_ok = false;
     ret = audio_manager_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize audio manager: %s", esp_err_to_name(ret));
-        return;
+        ESP_LOGE(TAG, "Audio manager init failed: %s — continuing WITHOUT audio; "
+                 "fix audio_codec / I2S pins in the web Settings page", esp_err_to_name(ret));
+        diagnostics_health_set("audio", false, esp_err_to_name(ret));
+    } else {
+        audio_ok = true;
+        diagnostics_health_set("audio", true, NULL);
     }
 
     // Initialize modulation engine (runtime support for .ledc ^~/\_ prefixes).
@@ -319,18 +335,29 @@ void app_main(void)
     // Ring buffer is in static .bss — no heap impact, no ordering constraints.
     ret = bg_player_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize bg_player: %s", esp_err_to_name(ret));
-        // Non-fatal: session continues without BG audio support.
+        ESP_LOGE(TAG, "bg_player init failed: %s — continuing without BG audio", esp_err_to_name(ret));
+        diagnostics_health_set("bg_player", false, esp_err_to_name(ret));
+    } else {
+        diagnostics_health_set("bg_player", true, NULL);
     }
 
 
     ESP_LOGI(TAG, "ESP32 Audio Player initialized successfully");
 
-    // Start audio output task for real-time audio generation
-    ret = audio_test_start_output_task();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start audio output task: %s", esp_err_to_name(ret));
-        return;
+    // Start audio output task — only if the audio pipeline (codec + timing +
+    // memory pools) actually came up. Starting it on a dead I2S/codec would
+    // fail or fault; in recovery mode we simply skip it and let WiFi/web run.
+    if (audio_ok && core_ok) {
+        ret = audio_test_start_output_task();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Audio output task failed: %s — continuing for recovery", esp_err_to_name(ret));
+            diagnostics_health_set("audio_out", false, esp_err_to_name(ret));
+        } else {
+            diagnostics_health_set("audio_out", true, NULL);
+        }
+    } else {
+        ESP_LOGW(TAG, "Skipping audio output task — audio pipeline degraded (recovery mode)");
+        diagnostics_health_set("audio_out", false, "skipped: audio pipeline degraded");
     }
 
     // Periodic 15 s logger for active sweeps. Low priority — strictly diagnostic.
@@ -395,6 +422,7 @@ void app_main(void)
     ret = wifi_manager_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize WiFi manager: %s", esp_err_to_name(ret));
+        diagnostics_health_set("wifi", false, esp_err_to_name(ret));
     } else {
         const device_settings_t *cfg = settings_get();
         bool wifi_ok = false;
@@ -421,21 +449,30 @@ void app_main(void)
             if (wifi_manager_start_ap() == ESP_OK) {
                 ESP_LOGI(TAG, "SoftAP '%s' ready — connect and browse to http://%s",
                          WIFI_AP_SSID, WIFI_AP_IP_STR);
+                diagnostics_health_set("wifi", true, "SoftAP setup mode (no station)");
             } else {
                 ESP_LOGE(TAG, "SoftAP fallback failed to start");
+                diagnostics_health_set("wifi", false, "STA + SoftAP both failed");
             }
+        } else {
+            diagnostics_health_set("wifi", true, NULL);
         }
     }
 
     ret = config_parser_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize config parser: %s", esp_err_to_name(ret));
+        diagnostics_health_set("config_parser", false, esp_err_to_name(ret));
+    } else {
+        diagnostics_health_set("config_parser", true, NULL);
     }
 
     ret = web_server_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize web server: %s", esp_err_to_name(ret));
+        diagnostics_health_set("web_server", false, esp_err_to_name(ret));
     } else {
+        diagnostics_health_set("web_server", true, NULL);
         web_server_set_wifi_status(wifi_manager_get_state() == WIFI_STATE_CONNECTED);
         char url_buffer[64];
         if (web_server_get_url(url_buffer, sizeof(url_buffer)) == ESP_OK) {
