@@ -27,3 +27,8 @@ Implementation reports. Reports not tied to a numbered plan live under
   (3-agent research, 2026-07-02) of audio/visual/session techniques mined from patents +
   literature, each mapped to a concrete engine change. Flagships: monaural beats,
   trapezoid isochronic envelope, invisible spectral flicker, anti-habituation dither.
+- `non_planned_reports/audio_mix_sum_aware_normalization.md` — replaced the count-based
+  `1/N_active` mix scaling with sum-aware `gain=min(1,1/Σamp)`. Fixes user-reported
+  loudness duck in `09_lucid_hypnagogic` at t=8:00 (enabling ch2/ch3 dropped ch1 ~9.5 dB)
+  while keeping the 8 multi-carrier Gateway sessions (Σ up to 5.12×) clip-safe. Build
+  clean; hardware verify pending.

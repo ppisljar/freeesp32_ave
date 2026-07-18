@@ -632,17 +632,17 @@ bool audio_generator_any_stopping(void) {
     return any;
 }
 
-// Cross-buffer smoothing state for the 1/N_active scaling factor.  Without
-// smoothing, the moment a channel deactivates N drops by 1, so each surviving
-// channel's contribution is multiplied by N/(N-1) on the next buffer — a hard
-// step (6 dB at N=2→1).  We instead ramp inv_n_active over AUDIO_AMP_RAMP_SAMPLES
-// samples whenever the target changes, eliminating the click.
+// Cross-buffer smoothing state for the master mix gain (sum-aware headroom,
+// gain = min(1, 1/Σamp); see fill_buffer). Whenever the target gain changes
+// (a channel's envelope moves the summed amplitude across the ±1.0 ceiling) we
+// ramp over AUDIO_AMP_RAMP_SAMPLES rather than stepping, eliminating the click
+// this scaling would otherwise produce at the buffer boundary.
 // Reference: bug_stop_click_deep_investigation_2026-06-17.md (Inv 16 #2),
 // bug_stop_click_bg_i2s_state_2026-06-17.md (Inv 17 #1).
-static float    s_inv_n_current     = 1.0f;
-static float    s_inv_n_target      = 1.0f;
-static float    s_inv_n_step        = 0.0f;
-static uint32_t s_inv_n_ramp_left   = 0u;
+static float    s_mix_gain_current   = 1.0f;
+static float    s_mix_gain_target    = 1.0f;
+static float    s_mix_gain_step      = 0.0f;
+static uint32_t s_mix_gain_ramp_left = 0u;
 
 esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     if (!generator_initialized || !output_buffer) {
@@ -654,41 +654,53 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     // Clear output buffer
     memset(output_buffer, 0, samples * 2 * sizeof(float)); // Stereo
 
-    // Count active channels once so each channel's contribution is scaled by
-    // 1/N before mixing.  Without this, N same-panned channels at vol=100 sum
-    // to N×1.0 and saturate the ±1.0 output ceiling.
-    int n_active = 0;
+    // Sum-aware headroom.  Scale the mix only by as much as needed to keep the
+    // summed channel amplitudes within the ±1.0 ceiling: gain = min(1, 1/Σamp),
+    // where Σamp is the sum of active channels' current envelope amplitudes
+    // (worst case: all carriers peak same-sign, same-panned).
+    //
+    // This replaces the old count-based 1/N_active.  1/N attenuated EVERY channel
+    // whenever ANY channel was added — even when the sum stayed well under 1.0 —
+    // so enabling a 3rd quiet channel audibly ducked the established ones (e.g.
+    // 09_lucid_hypnagogic at t=8:00: a binaural dropped ~9.5 dB the instant two
+    // faders opened, though the mix summed to only 0.81).  Sum-aware leaves the
+    // others untouched while Σamp ≤ 1.0 and attenuates only for genuinely hot
+    // mixes (e.g. the multi-carrier Gateway sessions summing ~5×).
+    //
+    // Σamp uses current_amp (the live per-channel envelope), so a fade-in
+    // contributes gradually and gain never steps.  Pan-aware per-L/R summing is
+    // a possible future refinement; the mono sum is a safe conservative bound.
+    float amp_sum = 0.0f;
     for (int ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
-        if (audio_channels[ch].active) n_active++;
+        if (audio_channels[ch].active) amp_sum += audio_channels[ch].current_amp;
     }
-    float new_target = (n_active > 0) ? (1.0f / (float)n_active) : 1.0f;
+    float new_target = (amp_sum > 1.0f) ? (1.0f / amp_sum) : 1.0f;
 
-    // Arm a smoothing ramp whenever the target gain changes.  This prevents
-    // the step-up click that would otherwise fire at the buffer boundary
-    // immediately after a channel deactivates (when N drops by 1, the
-    // surviving channels' scale jumps from 1/N to 1/(N-1)).
-    if (new_target != s_inv_n_target) {
-        s_inv_n_target    = new_target;
-        s_inv_n_step      = (new_target - s_inv_n_current) / (float)AUDIO_AMP_RAMP_SAMPLES;
-        s_inv_n_ramp_left = AUDIO_AMP_RAMP_SAMPLES;
+    // Arm a smoothing ramp whenever the target gain changes, so a mix crossing
+    // the ceiling (or dropping back under it) slews over AUDIO_AMP_RAMP_SAMPLES
+    // instead of stepping at the buffer boundary (which would click).
+    if (new_target != s_mix_gain_target) {
+        s_mix_gain_target    = new_target;
+        s_mix_gain_step      = (new_target - s_mix_gain_current) / (float)AUDIO_AMP_RAMP_SAMPLES;
+        s_mix_gain_ramp_left = AUDIO_AMP_RAMP_SAMPLES;
     }
 
-    // Pre-compute per-sample inv_n values so each per-channel mix loop reads
-    // the same value at sample index i (rather than advancing the ramp once
-    // per channel × sample). File-scope static — fill_buffer is the only
+    // Pre-compute per-sample gain values so each per-channel mix loop reads the
+    // same value at sample index i (rather than advancing the ramp once per
+    // channel × sample). File-scope static — fill_buffer is the only
     // writer/reader and is serialised by audio_gen_mutex. A VLA at samples=1024
     // would have cost 4 KB of stack on every call, perilously close to the
     // task's 8 KB stack budget.
-    static float inv_n_per_sample[AUDIO_GEN_BUFFER_SIZE];
+    static float mix_gain_per_sample[AUDIO_GEN_BUFFER_SIZE];
     for (size_t i = 0; i < samples; i++) {
-        if (s_inv_n_ramp_left > 0u) {
-            s_inv_n_current += s_inv_n_step;
-            s_inv_n_ramp_left--;
-            if (s_inv_n_ramp_left == 0u) {
-                s_inv_n_current = s_inv_n_target;  // snap absorbs float drift
+        if (s_mix_gain_ramp_left > 0u) {
+            s_mix_gain_current += s_mix_gain_step;
+            s_mix_gain_ramp_left--;
+            if (s_mix_gain_ramp_left == 0u) {
+                s_mix_gain_current = s_mix_gain_target;  // snap absorbs float drift
             }
         }
-        inv_n_per_sample[i] = s_inv_n_current;
+        mix_gain_per_sample[i] = s_mix_gain_current;
     }
 
     // Snapshot the current time once per buffer for modulation evaluation.
@@ -1300,9 +1312,9 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             }
 
             // Mix into output buffer (stereo interleaved).  Use the smoothed
-            // per-sample gain so transitions in N_active don't click.
-            output_buffer[i * 2]     += final_left  * inv_n_per_sample[i];
-            output_buffer[i * 2 + 1] += final_right * inv_n_per_sample[i];
+            // per-sample master gain so headroom transitions don't click.
+            output_buffer[i * 2]     += final_left  * mix_gain_per_sample[i];
+            output_buffer[i * 2 + 1] += final_right * mix_gain_per_sample[i];
 
             // Update phase accumulators.  Modular uint32_t arithmetic wraps for
             // free at 2^32; no branch is needed to keep phase in range.
