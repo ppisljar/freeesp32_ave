@@ -210,7 +210,12 @@ static esp_err_t snapshot_button_init(void)
         .intr_type    = GPIO_INTR_NEGEDGE,
     };
     esp_err_t ret = gpio_config(&cfg);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        // Pin couldn't be configured — disable the button entirely so neither
+        // the snapshot poll nor the boot-SoftAP check reads an unconfigured pin.
+        s_btn_gpio = -1;
+        return ret;
+    }
 
     // ISR service may have been installed already by another component.
     esp_err_t isr_ret = gpio_install_isr_service(0);
@@ -426,7 +431,20 @@ void app_main(void)
     } else {
         const device_settings_t *cfg = settings_get();
         bool wifi_ok = false;
-        if (cfg->wifi_ssid[0] != '\0') {
+
+        // Hold the button during startup to force SoftAP setup mode (skip the
+        // STA join entirely). The button (settings.button_gpio, configurable via
+        // the Settings page) is active-low with an internal pull-up and was
+        // already configured by snapshot_button_init() above, so a level of 0
+        // here means it is being held. Same physical button that does the
+        // snapshot/long-press-stop at runtime — a held-at-boot low level never
+        // produces a falling edge, so it can't spuriously fire the ISR.
+        bool force_ap = (s_btn_gpio >= 0 && gpio_get_level(s_btn_gpio) == 0);
+        if (force_ap) {
+            ESP_LOGW(TAG, "Button held at boot (GPIO %d) — forcing SoftAP setup mode", s_btn_gpio);
+        }
+
+        if (!force_ap && cfg->wifi_ssid[0] != '\0') {
             ESP_LOGI(TAG, "Connecting to WiFi SSID '%s'...", cfg->wifi_ssid);
             ret = wifi_manager_connect(cfg->wifi_ssid, cfg->wifi_password);
             if (ret == ESP_OK) {
@@ -438,18 +456,20 @@ void app_main(void)
             } else {
                 ESP_LOGE(TAG, "Failed to connect to WiFi: %s", esp_err_to_name(ret));
             }
-        } else {
+        } else if (!force_ap) {
             ESP_LOGW(TAG, "No WiFi SSID configured in settings");
         }
 
         if (!wifi_ok) {
-            // STA association failed or no SSID — bring up the SoftAP so the
-            // user can still reach the web UI and enter credentials.
-            ESP_LOGW(TAG, "Falling back to SoftAP for setup");
+            // Button-forced, STA association failed, or no SSID — bring up the
+            // SoftAP so the user can still reach the web UI and enter credentials.
+            ESP_LOGW(TAG, "%s", force_ap ? "Starting SoftAP (button-forced setup mode)"
+                                         : "Falling back to SoftAP for setup");
             if (wifi_manager_start_ap() == ESP_OK) {
                 ESP_LOGI(TAG, "SoftAP '%s' ready — connect and browse to http://%s",
                          WIFI_AP_SSID, WIFI_AP_IP_STR);
-                diagnostics_health_set("wifi", true, "SoftAP setup mode (no station)");
+                diagnostics_health_set("wifi", true,
+                    force_ap ? "SoftAP (button-forced)" : "SoftAP setup mode (no station)");
             } else {
                 ESP_LOGE(TAG, "SoftAP fallback failed to start");
                 diagnostics_health_set("wifi", false, "STA + SoftAP both failed");

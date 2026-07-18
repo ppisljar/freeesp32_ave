@@ -192,6 +192,20 @@ idf.py menuconfig           # pick LED backend, set GPIO mapping
 idf.py build flash monitor
 ```
 
+## WiFi & setup mode
+
+On boot the device joins the WiFi network configured in Settings (station mode).
+If it can't — no SSID set, or the join fails — it falls back to a **SoftAP** named
+`ESP32-AVE-Setup` (WPA2 password `entrain123`); connect to it and browse to
+`http://192.168.4.1` to configure WiFi and other settings.
+
+**Force SoftAP setup mode:** hold the **button during startup** (power-on / reset)
+and the device boots straight into SoftAP, skipping the station join — handy when
+the configured network is unreachable or you need to change credentials. The
+button is the one set by `button_gpio` in Settings (the same momentary button used
+for the runtime snapshot / long-press-stop); it's active-low (wired to GND with the
+chip's internal pull-up). Set `button_gpio = -1` to disable it entirely.
+
 ## Timeline format (`.ledc` files)
 
 Sessions are described in plain-text `.ledc` files (legacy `.led` also
