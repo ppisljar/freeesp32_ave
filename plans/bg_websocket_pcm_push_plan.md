@@ -1,6 +1,23 @@
 # BG WebSocket Raw-PCM Push — Plan & Contract
 
-> **STATUS (2026-07-18): PLANNED, not started.** Alternative to the current
+> **STATUS (2026-07-18): IMPLEMENTED (Steps 1–8), build clean, 187 web tests
+> green — NOT yet flashed / hardware-verified (Step 9 pending).** Firmware:
+> `CONFIG_HTTPD_WS_SUPPORT=y` (sdkconfig + sdkconfig.defaults); new `GET /api/bg-ws`
+> handler in `web_server.c` (thin `bg_ws_handler` → `async_dispatch(bg_ws_work)`;
+> handshake JSON text frame arms `bg_player_start_push`, binary frames → the
+> existing `bg_stream_feed_pcm`→`bg_player_push_pcm` ring path, periodic
+> `{consumed,ring_ms}` back-channel; `s_bg_stream_busy` guard reused); new
+> `bg_player_push_bytes_streamed()` getter. Browser: `transport.js` `pushBgWs`
+> (handshake + `ws.bufferedAmount`-paced 16 KB chunks) + `stopBgWs`; `stopBg`
+> closes the WS too; `play.js` speech path now strips the 44-byte WAV header and
+> pushes raw PCM via `pushBgWs`. WAV-POST + MP3 paths NOT added back (MP3 was
+> reverted); WAV-POST handler remains as the coexisting fallback. Firmware builds
+> clean (httpd_ws.c linked); web bundle 57 KB gz (no lamejs). **⚠️ KEY UNVERIFIED
+> RISK: whether `httpd_ws_recv_frame` works in a blocking loop on the async worker
+> handle — if not, fall back to the frame-driven WS model (per-socket ctx). Watch
+> on hardware.** Resume-on-drop still v2/deferred.
+>
+> **ORIGINAL PLAN BELOW.** Alternative to the
 > MP3-over-POST browser-push path (`bg_mp3_push_plan.md`), motivated by audible
 > clicks/artifacts in the MP3 push (suspected minimp3 decode issues + the 8 KB
 > async-worker stack running the decoder). This path makes the ESP32 a

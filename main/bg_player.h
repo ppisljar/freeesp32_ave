@@ -161,6 +161,15 @@ esp_err_t bg_player_start_push(float pan, float loudness);
 uint32_t bg_player_push_buffered_ms(void);
 
 /**
+ * @brief Ring-format bytes pushed so far this push session (back-channel).
+ *
+ * Monotonic per session; reset by bg_player_start_push. The WebSocket ingest
+ * reports this to the browser for stall detection / consumed-offset estimation.
+ * @return s_bg.bytes_streamed.
+ */
+uint32_t bg_player_push_bytes_streamed(void);
+
+/**
  * @brief Prime-gate hold: buffer pushed BG without playing it.
  *
  * While held, bg_player_mix_into() adds no BG to the output and does NOT drain

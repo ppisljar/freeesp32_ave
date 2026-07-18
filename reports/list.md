@@ -32,3 +32,8 @@ Implementation reports. Reports not tied to a numbered plan live under
   loudness duck in `09_lucid_hypnagogic` at t=8:00 (enabling ch2/ch3 dropped ch1 ~9.5 dB)
   while keeping the 8 multi-carrier Gateway sessions (Σ up to 5.12×) clip-safe. Build
   clean; hardware verify pending.
+- `bg_websocket_pcm_push_report.md` — ESP32-as-WebSocket-server raw-PCM BG ingest
+  (`GET /api/bg-ws`), the artifact-free alternative to the reverted MP3-POST push.
+  No on-device decode; reuses the existing bg_player_push_pcm ring + prime gate;
+  adds a consumed/ring_ms back-channel. Build clean, 187 web tests; hardware verify
+  pending. Key unverified risk: httpd_ws_recv_frame in a blocking loop on the async worker.

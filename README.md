@@ -309,6 +309,15 @@ so the device only ever receives its canonical 44.1 kHz / 16-bit / stereo WAV.
 - `POST /api/bg-stream?pan=<-100..100>&loudness=<0..100>` with a WAV body streams
   a clip as the active BG (TCP flow control paces it to playback rate).
   `POST /api/bg-stream?stop=1` stops just the BG.
+- **WebSocket ingest** — `GET /api/bg-ws` (Upgrade → WebSocket, needs
+  `CONFIG_HTTPD_WS_SUPPORT=y`). The browser sends a JSON handshake frame
+  `{"pan":..,"loudness":..,"rate":44100,"bits":16,"ch":2}` then streams **raw
+  headerless 44.1 kHz / 16-bit / stereo LE PCM** in binary frames — there is **no
+  on-device decode**, so no decode artifacts. The handler runs on the async worker
+  pool (the single server task stays free) and feeds the same ring as the POST
+  path; it sends a periodic `{"consumed":..,"ring_ms":..}` back-channel so the
+  browser can pace and detect stalls. The Generator's speech-bounce Play path uses
+  this by default.
 - **Bounce session → WAV**: an opt-in button renders the session's audio to one
   WAV in the browser, which can be downloaded, saved to the library, or pushed.
   A **scope** selector chooses *BG + Speech* (leave A entries for the device to

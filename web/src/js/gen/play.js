@@ -11,7 +11,8 @@
 //                 BG line to push:// so the device gates the timeline on the
 //                 pushed audio (BG sample 0 == session t=0), then stream it.
 
-import { playDoc, pushBg } from './transport.js';
+import { playDoc, pushBgWs } from './transport.js';
+import { startKeepAlive, stopKeepAlive } from './keepalive.js';
 import { bounceSession, pushSessionBg } from './bounce.js';
 import { getEngine } from './tts.js';
 import { serialize } from './serialize.js';
@@ -22,7 +23,7 @@ import { ensureSafetyAccepted } from '../safety.js';
 // play/stop/play doesn't re-run the (slow, ~seconds) TTS bounce each time. It
 // invalidates automatically when the session serialization changes, and is
 // dropped on page reload.
-let s_bounceCache = { key: null, blob: null };
+let s_bounceCache = { key: null, pcm: null };
 
 // Label for the synthesized session BG on the push:// line. The device only
 // uses push:// as a "wait for the browser to stream this" signal; the name is
@@ -43,8 +44,8 @@ function progHide() { const w = $('bounceProg'); if (w) w.style.display = 'none'
 // unchanged. Shows the progress bar only during a real (cache-miss) bounce.
 async function ensureBounce(doc, engine) {
     const key = serialize(doc) + '|' + engine;
-    if (s_bounceCache.key === key && s_bounceCache.blob) {
-        return s_bounceCache.blob;                 // cache hit — instant replay
+    if (s_bounceCache.key === key && s_bounceCache.pcm) {
+        return s_bounceCache.pcm;                  // cache hit — instant replay
     }
     progShow();
     try {
@@ -52,8 +53,11 @@ async function ensureBounce(doc, engine) {
             scope: 'bgspeech', engine,
             onProgress: (m, f) => progSet(f, m),
         });
-        s_bounceCache = { key, blob: res.blob };
-        return res.blob;
+        // Headerless raw PCM for the WS push (strip the 44-byte canonical WAV
+        // header — the WS handshake carries the format, so no RIFF needed).
+        const pcm = res.wav.subarray(44);
+        s_bounceCache = { key, pcm };
+        return pcm;
     } finally {
         progHide();
     }
@@ -91,17 +95,24 @@ export async function playSession(doc) {
     // Speech present: bounce (cached) → rewrite BG to push:// → play → stream.
     // Rewriting to push:// makes the firmware gate the timeline start on the
     // pushed audio priming, so the baked speech stays sample-aligned to t=0.
+    // Keep the page alive if the phone screen locks during the (real-time,
+    // minutes-long) WS push: without this the OS freezes the pump and the device
+    // ring starves → clicks. Started here inside the Play gesture so autoplay
+    // permits it; released when the push finishes or fails.
+    startKeepAlive();
     try {
-        const blob = await ensureBounce(doc, getEngine());
+        const pcm = await ensureBounce(doc, getEngine());
         const docForDevice = {
             ...doc,
             bg: { url: 'push://' + SESSION_BG_NAME, pan: 0, loudness: 100 },
         };
         await playDoc(docForDevice);                   // device: A+LED, armed to wait for the push
-        await pushBg(blob, { pan: 0, loudness: 100 });  // fills the ring → device starts synced
+        await pushBgWs(pcm, { pan: 0, loudness: 100 }); // raw PCM over WebSocket → no on-device decode
         showMessage('Playing (speech merged into background)', 'success');
     } catch (err) {
         progHide();
         showMessage('Play error: ' + (err.message || err), 'error');
+    } finally {
+        stopKeepAlive();
     }
 }

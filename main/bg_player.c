@@ -1459,6 +1459,14 @@ uint32_t bg_player_push_buffered_ms(void)
     return (uint32_t)(((uint64_t)frames * 1000ULL) / 44100ULL);
 }
 
+uint32_t bg_player_push_bytes_streamed(void)
+{
+    /* Ring-format (float-stereo) bytes handed to the ring so far this push
+     * session. The WS back-channel reports this so the browser can detect a
+     * stall (no progress) and estimate the consumed offset. */
+    return s_bg.bytes_streamed;
+}
+
 /* Prime gate: buffer the pushed BG but DON'T play it yet (mix_into stays silent
  * and leaves the ring untouched). Set from config_parser when a push:// session
  * is armed, cleared when the timeline actually starts (or on stop).            */

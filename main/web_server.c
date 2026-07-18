@@ -84,6 +84,9 @@ static esp_err_t beat_jitter_handler(httpd_req_t *req);
 static esp_err_t audio_phase_handler(httpd_req_t *req);
 #if CONFIG_BG_SUPPORT_PUSH
 static esp_err_t bg_stream_handler(httpd_req_t *req);   // thin async entry
+#if CONFIG_HTTPD_WS_SUPPORT
+static esp_err_t bg_ws_handler(httpd_req_t *req);       // WS raw-PCM ingest (thin entry)
+#endif
 static esp_err_t bg_stream_work(httpd_req_t *req);      // real body (worker task)
 static esp_err_t tts_handler(httpd_req_t *req);         // thin async entry
 static esp_err_t tts_work(httpd_req_t *req);            // real body (worker task)
@@ -359,6 +362,21 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &bg_stream_uri);
+
+#if CONFIG_HTTPD_WS_SUPPORT
+    // WebSocket raw-PCM BG ingest (bg_websocket_pcm_push_plan.md). The upgrade
+    // GET is handled by bg_ws_handler, which offloads the session recv loop to
+    // the async worker so the single server task stays free.
+    httpd_uri_t bg_ws_uri = {
+        .uri = "/api/bg-ws",
+        .method = HTTP_GET,
+        .handler = bg_ws_handler,
+        .user_ctx = NULL,
+        .is_websocket = true,
+        .handle_ws_control_frames = false,   // let the stack auto-PONG pings
+    };
+    httpd_register_uri_handler(g_server_state.server, &bg_ws_uri);
+#endif
 
     httpd_uri_t tts_uri = {
         .uri = "/api/tts",
@@ -1743,6 +1761,156 @@ static esp_err_t bg_stream_work(httpd_req_t *req)
     httpd_resp_sendstr(req, "{\"ok\":true}");
     return ESP_OK;
 }
+
+#if CONFIG_HTTPD_WS_SUPPORT
+// ---------------------------------------------------------------------------
+// GET /api/bg-ws  — WebSocket raw-PCM background-audio ingest
+// ---------------------------------------------------------------------------
+// Alternative to POST /api/bg-stream that carries raw 44.1 kHz / 16-bit / stereo
+// LE PCM in binary WS frames — there is NO on-device decode, so no decode
+// artifacts. The first message is a TEXT handshake JSON {"pan":..,"loudness":..}
+// that arms push mode; every BINARY frame after is raw interleaved int16 stereo
+// PCM fed straight into the SAME bg_stream_feed_pcm -> bg_player_push_pcm ring
+// path the WAV-POST branch uses (0-3 byte frame carry preserved across frames).
+// A periodic TEXT back-channel {"consumed":..,"ring_ms":..} lets the browser
+// pace via ws.bufferedAmount and detect stalls. See bg_websocket_pcm_push_plan.md.
+
+#define BG_WS_RECV_BYTES     16384u  // max WS binary frame payload (browser caps to this)
+#define BG_WS_BACKCHAN_EVERY 8u      // emit a progress frame every N binary frames
+
+// Parse pan (-100..100) and loudness (0..100) out of the tiny handshake JSON.
+static void bg_ws_parse_handshake(const char *json, size_t len, float *pan, float *loudness)
+{
+    char buf[128];
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    memcpy(buf, json, len); buf[len] = '\0';
+    const char *p;
+    if ((p = strstr(buf, "\"pan\"")))      { p = strchr(p, ':'); if (p) *pan = strtof(p + 1, NULL); }
+    if ((p = strstr(buf, "\"loudness\""))) { p = strchr(p, ':'); if (p) *loudness = strtof(p + 1, NULL); }
+}
+
+// Best-effort back-channel progress frame (ignore send errors).
+static void bg_ws_send_progress(httpd_req_t *req)
+{
+    char msg[80];
+    int n = snprintf(msg, sizeof(msg), "{\"consumed\":%u,\"ring_ms\":%u}",
+                     (unsigned)bg_player_push_bytes_streamed(),
+                     (unsigned)bg_player_push_buffered_ms());
+    if (n <= 0) return;
+    httpd_ws_frame_t f = { .final = true, .type = HTTPD_WS_TYPE_TEXT,
+                           .payload = (uint8_t *)msg, .len = (size_t)n };
+    (void)httpd_ws_send_frame(req, &f);
+}
+
+// Session recv loop — runs on the async worker so the server task stays free.
+static esp_err_t bg_ws_work(httpd_req_t *req)
+{
+    // Single-ingest guard shared with the POST path (busy → close the socket).
+    if (!__sync_bool_compare_and_swap(&s_bg_stream_busy, 0, 1)) {
+        httpd_ws_frame_t cl = { .final = true, .type = HTTPD_WS_TYPE_CLOSE };
+        httpd_ws_send_frame(req, &cl);
+        return ESP_OK;
+    }
+
+    // Recv buffer + the aligned stage bg_stream_feed_pcm needs. PSRAM, matching
+    // the POST path (internal DRAM is scarce under WiFi/LWIP pressure).
+    uint8_t *rb    = heap_caps_malloc(BG_WS_RECV_BYTES,        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t *stage = heap_caps_malloc(BG_STREAM_RECV_BYTES + 4u, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!rb || !stage) {
+        free(rb); free(stage);
+        s_bg_stream_busy = 0;
+        httpd_ws_frame_t cl = { .final = true, .type = HTTPD_WS_TYPE_CLOSE };
+        httpd_ws_send_frame(req, &cl);
+        return ESP_FAIL;
+    }
+
+    uint8_t carry[4]; size_t carry_len = 0;
+    bool armed   = false;   // push producer started (after handshake or first PCM)
+    bool ended   = false;   // push superseded/stopped mid-stream
+    bool errored = false;   // fatal error → stop (no drain)
+    int  recv_fails = 0;    // consecutive recv failures (stall/close tolerance)
+    uint32_t bin_frames = 0;
+
+    for (;;) {
+        // 1. Peek the next frame's length (max_len = 0 reads only the header).
+        httpd_ws_frame_t frame; memset(&frame, 0, sizeof(frame));
+        if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK) {
+            if (++recv_fails > BG_STREAM_MAX_TIMEOUTS) { errored = true; break; }
+            continue;                                    // transient stall — bounded retry
+        }
+        if (frame.type == HTTPD_WS_TYPE_CLOSE) { break; }        // natural end
+        if (frame.len == 0) { recv_fails = 0; continue; }
+        if (frame.len > BG_WS_RECV_BYTES) { errored = true; break; }  // client oversized a frame
+
+        // 2. Read the payload into rb.
+        frame.payload = rb;
+        if (httpd_ws_recv_frame(req, &frame, frame.len) != ESP_OK) {
+            if (++recv_fails > BG_STREAM_MAX_TIMEOUTS) { errored = true; break; }
+            continue;
+        }
+        recv_fails = 0;
+
+        if (frame.type == HTTPD_WS_TYPE_TEXT) {
+            // Handshake JSON (pan/loudness). The first one arms push mode.
+            if (!armed) {
+                float pan = 0.0f, loudness = 50.0f;
+                bg_ws_parse_handshake((const char *)rb, frame.len, &pan, &loudness);
+                if (pan < -100.0f) pan = -100.0f; else if (pan > 100.0f) pan = 100.0f;
+                if (loudness < 0.0f) loudness = 0.0f; else if (loudness > 100.0f) loudness = 100.0f;
+                if (bg_player_start_push(pan / 100.0f, loudness / 100.0f) != ESP_OK) {
+                    errored = true; break;
+                }
+                armed = true;
+            }
+            continue;
+        }
+
+        if (frame.type == HTTPD_WS_TYPE_BINARY) {
+            if (!armed) {   // PCM before any handshake — arm with defaults
+                if (bg_player_start_push(0.0f, 0.5f) != ESP_OK) { errored = true; break; }
+                armed = true;
+            }
+            if (!bg_stream_feed_pcm(rb, frame.len, stage, carry, &carry_len)) {
+                ended = true; break;                     // push superseded/stopped
+            }
+            if ((++bin_frames % BG_WS_BACKCHAN_EVERY) == 0u) {
+                bg_ws_send_progress(req);
+            }
+        }
+        // PING/PONG are auto-handled by the stack (handle_ws_control_frames=false).
+    }
+
+    free(rb);
+    free(stage);
+
+    // Teardown mirrors the POST path.
+    if (armed) {
+        if (ended) {
+            ESP_LOGI(TAG, "bg-ws: ended mid-stream (stopped/superseded)");
+        } else if (!errored) {
+            bg_player_end_push();                        // natural: drain + fade
+        } else {
+            bg_player_stop();                            // error: immediate
+        }
+    }
+    s_bg_stream_busy = 0;
+
+    httpd_ws_frame_t cl = { .final = true, .type = HTTPD_WS_TYPE_CLOSE };
+    httpd_ws_send_frame(req, &cl);                       // best-effort close
+    return ESP_OK;
+}
+
+// Thin entry: the WS upgrade GET arrives on the server task (the 101 handshake
+// is already sent by the stack). Offload the session recv loop to the async
+// worker so the single server task stays free for /api/stop, /api/state, etc.
+static esp_err_t bg_ws_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) {
+        return async_dispatch(req, bg_ws_work);
+    }
+    return ESP_OK;
+}
+#endif // CONFIG_HTTPD_WS_SUPPORT
 
 // ---------------------------------------------------------------------------
 // GET /api/tts?tl=<lang>&q=<text>  — Google Translate TTS proxy
