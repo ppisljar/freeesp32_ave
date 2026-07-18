@@ -180,6 +180,11 @@ export function saveAsDialog() {
 // list/load/save plumbing. These wrappers reuse the internal functions without
 // changing any existing behavior, keeping Option A (Home stays independent).
 
+// Natural, case-insensitive name ordering for the config dropdowns.
+export function byConfigName(a, b) {
+    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
 // Returns a Promise of [{ src, label, names[] }] across all available sources.
 // A source that fails to list resolves to names:[] (with an `error` flag).
 export function fetchConfigGroups() {
@@ -192,8 +197,12 @@ export function fetchConfigGroups() {
         results.forEach((res, i) => {
             const src = sources[i][0];
             if (res.status === 'fulfilled' && res.value) {
-                lastLists[src] = res.value;
-                groups.push({ src, label: SRC_LABEL[src], names: res.value });
+                // Sort by name within the category (natural + case-insensitive, so
+                // "09_" precedes "10_" and unpadded names order sensibly). The
+                // device (spiffs) list arrives in filesystem order otherwise.
+                const names = res.value.slice().sort(byConfigName);
+                lastLists[src] = names;
+                groups.push({ src, label: SRC_LABEL[src], names });
             } else {
                 lastLists[src] = [];
                 groups.push({ src, label: SRC_LABEL[src], names: [], error: true });
