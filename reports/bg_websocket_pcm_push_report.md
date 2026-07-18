@@ -71,11 +71,18 @@ independent of MP3-vs-WS.
 
 ## Honest scope / risks
 
-- **⚠️ Unverified: async-worker WS recv.** `bg_ws_work` calls `httpd_ws_recv_frame`
-  in a blocking loop on the async handle. This keeps the server task free but the
-  async-recv pattern is less trodden than frame-driven WS. If frames don't arrive
-  on the async handle on hardware, fall back to the **frame-driven** model
-  (handler invoked per frame, per-socket ctx holds carry/pan/armed state).
+- **✅ Resolved (cost one hardware round): frame-driven, not async.** The first cut
+  offloaded the WS recv loop to the async worker (`httpd_req_async_handler_begin`)
+  → **corrupted framing** ("WS frame is not properly masked" / "WS Message too
+  long" from frame 1). That async facility detaches a whole HTTP request and is NOT
+  for WebSockets. Rewrote to the **frame-driven** model (server task invokes the
+  handler per frame on the real req; per-socket state in `req->sess_ctx`, teardown
+  via `req->free_ctx`) — matches the official `ws_echo_server` example (whose
+  "async" is `httpd_queue_work`/`httpd_ws_send_frame_async`, for *sending* only).
+  **Hardware-verified working.** Tradeoff: `bg_stream_feed_pcm` runs on the server
+  task and can block it ~<0.74 s when the ring is full (bounded by drain; never a
+  session-length wedge; the prime gate can't deadlock — releases at ~176 KB « 1 MB
+  ring).
 - **Data volume unchanged.** Still ~1.4 Mbps / ~286 MB for a 27-min session in
   real time — WS does not shrink it. v1 has pacing + stall detection but **no
   resume-from-offset** (deferred v2); a long-enough WiFi stall still ends the push.

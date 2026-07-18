@@ -1,21 +1,30 @@
 # BG WebSocket Raw-PCM Push — Plan & Contract
 
-> **STATUS (2026-07-18): IMPLEMENTED (Steps 1–8), build clean, 187 web tests
-> green — NOT yet flashed / hardware-verified (Step 9 pending).** Firmware:
-> `CONFIG_HTTPD_WS_SUPPORT=y` (sdkconfig + sdkconfig.defaults); new `GET /api/bg-ws`
-> handler in `web_server.c` (thin `bg_ws_handler` → `async_dispatch(bg_ws_work)`;
-> handshake JSON text frame arms `bg_player_start_push`, binary frames → the
-> existing `bg_stream_feed_pcm`→`bg_player_push_pcm` ring path, periodic
-> `{consumed,ring_ms}` back-channel; `s_bg_stream_busy` guard reused); new
-> `bg_player_push_bytes_streamed()` getter. Browser: `transport.js` `pushBgWs`
-> (handshake + `ws.bufferedAmount`-paced 16 KB chunks) + `stopBgWs`; `stopBg`
-> closes the WS too; `play.js` speech path now strips the 44-byte WAV header and
-> pushes raw PCM via `pushBgWs`. WAV-POST + MP3 paths NOT added back (MP3 was
-> reverted); WAV-POST handler remains as the coexisting fallback. Firmware builds
-> clean (httpd_ws.c linked); web bundle 57 KB gz (no lamejs). **⚠️ KEY UNVERIFIED
-> RISK: whether `httpd_ws_recv_frame` works in a blocking loop on the async worker
-> handle — if not, fall back to the frame-driven WS model (per-socket ctx). Watch
-> on hardware.** Resume-on-drop still v2/deferred.
+> **STATUS (2026-07-18): IMPLEMENTED + HARDWARE-VERIFIED WORKING (Steps 1–9).**
+> Firmware: `CONFIG_HTTPD_WS_SUPPORT=y` (sdkconfig + sdkconfig.defaults); new
+> `GET /api/bg-ws` **frame-driven** handler in `web_server.c` — the server task
+> invokes `bg_ws_handler` once per WS frame on the REAL req (per-socket state in
+> `req->sess_ctx` = `bg_ws_ctx_t`, torn down by `req->free_ctx` on socket close).
+> A handshake JSON text frame arms `bg_player_start_push`; binary frames → the
+> existing `bg_stream_feed_pcm`→`bg_player_push_pcm` ring path; periodic
+> `{consumed,ring_ms}` back-channel via synchronous `httpd_ws_send_frame`;
+> `s_bg_stream_busy` guard reused; new `bg_player_push_bytes_streamed()` getter.
+> Browser: `transport.js` `pushBgWs` (handshake + `ws.bufferedAmount`-paced 16 KB
+> chunks) + `stopBgWs`; `stopBg` closes the WS too; `play.js` speech path strips
+> the 44-byte WAV header and pushes raw PCM via `pushBgWs`. WAV-POST kept as the
+> coexisting fallback. 187 web tests green.
+>
+> **⚠️ CRITICAL LESSON (cost a hardware round):** the FIRST cut offloaded the WS
+> recv loop to the async worker via `httpd_req_async_handler_begin` — this
+> **corrupts WS framing** ("WS frame is not properly masked" / "WS Message too
+> long" from frame 1), because that async facility detaches a whole HTTP request
+> and is NOT for WebSockets. Per the official `ws_echo_server` example, WS **recv
+> must be frame-driven on the real req**; the example's "async" is `httpd_queue_work`
+> + `httpd_ws_send_frame_async` for **sending** only. Tradeoff of frame-driven:
+> `bg_stream_feed_pcm` runs on the server task and can block it briefly (~<0.74 s,
+> bounded by ring drain at the 256 KB-free watermark) when the ring is full — never
+> a session-length wedge (server is free between frames); the prime gate can't
+> deadlock (releases at ~176 KB « the 1 MB ring). Resume-on-drop still v2/deferred.
 >
 > **ORIGINAL PLAN BELOW.** Alternative to the
 > MP3-over-POST browser-push path (`bg_mp3_push_plan.md`), motivated by audible

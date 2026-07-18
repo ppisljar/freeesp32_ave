@@ -1802,111 +1802,101 @@ static void bg_ws_send_progress(httpd_req_t *req)
     (void)httpd_ws_send_frame(req, &f);
 }
 
-// Session recv loop — runs on the async worker so the server task stays free.
-static esp_err_t bg_ws_work(httpd_req_t *req)
+// Per-socket session state. FRAME-DRIVEN: esp_http_server invokes bg_ws_handler
+// once per incoming WS frame on the SERVER task (reading the real req), so the
+// state must persist across calls — it lives in req->sess_ctx and is torn down by
+// bg_ws_ctx_free when the socket closes. (An async recv-loop on the async handle
+// misaligns WS framing → "WS frame is not properly masked" / "message too long".)
+typedef struct {
+    uint8_t *rb;        // recv buffer (one whole frame)
+    uint8_t *stage;     // aligned stage bg_stream_feed_pcm needs
+    uint8_t  carry[4];  // 0-3 byte stereo-frame carry across frames
+    size_t   carry_len;
+    bool     armed;     // bg_player_start_push done
+    uint32_t bin_frames;
+} bg_ws_ctx_t;
+
+// Socket-close teardown (normal close, error, or drop). Runs on the server task.
+static void bg_ws_ctx_free(void *arg)
 {
-    // Single-ingest guard shared with the POST path (busy → close the socket).
-    if (!__sync_bool_compare_and_swap(&s_bg_stream_busy, 0, 1)) {
-        httpd_ws_frame_t cl = { .final = true, .type = HTTPD_WS_TYPE_CLOSE };
-        httpd_ws_send_frame(req, &cl);
-        return ESP_OK;
+    bg_ws_ctx_t *c = (bg_ws_ctx_t *)arg;
+    if (!c) return;
+    if (c->armed) {
+        // The browser closes only after sending the whole clip, and it streamed in
+        // real time, so the ring tail is small — stop immediately rather than block
+        // this close callback (which is on the server task) draining the ring.
+        bg_player_stop();
     }
-
-    // Recv buffer + the aligned stage bg_stream_feed_pcm needs. PSRAM, matching
-    // the POST path (internal DRAM is scarce under WiFi/LWIP pressure).
-    uint8_t *rb    = heap_caps_malloc(BG_WS_RECV_BYTES,        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    uint8_t *stage = heap_caps_malloc(BG_STREAM_RECV_BYTES + 4u, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!rb || !stage) {
-        free(rb); free(stage);
-        s_bg_stream_busy = 0;
-        httpd_ws_frame_t cl = { .final = true, .type = HTTPD_WS_TYPE_CLOSE };
-        httpd_ws_send_frame(req, &cl);
-        return ESP_FAIL;
-    }
-
-    uint8_t carry[4]; size_t carry_len = 0;
-    bool armed   = false;   // push producer started (after handshake or first PCM)
-    bool ended   = false;   // push superseded/stopped mid-stream
-    bool errored = false;   // fatal error → stop (no drain)
-    int  recv_fails = 0;    // consecutive recv failures (stall/close tolerance)
-    uint32_t bin_frames = 0;
-
-    for (;;) {
-        // 1. Peek the next frame's length (max_len = 0 reads only the header).
-        httpd_ws_frame_t frame; memset(&frame, 0, sizeof(frame));
-        if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK) {
-            if (++recv_fails > BG_STREAM_MAX_TIMEOUTS) { errored = true; break; }
-            continue;                                    // transient stall — bounded retry
-        }
-        if (frame.type == HTTPD_WS_TYPE_CLOSE) { break; }        // natural end
-        if (frame.len == 0) { recv_fails = 0; continue; }
-        if (frame.len > BG_WS_RECV_BYTES) { errored = true; break; }  // client oversized a frame
-
-        // 2. Read the payload into rb.
-        frame.payload = rb;
-        if (httpd_ws_recv_frame(req, &frame, frame.len) != ESP_OK) {
-            if (++recv_fails > BG_STREAM_MAX_TIMEOUTS) { errored = true; break; }
-            continue;
-        }
-        recv_fails = 0;
-
-        if (frame.type == HTTPD_WS_TYPE_TEXT) {
-            // Handshake JSON (pan/loudness). The first one arms push mode.
-            if (!armed) {
-                float pan = 0.0f, loudness = 50.0f;
-                bg_ws_parse_handshake((const char *)rb, frame.len, &pan, &loudness);
-                if (pan < -100.0f) pan = -100.0f; else if (pan > 100.0f) pan = 100.0f;
-                if (loudness < 0.0f) loudness = 0.0f; else if (loudness > 100.0f) loudness = 100.0f;
-                if (bg_player_start_push(pan / 100.0f, loudness / 100.0f) != ESP_OK) {
-                    errored = true; break;
-                }
-                armed = true;
-            }
-            continue;
-        }
-
-        if (frame.type == HTTPD_WS_TYPE_BINARY) {
-            if (!armed) {   // PCM before any handshake — arm with defaults
-                if (bg_player_start_push(0.0f, 0.5f) != ESP_OK) { errored = true; break; }
-                armed = true;
-            }
-            if (!bg_stream_feed_pcm(rb, frame.len, stage, carry, &carry_len)) {
-                ended = true; break;                     // push superseded/stopped
-            }
-            if ((++bin_frames % BG_WS_BACKCHAN_EVERY) == 0u) {
-                bg_ws_send_progress(req);
-            }
-        }
-        // PING/PONG are auto-handled by the stack (handle_ws_control_frames=false).
-    }
-
-    free(rb);
-    free(stage);
-
-    // Teardown mirrors the POST path.
-    if (armed) {
-        if (ended) {
-            ESP_LOGI(TAG, "bg-ws: ended mid-stream (stopped/superseded)");
-        } else if (!errored) {
-            bg_player_end_push();                        // natural: drain + fade
-        } else {
-            bg_player_stop();                            // error: immediate
-        }
-    }
+    if (c->rb)    heap_caps_free(c->rb);
+    if (c->stage) heap_caps_free(c->stage);
+    free(c);
     s_bg_stream_busy = 0;
-
-    httpd_ws_frame_t cl = { .final = true, .type = HTTPD_WS_TYPE_CLOSE };
-    httpd_ws_send_frame(req, &cl);                       // best-effort close
-    return ESP_OK;
+    ESP_LOGI(TAG, "bg-ws: session closed");
 }
 
-// Thin entry: the WS upgrade GET arrives on the server task (the 101 handshake
-// is already sent by the stack). Offload the session recv loop to the async
-// worker so the single server task stays free for /api/stop, /api/state, etc.
+// Frame-driven WS handler. GET = post-handshake session setup; each later call
+// delivers one TEXT (handshake JSON) or BINARY (raw PCM) frame.
 static esp_err_t bg_ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        return async_dispatch(req, bg_ws_work);
+        // Handshake already sent by the stack. Claim the single ingest slot and
+        // set up the per-socket session.
+        if (!__sync_bool_compare_and_swap(&s_bg_stream_busy, 0, 1)) {
+            httpd_ws_frame_t cl = { .final = true, .type = HTTPD_WS_TYPE_CLOSE };
+            httpd_ws_send_frame(req, &cl);
+            return ESP_OK;                               // busy — refuse
+        }
+        bg_ws_ctx_t *c = calloc(1, sizeof(*c));
+        if (c) {
+            c->rb    = heap_caps_malloc(BG_WS_RECV_BYTES,          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            c->stage = heap_caps_malloc(BG_STREAM_RECV_BYTES + 4u, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        if (!c || !c->rb || !c->stage) {
+            if (c) { heap_caps_free(c->rb); heap_caps_free(c->stage); free(c); }
+            s_bg_stream_busy = 0;
+            return ESP_FAIL;
+        }
+        req->sess_ctx = c;
+        req->free_ctx = bg_ws_ctx_free;                  // called on socket close
+        ESP_LOGI(TAG, "bg-ws: session armed");
+        return ESP_OK;
+    }
+
+    bg_ws_ctx_t *c = (bg_ws_ctx_t *)req->sess_ctx;
+    if (!c) return ESP_FAIL;
+
+    // Read the whole frame (header + payload, unmasked) in one call on the real
+    // req. Returning non-OK closes the socket → bg_ws_ctx_free tears down.
+    httpd_ws_frame_t frame; memset(&frame, 0, sizeof(frame));
+    frame.payload = c->rb;
+    esp_err_t rr = httpd_ws_recv_frame(req, &frame, BG_WS_RECV_BYTES);
+    if (rr != ESP_OK) return rr;
+    if (frame.len == 0) return ESP_OK;
+
+    if (frame.type == HTTPD_WS_TYPE_TEXT) {
+        // Handshake JSON {pan,loudness} — the first one arms push mode.
+        if (!c->armed) {
+            float pan = 0.0f, loudness = 50.0f;
+            bg_ws_parse_handshake((const char *)c->rb, frame.len, &pan, &loudness);
+            if (pan < -100.0f) pan = -100.0f; else if (pan > 100.0f) pan = 100.0f;
+            if (loudness < 0.0f) loudness = 0.0f; else if (loudness > 100.0f) loudness = 100.0f;
+            if (bg_player_start_push(pan / 100.0f, loudness / 100.0f) != ESP_OK) return ESP_FAIL;
+            c->armed = true;
+        }
+        return ESP_OK;
+    }
+
+    if (frame.type == HTTPD_WS_TYPE_BINARY) {
+        if (!c->armed) {   // PCM before any handshake — arm with defaults
+            if (bg_player_start_push(0.0f, 0.5f) != ESP_OK) return ESP_FAIL;
+            c->armed = true;
+        }
+        if (!bg_stream_feed_pcm(c->rb, frame.len, c->stage, c->carry, &c->carry_len)) {
+            return ESP_FAIL;                             // push superseded/stopped → close
+        }
+        if ((++c->bin_frames % BG_WS_BACKCHAN_EVERY) == 0u) {
+            bg_ws_send_progress(req);
+        }
     }
     return ESP_OK;
 }
