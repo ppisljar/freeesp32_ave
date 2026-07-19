@@ -1,0 +1,63 @@
+# ============================================================================
+# 09 Lucid / Hypnagogic  — RGB inner/outer build   *** EXPERIMENTAL [W]-tier ***
+# ----------------------------------------------------------------------------
+# RGB variant of 09_lucid_hypnagogic for the concentric inner/outer RGB mask.
+# Audio + speech are IDENTICAL to the base session (the validated theta arc);
+# only the LED lines are re-authored for this hardware.
+#
+# Zones (this build): bit0 inner-left, bit1 outer-left, bit2 outer-right,
+#   bit3 inner-right  ->  inner ring = mask 9, outer ring = mask 6, all = 15.
+#
+# VISUAL DESIGN — warm radial hypnagogic field:
+#   Inner ring = warm amber (255,160,32); outer ring = deep amber (255,80,0),
+#   run 180 ANTIPHASE with a SINE gate. Mean luminance stays ~flat (invisible-
+#   flicker comfort), but the retina still gets the 6 Hz oscillation, and the
+#   inner<->outer alternation reads as a slow warm radial pulse — a closed-eye
+#   "dream field" cue (form constants are strongest ~10 Hz). Both colours are
+#   >=620 nm so they pass the closed eyelid (eyes-closed session).
+#
+# SAFETY: theta 6 Hz + alpha 10 Hz only, both <12 Hz (nowhere near 15-25 Hz).
+#   Brightness ramps in over 15 s, capped <=15%, Soft Off to 0 over the final
+#   5 min. See base session header for the full contraindication block.
+#
+# LED: time freq duty bright R G B mask [env phase]   (env 1=sine; phase deg)
+# Audio: A time freq pan vol mod channel [freq_r] [wave]
+# ============================================================================
+
+# ---- LED: inner amber ring + outer deep-red ring, 180 antiphase, 10->6 Hz -----
+0       10 50 >0  255 160 32 9  1 0     # inner ring: amber, 10 Hz sine, fade-in from 0
+0       10 50 >0  255 80 0 6  1 180   # outer ring: deep amber, antiphase (radial pulse)
+15000   10 50 12  255 160 32 9  1 0     # inner reaches 12% (15 s ramp-in, >=10 s rule)
+15000   10 50 12  255 80 0 6  1 180   # outer reaches 12%
+120000  >10 50 12 255 160 32 9  1 0     # inner: flicker descend START 10 Hz (1:1 beat)
+120000  >10 50 12 255 80 0 6  1 180   # outer: descend START
+480000  6 50 ~6:15:10000 255 160 32 9 1 0    # inner: 6 Hz hold + breathing LFO 6<->15% /10s
+480000  6 50 ~6:15:10000 255 80 0 6 1 180  # outer: 6 Hz hold + breathing (antiphase)
+3300000 6 50 >15 255 160 32 9 1 0     # inner: Soft Off START 15 -> 0
+3300000 6 50 >15 255 80 0 6 1 180   # outer: Soft Off START
+3600000 6 50 0 255 160 32 9 1 0     # inner off (no wake ramp)
+3600000 6 50 0 255 80 0 6 1 180   # outer off
+
+# ---- ch1: isochronic theta driver (carrier 220 Hz, beat via modulation) ------
+A 0       220 0 >0 10 1                  # t=0:00  vol fade-in from 0; beat (mod) 10 Hz
+A 60000   220 0 80 10 1                  # t=1:00  vol fade-in complete; beat 10 Hz
+S 3000 default 65 "Beginning at ten hertz, in alpha. Let your body grow still as your mind stays softly awake."
+A 120000  220 0 80 >10 1                 # t=2:00  beat descend START 10 Hz ...
+S 120000 default 65 "Drifting down toward theta now, into the hypnagogic threshold between waking and dreaming."
+A 480000  220 0 76 6 1                   # t=8:00  ... TARGET 6 Hz (theta plateau)
+S 480000 default 65 "Resting in theta, six hertz. Let images drift and float, watching without holding on."
+A 3300000 220 0 >76 6 1                  # t=55:00 Soft Off START: vol -> 0, beat held 6 Hz
+S 3300000 default 65 "The sound and light are fading now. Let yourself drift on into sleep."
+A 3600000 220 0 0 6 1                    # t=60:00 silent
+
+# ---- ch2: binaural theta layer (FIXED 6 Hz beat), joins at plateau -----------
+A 480000  250 0 >0 0 2 256 0             # t=8:00  fade-in from 0; 250 L / 256 R = 6 Hz beat
+A 540000  250 0 50 0 2 256 0             # t=9:00  vol 50 (gentle, headphone-expected)
+A 3300000 250 0 >50 0 2 256 0            # t=55:00 Soft Off START: vol -> 0
+A 3600000 250 0 0 0 2 256 0             # t=60:00 silent
+
+# ---- ch3: brown-noise ambiance + slow auto-pan (REM-ish drift), at plateau ---
+A 480000  200 ~-60:60:30000 >0 0 3 0 6   # t=8:00  brown noise; pan sine LFO; vol fade-in from 0
+A 540000  200 ~-60:60:30000 36 0 3 0 6   # t=9:00  vol 36; pan LFO continues
+A 3300000 200 ~-60:60:30000 >36 0 3 0 6  # t=55:00 Soft Off START: vol -> 0; pan LFO continues
+A 3600000 200 0 0 0 3 0 6                # t=60:00 silent

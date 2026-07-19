@@ -1,0 +1,40 @@
+# 11_lucid_wbtb_RGB.ledc — Lucid WBTB Re-entry, RGB inner/outer build
+# RGB variant of 11_lucid_wbtb. Audio + speech IDENTICAL (short re-settle + AUDIO-ONLY
+# 40 Hz gamma cue). Eyes-closed: inner ring warm amber (255,160,32), outer ring deep
+# red (255,80,0), 180 antiphase, SINE gate — warm radial dream field. All LED flicker
+# <=10 Hz; 40 Hz cue is AUDIO ISOCHRONIC ONLY. Brightness <=15%, Soft Off. See base header.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# ---- LED: warm radial, 10->6->5 Hz (1:1 beat), brief breathing, Soft Off ----
+0      10 50 >0 255 160 32 9 1 0      # inner amber: 10 Hz sine, fade-in
+0      10 50 >0 255 80 0 6 1 180    # outer deep-red: antiphase
+15000  10 50 15 255 160 32 9 1 0      # inner: 15% reached
+15000  10 50 15 255 80 0 6 1 180    # outer
+30000  >10 50 ~8:15:10000 255 160 32 9 1 0    # inner: descent 10->6, breathing 8<->15%
+30000  >10 50 ~8:15:10000 255 80 0 6 1 180  # outer
+240000 >6 50 >15 255 160 32 9 1 0     # inner: 6 Hz; end breathing, bright 15->8
+240000 >6 50 >15 255 80 0 6 1 180   # outer
+540000 5 50 >8 255 160 32 9 1 0       # inner: 5 Hz; Soft Off 8->0
+540000 5 50 >8 255 80 0 6 1 180     # outer
+720000 5 50 0 255 160 32 9 1 0        # inner off
+720000 5 50 0 255 80 0 6 1 180      # outer off
+
+# ---- ch1: binaural driver — carrier glide, freq_r FIXED 210 ----
+A 0      200 0 >0 0 1 210 0            # carrier 200 => 10 Hz beat; vol fade-in
+A 30000  >200 0 80 0 1 210 0           # vol 40; carrier glide 200->204
+A 240000 >204 0 80 0 1 210 0           # beat 6 Hz; carrier 204->205
+A 540000 205 0 >80 0 1 210 0           # beat 5 Hz; Soft Off vol 40->0
+A 720000 205 0 0 0 1 210 0             # silent
+
+# ---- ch2: 40 Hz gamma lucidity cue — AUDIO ISOCHRONIC ONLY ----
+A 240000 250 0 >0 40 2                 # carrier 250, isochronic mod 40 Hz; vol fade-in
+A 300000 250 0 30 40 2                 # gamma cue steady, low vol
+A 540000 250 0 >30 40 2                # Soft Off gamma -> 0
+A 720000 250 0 0 40 2                  # silent
+
+# ---- Speech markers ----
+S 3000 default 65 "Back to bed. Let the waking mind settle, and sink quickly toward theta."
+S 240000 default 65 "Theta now, the dream gateway. Hold your intention: I will know when I am dreaming."
+S 360000 default 65 "Let the body sleep while a thread of awareness stays. Watch the images come."
+S 540000 default 65 "Let go now, and dream aware."

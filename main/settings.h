@@ -63,6 +63,7 @@ typedef struct {
     char generator_url[128];
     char wifi_ssid[33];                 // Phase 2 (seeded, not yet in JSON/UI)
     char wifi_password[65];             // Phase 2 (seeded, not yet in JSON/UI)
+    char mdns_hostname[32];             // label before ".local" (sanitized to [a-z0-9-]); empty => "esp32-ave"
     // Reports: where the web app persists session reports, in addition to
     // always uploading to the generator when generator_url is set.
     char report_storage[8];             // "none" | "local" | "spiffs"

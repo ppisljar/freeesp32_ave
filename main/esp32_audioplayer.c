@@ -477,6 +477,10 @@ void app_main(void)
         } else {
             diagnostics_health_set("wifi", true, NULL);
         }
+
+        // Advertise over mDNS so the device is reachable at a fixed
+        // http://<hostname>.local regardless of STA vs SoftAP or DHCP IP.
+        wifi_manager_start_mdns();
     }
 
     ret = config_parser_init();

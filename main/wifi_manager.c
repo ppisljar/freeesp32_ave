@@ -3,6 +3,8 @@
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
+#include "mdns.h"
+#include "settings.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -236,5 +238,31 @@ esp_err_t wifi_manager_get_ip_string(char* ip_str, size_t max_len)
     }
 
     snprintf(ip_str, max_len, IPSTR, IP2STR(&ip_info.ip));
+    return ESP_OK;
+}
+
+esp_err_t wifi_manager_start_mdns(void)
+{
+    // Hostname comes from runtime settings (sanitized to a valid DNS label on
+    // save); fall back to the compile-time default if unset/empty.
+    const device_settings_t *cfg = settings_get();
+    const char *host = (cfg && cfg->mdns_hostname[0]) ? cfg->mdns_hostname
+                                                      : WIFI_MDNS_HOSTNAME;
+
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mdns_init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    if ((err = mdns_hostname_set(host)) != ESP_OK) {
+        ESP_LOGE(TAG, "mdns_hostname_set('%s') failed: %s", host, esp_err_to_name(err));
+        return err;
+    }
+    mdns_instance_name_set(WIFI_MDNS_INSTANCE);
+    // Advertise the web UI so browsers/discovery tools can find it.
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+
+    ESP_LOGI(TAG, "mDNS started — reachable at http://%s.local", host);
     return ESP_OK;
 }

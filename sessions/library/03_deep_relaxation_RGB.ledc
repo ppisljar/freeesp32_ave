@@ -1,0 +1,48 @@
+# 03_deep_relaxation_RGB.ledc — Deep Relaxation / Stress Melt, RGB inner/outer build
+# RGB variant of 03_deep_relaxation. Audio + speech IDENTICAL; LEDs on inner ring
+# (mask 9) + outer ring (mask 6), 180 antiphase with a SINE gate while flickering.
+# The entrainment beat is AUDIO isochronic; the LED is a dim cool->warm wash: it stays
+# STEADY (freq 0) during the 14 Hz portion (safety — adjacent to the 15-25 Hz band),
+# then flickers only once the beat is <=10 Hz. Colour glides cool blue -> warm amber
+# across the theta hold. Brightness capped 30%. See base header for safety.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# --- Induction: beat 14 Hz (audio only); LED STEADY + dim; cool blue ---
+0 0 50 >0 0 80 180 9 1 0          # inner: steady (freq 0), bright 0->30 over 15 s, cool blue
+0 0 50 >0 0 80 180 6 1 180        # outer: steady, cool blue
+A 0 200 0 >0 14 1 0 0             # ch1 carrier 200, isochronic mod 14 Hz; vol 0->55; sine
+S 3000 default 65 "Beginning at fourteen hertz. Let the tension of the day begin to loosen."
+15000 0 50 30 0 80 180 9 1 0      # inner: bright 30% hold, still steady (no flicker at 14 Hz)
+15000 0 50 30 0 80 180 6 1 180    # outer
+A 45000 200 0 55 >14 1 0 0        # vol 55; isochronic mod ramps 14->10 across induction
+
+# --- Alpha reached: LED flicker safely begins at 10 Hz, glides to 6 with the beat ---
+300000 >10 50 30 0 80 180 9 1 0   # inner: flicker 10->6 (1:1 beat), dim blue
+300000 >10 50 30 0 80 180 6 1 180 # outer: antiphase
+A 300000 200 0 55 >10 1 0 0       # isochronic mod 10->6 Hz (deepening toward theta)
+S 300000 default 65 "You have reached alpha, ten hertz. Descending gently now toward theta."
+
+# --- Theta core: hold 6 Hz; cool blue -> warm amber colour shift ---
+720000 6 50 30 >0 >80 >180 9 1 0   # inner: 6 Hz hold; RGB glides blue(0,80,180)->amber(255,140,30)
+720000 6 50 30 >0 >80 >180 6 1 180 # outer: same glide, antiphase
+A 720000 200 0 55 6 1 0 0          # isochronic mod 6 Hz — 12 min theta dwell
+S 720000 default 65 "Resting in theta now, six hertz. Let everything melt away."
+
+# --- Exit: beat 6 -> 10 Hz (calm-alert alpha), amber ---
+1440000 >6 50 30 255 140 30 9 1 0   # inner: flicker 6->10; amber held
+1440000 >6 50 30 255 140 30 6 1 180 # outer
+A 1440000 200 0 55 >6 1 0 0         # isochronic mod 6->10 Hz (exit to alpha, NOT beta)
+S 1440000 default 65 "Slowly rising now, coming back up toward calm, alert alpha."
+1620000 10 50 28 255 160 60 9 1 0   # inner: 10 Hz hold; warm amber; bright 28%
+1620000 10 50 28 255 160 60 6 1 180 # outer
+A 1620000 200 0 55 10 1 0 0         # isochronic mod 10 Hz held
+S 1620000 default 65 "Back at ten hertz, relaxed and clear. Gently return to the room."
+
+# --- Gentle close: brightness + volume fade to 0 over the final 30 s ---
+1770000 10 50 >28 255 160 60 9 1 0   # inner: bright 28->0; flicker stays 10 Hz (never abrupt)
+1770000 10 50 >28 255 160 60 6 1 180 # outer
+A 1770000 200 0 >55 10 1 0 0         # volume 55->0; beat held at alpha 10 Hz
+1800000 10 50 0 255 160 60 9 1 0     # inner: bright 0
+1800000 10 50 0 255 160 60 6 1 180   # outer
+A 1800000 200 0 0 10 1 0 0           # volume 0

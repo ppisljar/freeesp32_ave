@@ -1,0 +1,64 @@
+# 34_gateway_obe_RGB.ledc — Gateway / OBE Threshold, RGB inner/outer build
+# RGB variant of 34_gateway_obe. Audio + speech IDENTICAL (primary binaural w/ beat jitter +
+# Septon pairs on ch2/3 + EEG-contour ch4 + trapezoid iso drum ch5 + phased pink bed ch6).
+# The 10->4->10 Hz "descent to threshold" field maps to the concentric rings: inner ring
+# warm amber (mask 9, 255,160,32, phase 0) + outer ring deep amber (mask 6, 255,80,0, phase
+# 180), SINE gate — a slow-breathing warm radial pull inward. Non-saturated warm (safe to
+# flicker); rates <=10 Hz; brightness <=22%. See base header for safety.
+#
+# LED: time freq duty bright R G B mask [env phase attack]
+
+# --- Induction: amber 10 Hz field + phased pink + primary binaural, fade in ---
+0 10 50 >0 255 160 32 9 1 0 3                 # inner amber: 10 Hz sine, fade-in
+0 10 50 >0 255 80 0 6 1 180 3                 # outer deep-amber: antiphase
+A 0 220 ~-100:100:6000 >0 0 6 0 5             # ch6 phased pink bed: L<->R pan, 6 s cycle; vol fade-in
+A 90000 220 ~-100:100:6000 30 0 6 0 5         # ch6 pink settled
+A 0 265 0 >0 0 1 275 0 50 4 0 3 0.3:53000     # ch1 PRIMARY binaural 265/R275 => 10 Hz; beat jitter 0.3 Hz/53 s
+S 3000 default 65 "Lie back, body heavy and still. We begin at ten hertz, letting the body settle toward sleep while the mind stays awake."
+15000 10 50 22 255 160 32 9 1 0 3             # inner: 22% reached
+15000 10 50 22 255 80 0 6 1 180 3             # outer
+
+# --- Descent (beat 10->4) ---
+A 120000 >265 0 90 0 1 275 0 50 4 0 3 0.3:53000  # carrier 265->271 (beat 10->4)
+120000 >10 50 22 255 160 32 9 1 0 3           # inner: flicker 10->4
+120000 >10 50 22 255 80 0 6 1 180 3           # outer
+S 120000 default 65 "Down and inward. The body sleeps; you remain aware. Approaching the threshold."
+
+# --- Threshold hold (4 Hz, breathing, full audio stack) ---
+A 720000 271 0 100 0 1 275 0 50 4 0 3 0.3:53000   # ch1 at 4 Hz, fuller vol
+720000 4 50 ~14:26:12000 255 160 32 9 1 0 3   # inner: 4 Hz sine, 0.1 Hz brightness breath
+720000 4 50 ~14:26:12000 255 80 0 6 1 180 3   # outer
+A 720000 200 0 >0 0 2 204 0                   # ch2 SEPTON 200/204 => 4 Hz; fade in
+A 780000 200 0 50 0 2 204 0                   # ch2 settled
+A 720000 208 0 >0 0 3 212 0                   # ch3 SEPTON 208/212 => 4 Hz; fade in
+A 780000 208 0 44 0 3 212 0                   # ch3 settled
+A 720000 250 0 >0 0 4 254 7                   # ch4 EEG-CONTOUR carrier (wave 7) 250/254 => 4 Hz; fade in
+A 780000 250 0 40 0 4 254 7                   # ch4 settled
+A 720000 137 0 >0 4 5 0 0 40 3 0 5            # ch5 TRAPEZOID iso drum 137 Hz, 4 Hz gate, 40% duty, 5 ms edge; fade in
+A 780000 137 0 60 4 5 0 0 40 3 0 5            # ch5 settled
+S 720000 default 65 "You are at the threshold now. Rest in the hum, poised and clear. Let a smooth intention to lift and float form gently."
+S 1200000 default 65 "Steady here. If sensations of movement or floating arise, stay calm and simply observe them."
+
+# --- Return (beat 4->10) ---
+A 1680000 200 0 >50 0 2 204 0                 # ch2 fade
+A 1860000 200 0 0 0 2 204 0
+A 1680000 208 0 >44 0 3 212 0                 # ch3 fade
+A 1860000 208 0 0 0 3 212 0
+A 1680000 250 0 >40 0 4 254 7                 # ch4 fade
+A 1860000 250 0 0 0 4 254 7
+A 1680000 137 0 >60 4 5 0 0 40 3 0 5          # ch5 drum fade
+A 1860000 137 0 0 4 5 0 0 40 3 0 5
+A 1680000 >271 0 100 0 1 275 0 50 4 0 3 0.3:53000  # ch1 carrier 271->265 (beat 4->10)
+1680000 >4 50 22 255 160 32 9 1 0 3           # inner: 4->10 (drop breath LFO)
+1680000 >4 50 22 255 80 0 6 1 180 3           # outer
+S 1680000 default 65 "Gently returning. Let the body wake with you, carrying the stillness of the threshold home."
+
+# --- Soft close ---
+A 1860000 265 0 >100 0 1 275 0 50 4 0 3 0.3:53000  # beat alpha 10; vol fade
+1860000 10 50 >22 255 160 32 9 1 0 3          # inner: brightness fade
+1860000 10 50 >22 255 80 0 6 1 180 3          # outer
+A 1860000 220 ~-100:100:6000 >30 0 6 0 5      # phased pink fade
+A 1920000 265 0 0 0 1 275 0 50 4 0 3 0.3:53000    # ch1 vol 0
+1920000 10 50 0 255 160 32 9 1 0 3            # inner off
+1920000 10 50 0 255 80 0 6 1 180 3            # outer off
+A 1920000 220 ~-100:100:6000 0 0 6 0 5        # pink vol 0

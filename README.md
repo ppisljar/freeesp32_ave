@@ -199,6 +199,18 @@ If it can't — no SSID set, or the join fails — it falls back to a **SoftAP**
 `ESP32-AVE-Setup` (WPA2 password `entrain123`); connect to it and browse to
 `http://192.168.4.1` to configure WiFi and other settings.
 
+**Finding the device (mDNS):** in station mode the router hands the device a DHCP
+address you can't predict, so it also advertises itself over mDNS. Browse to
+`http://esp32-ave.local` and you reach it regardless of the IP — this works in both
+station and SoftAP mode. The hostname (the part before `.local`) is configurable in
+Settings → WiFi → *mDNS hostname* (letters/digits/hyphens; default `esp32-ave`).
+
+> **Tip — phone hotspot in the field:** enable your phone's hotspot (on iPhone 12+
+> turn on *Maximize Compatibility* so it runs 2.4 GHz — the ESP32 is 2.4 GHz only),
+> set that SSID/password in Settings, and the device joins it. You can then reach
+> `http://esp32-ave.local` from the same phone, *and* the device gets internet
+> through the phone (so TTS / community presets / `http://` background audio all work).
+
 **Force SoftAP setup mode:** hold the **button during startup** (power-on / reset)
 and the device boots straight into SoftAP, skipping the station join — handy when
 the configured network is unreachable or you need to change credentials. The

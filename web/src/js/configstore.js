@@ -57,6 +57,24 @@ function saveToSource(src, name, body) {
     catch (e) { return Promise.reject(new Error('localStorage full: ' + e)); }
 }
 
+// Fetch the text of EVERY known config (device SPIFFS + browser-local), for
+// bulk operations like the TTS speech preload. Best-effort: a source that won't
+// list, or an individual config that won't load, is skipped rather than failing
+// the whole batch. Returns [{ src, name, text }].
+export async function allConfigTexts() {
+    const out = [];
+    const sources = [['spiffs', listSpiffs], ['local', listLocal]];
+    for (const [src, lister] of sources) {
+        let names = [];
+        try { names = await lister(); } catch (e) { names = []; }
+        for (const name of names) {
+            try { out.push({ src, name, text: await loadFromSource(src, name) }); }
+            catch (e) { /* skip unreadable config */ }
+        }
+    }
+    return out;
+}
+
 // ---- dropdown ------------------------------------------------------------
 export function refreshConfigList() {
     const dd = document.getElementById('ledcDropdown');
@@ -71,11 +89,16 @@ export function refreshConfigList() {
             const group = document.createElement('optgroup');
             group.label = SRC_LABEL[src];
             if (res.status === 'fulfilled' && res.value) {
-                lastLists[src] = res.value;
-                if (res.value.length === 0) {
+                // Sort by name within each source group (natural + case-insensitive)
+                // — the device (spiffs) list arrives in filesystem order otherwise,
+                // so base + _RGB variants would appear scrambled. Same ordering the
+                // Generator picker uses (fetchConfigGroups).
+                const names = res.value.slice().sort(byConfigName);
+                lastLists[src] = names;
+                if (names.length === 0) {
                     const o = document.createElement('option'); o.textContent = '(none)'; o.disabled = true; group.appendChild(o);
                 } else {
-                    res.value.forEach(name => {
+                    names.forEach(name => {
                         const o = document.createElement('option');
                         o.value = src + ':' + name;
                         o.textContent = name;

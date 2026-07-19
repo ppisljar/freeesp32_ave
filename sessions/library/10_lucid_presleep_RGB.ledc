@@ -1,0 +1,47 @@
+# 10_lucid_presleep_RGB.ledc — Lucid Pre-Sleep (MILD/WILD), RGB inner/outer build
+# RGB variant of 10_lucid_presleep. Audio + speech IDENTICAL (binaural glide + AUDIO-
+# ONLY 40 Hz gamma cue). Eyes-closed session, so warm >=620 nm only: inner ring warm
+# amber (255,160,32), outer ring deep amber (255,80,0), 180 antiphase, SINE gate — a
+# gentle warm radial "dream field". All LED flicker <=10 Hz; the 40 Hz lucidity cue is
+# AUDIO ISOCHRONIC ONLY (never strobe). Brightness <=18%, Soft Off to 0. See base header.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# ---- LED: warm radial, 10->8->6->5 Hz (1:1 beat), breathing, Soft Off ----
+0       10 50 >0 255 160 32 9 1 0     # inner amber: 10 Hz sine, fade-in
+0       10 50 >0 255 80 0 6 1 180   # outer deep-red: antiphase
+15000   10 50 18 255 160 32 9 1 0     # inner: 18% reached
+15000   10 50 18 255 80 0 6 1 180   # outer
+30000   10 50 ~8:18:10000 255 160 32 9 1 0    # inner: breathing 8<->18%
+30000   10 50 ~8:18:10000 255 80 0 6 1 180  # outer
+60000   >10 50 ~8:18:10000 255 160 32 9 1 0   # inner: flicker descent 10->8, breathing
+60000   >10 50 ~8:18:10000 255 80 0 6 1 180  # outer
+360000  >8 50 >18 255 160 32 9 1 0    # inner: 8 Hz; end breathing, bright 18->10
+360000  >8 50 >18 255 80 0 6 1 180  # outer
+960000  >6 50 >10 255 160 32 9 1 0    # inner: 6 Hz; bright 10->8 (theta hold, very dim)
+960000  >6 50 >10 255 80 0 6 1 180  # outer
+1440000 5 50 >8 255 160 32 9 1 0      # inner: 5 Hz; Soft Off 8->0
+1440000 5 50 >8 255 80 0 6 1 180    # outer
+1680000 5 50 0 255 160 32 9 1 0       # inner off
+1680000 5 50 0 255 80 0 6 1 180     # outer off
+
+# ---- ch1: binaural driver — carrier glide, freq_r FIXED 210 ----
+A 0       200 0 >0 0 1 210 0           # carrier 200 => 10 Hz beat; vol fade-in
+A 60000   >200 0 90 0 1 210 0          # vol 45; carrier glide 200->202
+A 360000  >202 0 90 0 1 210 0          # beat 8 Hz; carrier 202->204
+A 960000  >204 0 90 0 1 210 0          # beat 6 Hz; carrier 204->205
+A 1440000 205 0 >90 0 1 210 0          # beat 5 Hz; Soft Off vol 45->0
+A 1680000 205 0 0 0 1 210 0            # silent
+
+# ---- ch2: 40 Hz gamma lucidity cue — AUDIO ISOCHRONIC ONLY ----
+A 960000  250 0 >0 40 2                # carrier 250, isochronic mod 40 Hz; vol fade-in
+A 1020000 250 0 30 40 2                # gamma cue steady, low vol
+A 1440000 250 0 >30 40 2               # Soft Off gamma -> 0
+A 1680000 250 0 0 40 2                 # silent
+
+# ---- Speech markers ----
+S 3000 default 65 "Settling into alpha. Let your body grow still while your awareness stays softly awake."
+S 360000 default 65 "Drifting down toward theta, the dream gateway."
+S 960000 default 65 "Resting in theta now. Hold one intention: tonight I will know that I am dreaming."
+S 1200000 default 65 "Let the images drift and form. Watch them, aware, as the body sleeps."
+S 1440000 default 65 "Let go now, and dream aware."

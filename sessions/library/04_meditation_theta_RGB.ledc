@@ -1,0 +1,53 @@
+# 04_meditation_theta_RGB.ledc — Theta Dive, RGB inner/outer build
+# RGB variant of 04_meditation_theta. Audio + speech IDENTICAL (dual-binaural L6.0 /
+# R6.3 deepening offset). LEDs on inner ring (mask 9, violet 90,0,200) + outer ring
+# (mask 6, calm blue 32,96,255), 180 antiphase, SINE gate, with the breathing LFO on
+# brightness. A violet core with a blue halo. All rates <=10 Hz; brightness <=30%.
+# See base header for safety.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# --- Induction (beat 10 Hz): vol + light fade in ---
+0 10 50 >0 90 0 200 9 1 0        # inner violet: 10 Hz sine, bright 0->20 over 15 s
+0 10 50 >0 32 96 255 6 1 180     # outer blue: antiphase
+A 0 250 -30 >0 0 1 260 0          # ch1 (left)  carrier 250 / R260 = 10 Hz; vol 0->50
+A 0 250 30 >0 0 2 260 0           # ch2 (right) carrier 250 / R260 = 10 Hz; vol 0->50
+S 3000 default 65 "Beginning at ten hertz. Let the alpha rhythm settle you into a calm, easy stillness."
+15000 10 50 20 90 0 200 9 1 0    # inner: bright 20% (ramp-in done)
+15000 10 50 20 32 96 255 6 1 180 # outer
+30000 10 50 ~10:30:10000 90 0 200 9 1 0     # inner: breathing LFO 10<->30%
+30000 10 50 ~10:30:10000 32 96 255 6 1 180  # outer
+A 45000 250 -30 100 0 1 260 0      # ch1 vol settled 50
+A 45000 250 30 100 0 2 260 0       # ch2 vol settled 50
+
+# --- Descent to theta (beat 10->6, 0.5 Hz/min) ---
+60000 >10 50 ~10:30:10000 90 0 200 9 1 0     # inner: flicker 10->6, breathing
+60000 >10 50 ~10:30:10000 32 96 255 6 1 180  # outer
+A 60000 >250 -30 100 0 1 260 0     # ch1 carrier 250->254 => beat 10->6.0
+A 60000 >250 30 100 0 2 260 0      # ch2 carrier 250->253.7 => beat 10->6.3
+S 60000 default 65 "Drifting down now, descending gently toward theta."
+
+# --- Theta hold (6-min flat dwell, L6.0 / R6.3) ---
+540000 6 50 ~10:30:10000 60 0 180 9 1 0     # inner: deep violet, 6 Hz, breathing
+540000 6 50 ~10:30:10000 32 64 200 6 1 180  # outer: deep blue
+A 540000 254 -30 100 0 1 260 0     # ch1 beat 6.0 Hz held flat
+A 540000 253.7 30 100 0 2 260 0    # ch2 beat 6.3 Hz held (0.3 Hz deepening offset)
+S 540000 default 65 "You have reached theta, six hertz. Rest here, quiet, open and aware."
+
+# --- Return to alpha (beat 6->10): emerge calm-alert ---
+900000 >6 50 ~10:30:10000 60 0 180 9 1 0     # inner: flicker 6->10
+900000 >6 50 ~10:30:10000 32 64 200 6 1 180  # outer
+A 900000 >254 -30 100 0 1 260 0    # ch1 beat 6.0->10
+A 900000 >253.7 30 100 0 2 260 0   # ch2 beat 6.3->10
+S 900000 default 65 "Slowly rising now, returning toward alpha, clear and refreshed."
+
+# --- Soft close: vol + brightness fade to 0 over 60 s ---
+1140000 10 50 >20 90 0 200 9 1 0     # inner: back to violet; bright 20->0
+1140000 10 50 >20 32 96 255 6 1 180  # outer
+A 1140000 250 -30 >100 0 1 260 0   # ch1 beat alpha 10 Hz; vol 50->0
+A 1140000 250 30 >100 0 2 260 0    # ch2 beat alpha 10 Hz; vol 50->0
+S 1140000 default 65 "Back at ten hertz. Gently return to the room, calm and alert."
+1200000 10 50 0 90 0 200 9 1 0     # inner end
+1200000 10 50 0 32 96 255 6 1 180  # outer end
+A 1200000 250 -30 0 0 1 260 0     # ch1 vol 0
+A 1200000 250 30 0 0 2 260 0      # ch2 vol 0

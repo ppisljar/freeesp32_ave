@@ -21,7 +21,7 @@
 
 static const char *TAG = "settings";
 
-#define SETTINGS_VERSION   ((uint16_t)5)   // v5: button_gpio added
+#define SETTINGS_VERSION   ((uint16_t)6)   // v6: mdns_hostname added
 #define SETTINGS_NS        "devcfg"
 #define SETTINGS_KEY       "blob"
 
@@ -236,6 +236,9 @@ static void settings_seed_defaults(device_settings_t *s)
     // ---- WiFi credentials (Phase 2): seed from the former hardcoded defaults.
     strlcpy(s->wifi_ssid, DEFAULT_WIFI_SSID, sizeof(s->wifi_ssid));
     strlcpy(s->wifi_password, DEFAULT_WIFI_PASSWORD, sizeof(s->wifi_password));
+
+    // ---- mDNS hostname: reachable at http://<hostname>.local on any network.
+    strlcpy(s->mdns_hostname, "esp32-ave", sizeof(s->mdns_hostname));
 
     // ---- Reports: default to browser localStorage (no device flash writes).
     strlcpy(s->report_storage, "local", sizeof(s->report_storage));
@@ -464,7 +467,10 @@ esp_err_t settings_apply_json(const char *body, int len)
         if (v > 1.0f) v = 1.0f;
         cur.default_volume = v;
     }
-    apply_int(root, "audio_max_volume", &cur.audio_max_volume, 0, 100);
+    // Up to 200%: >100 is a genuine gain boost (the mix is divided by
+    // NUM_AUDIO_CHANNELS=16 for headroom, so output is quiet on some headphones).
+    // Peaks past full-scale are caught by the ±1.0 clamp in audio_test.c.
+    apply_int(root, "audio_max_volume", &cur.audio_max_volume, 0, 200);
     apply_pin(root, "button_gpio", &cur.button_gpio);
 
     apply_str(root, "generator_url", cur.generator_url, sizeof(cur.generator_url));
@@ -476,6 +482,27 @@ esp_err_t settings_apply_json(const char *body, int len)
     const cJSON *wp = cJSON_GetObjectItemCaseSensitive(root, "wifi_password");
     if (cJSON_IsString(wp) && wp->valuestring && wp->valuestring[0] != '\0') {
         strlcpy(cur.wifi_password, wp->valuestring, sizeof(cur.wifi_password));
+    }
+
+    // mDNS hostname: accept then sanitize to a valid DNS label ([a-z0-9-],
+    // lowercased, no leading/trailing '-'); empty result falls back to the
+    // default so mdns_hostname_set() never gets a broken name.
+    const cJSON *mh = cJSON_GetObjectItemCaseSensitive(root, "mdns_hostname");
+    if (cJSON_IsString(mh) && mh->valuestring) {
+        char clean[sizeof(cur.mdns_hostname)];
+        size_t o = 0;
+        for (const char *p = mh->valuestring; *p && o < sizeof(clean) - 1; p++) {
+            char c = *p;
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                (c == '-' && o > 0)) {      // no leading hyphen
+                clean[o++] = c;
+            }
+        }
+        while (o > 0 && clean[o - 1] == '-') o--;   // trim trailing hyphens
+        clean[o] = '\0';
+        if (o == 0) strlcpy(clean, "esp32-ave", sizeof(clean));
+        strlcpy(cur.mdns_hostname, clean, sizeof(cur.mdns_hostname));
     }
 
     // Reports: only accept the known destinations.
@@ -567,6 +594,8 @@ int settings_to_json(char *buf, int cap)
     // UI whether a password is set so it can show "unchanged" vs "not set".
     cJSON_AddStringToObject(root, "wifi_ssid", s->wifi_ssid);
     cJSON_AddBoolToObject(root, "wifi_password_set", s->wifi_password[0] != '\0');
+
+    cJSON_AddStringToObject(root, "mdns_hostname", s->mdns_hostname);
 
     cJSON_AddStringToObject(root, "report_storage", s->report_storage);
 

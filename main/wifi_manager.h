@@ -31,6 +31,12 @@ typedef enum {
 #define WIFI_AP_PASSWORD "entrain123"   /* WPA2, >= 8 chars */
 #define WIFI_AP_IP_STR   "192.168.4.1"
 
+/* mDNS: the device advertises itself so it is reachable at a fixed URL on any
+ * network (STA or SoftAP) without knowing its DHCP IP — browse to
+ * http://esp32-ave.local. WIFI_MDNS_HOSTNAME is the label before ".local". */
+#define WIFI_MDNS_HOSTNAME "esp32-ave"
+#define WIFI_MDNS_INSTANCE "ESP32 AVE"
+
 /**
  * @brief Initialize WiFi manager
  *
@@ -56,6 +62,17 @@ esp_err_t wifi_manager_connect(const char* ssid, const char* password);
  * @return esp_err_t ESP_OK on success
  */
 esp_err_t wifi_manager_start_ap(void);
+
+/**
+ * @brief Start the mDNS responder so the device answers to
+ *        http://WIFI_MDNS_HOSTNAME.local (e.g. http://esp32-ave.local) and
+ *        advertises an _http._tcp service on port 80. Call once after the
+ *        network is up; works in both STA and SoftAP modes. Idempotent-safe:
+ *        logs and returns the error if mdns_init() fails, without aborting.
+ *
+ * @return esp_err_t ESP_OK on success
+ */
+esp_err_t wifi_manager_start_mdns(void);
 
 /**
  * @brief Current run mode (STA joined a network, or SoftAP fallback active).

@@ -15,7 +15,12 @@ const DB_NAME = 'ave-bg';
 const DB_VERSION = 2;
 const STORE = 'bgclips';
 const CACHE = 'ttsphrases';          // hidden LRU cache of synthesized speech
-const CACHE_MAX = 200;               // evict oldest beyond this many phrases
+const CACHE_MAX = 500;               // evict oldest beyond this many phrases.
+                                     // Sized so the whole shipped session
+                                     // library (~180 unique phrases) can be
+                                     // preloaded (Settings → "Preload speech")
+                                     // with headroom for ad-hoc use, so offline
+                                     // bounces on the road don't get evicted.
 
 let _dbPromise = null;
 

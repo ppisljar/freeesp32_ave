@@ -1,0 +1,41 @@
+# 06_energize_RGB.ledc — Energize / Wake-Up, RGB inner/outer build
+# RGB variant of 06_energize. Audio + speech IDENTICAL — AUDIO carries the 10->20 Hz
+# beta climb. LED on inner cool-white core (mask 9, 200,220,255) + outer calm-blue halo
+# (mask 6, 32,96,255): a gentle 10 Hz flicker (antiphase, invisible) during induction,
+# then STEADY (freq 0) and brightening the rest of the way — NEVER flickers in the
+# 15-25 Hz band. Ends ALERT (lamp on, bright). See base header for safety.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# --- Induction: gentle 10 Hz flicker, dim, vol fade-in ---
+0     10 40 >0 200 220 255 9 1 0    # inner cool-white: 10 Hz sine, bright fade-in
+0     10 40 >0 32 96 255 6 1 180    # outer blue: antiphase
+12000 10 40 25 200 220 255 9 1 0    # inner reaches 25% (12 s ramp-in)
+12000 10 40 25 32 96 255 6 1 180    # outer
+A 0     420 0 >0 10 1               # ch1 isochronic 420 Hz, vol fade-in, beat 10 Hz
+S 3000 default 65 "Starting at ten hertz, in alpha. Take a breath and let's begin to wake up."
+A 40000 420 0 55 10 1              # vol fade-in complete, beat 10 Hz
+
+# --- Deepening: LED goes STEADY (freq 0); beat climbs 10->18 via AUDIO ---
+180000 0 100 >25 200 220 255 9      # inner: flicker OFF (steady); bright 25->70
+180000 0 100 >25 32 96 255 6        # outer steady
+A 180000 420 0 55 >10 1             # beat ramp 10 -> 18 (audio, ~1.1 Hz/min)
+S 180000 default 65 "Climbing now, rising up through the bands toward beta. Feel your energy building."
+
+# --- Hold: beta 18-20 Hz (audio-only); bright STEADY cool white ---
+600000 0 100 >70 200 220 255 9      # inner: bright 70->80
+600000 0 100 >70 32 96 255 6        # outer
+A 600000 420 0 65 18 1              # beat = 18 Hz (beta hold, audio-carried)
+S 600000 default 65 "You have reached beta, eighteen hertz. Alert and awake, fully switched on."
+840000 0 100 80 200 220 255 9       # inner: bright peaks 80% (steady)
+840000 0 100 80 32 96 255 6         # outer
+A 840000 420 0 65 >18 1             # beat ramp 18 -> 20
+A 960000 420 0 65 20 1             # beat = 20 Hz plateau
+S 960000 default 65 "Peak energy now at twenty hertz. Bright, sharp, and ready."
+
+# --- Exit + ALERT end (no fade) ---
+A 990000 420 0 65 >20 1             # beat ramp 20 -> 16
+1080000 0 100 80 200 220 255 9      # inner: lamp stays ON, bright steady cool white
+1080000 0 100 80 32 96 255 6        # outer
+A 1080000 420 0 60 16 1             # ends ON, beat parked at 16 Hz (low-beta, alert)
+S 1080000 default 65 "Settling to sixteen hertz, awake and alert. Go take on your day."

@@ -9,6 +9,7 @@
 // capability-driven: options not compiled into this firmware are greyed out.
 import { showMessage } from './util.js';
 import { getEngine, setEngine } from './gen/tts.js';
+import { preloadAllSpeech } from './gen/ttspreload.js';
 import { isSafetyAccepted, resetSafetyAccepted } from './safety.js';
 
 // Refresh the "Safety notice" status line + reset-button label to reflect
@@ -82,8 +83,8 @@ const GROUPS = [
               help: 'GPIO that enables the external power amplifier (driven high on start). -1 = no amp control.' },
             { key: 'default_volume', label: 'Default volume (0-1)', type: 'vol',
               help: 'Output volume applied at startup, from 0.0 (mute) to 1.0 (full).' },
-            { key: 'audio_max_volume', label: 'Maximum volume (0-100)', type: 'num', note: 'applies immediately',
-              help: 'Master output cap as a percent. Scales ALL audio uniformly — e.g. set to 10 and a config/live volume of 80 plays at 80% × 10% = 8%. 100 = no attenuation. Takes effect right away (no reboot).' },
+            { key: 'audio_max_volume', label: 'Maximum volume (0-200)', type: 'num', note: 'applies immediately',
+              help: 'Master output gain as a percent. Scales ALL audio uniformly — e.g. set to 10 and a config/live volume of 80 plays at 80% × 10% = 8%. 100 = no attenuation. Above 100 BOOSTS (up to 200) — useful on quiet headphones since the mix carries 16-channel headroom, but loud content may clip. Takes effect right away (no reboot).' },
         ],
     },
     {
@@ -132,6 +133,8 @@ const GROUPS = [
               help: "Name of the WiFi network to join. If empty or unreachable, the device starts its own 'ESP32-AVE-Setup' access point (192.168.4.1) so you can reach this page." },
             { key: 'wifi_password', label: 'WiFi password', type: 'password', note: 'reboot to apply; leave blank to keep current',
               help: 'Password for the WiFi network. The stored password is never shown; leave this blank to keep the current one.' },
+            { key: 'mdns_hostname', label: 'mDNS hostname', type: 'text', note: 'reboot to apply',
+              help: "Name the device answers to on the local network: browse to http://<hostname>.local (default esp32-ave → http://esp32-ave.local). Works in both WiFi and AP mode, so you don't need to know the IP. Only letters, digits and hyphens; anything else is stripped." },
         ],
     },
     {
@@ -362,6 +365,32 @@ function onImportFile(ev) {
     input.value = '';
 }
 
+// Preload TTS for every session's S rows into the browser cache so speech works
+// offline later. Disables the button while running and streams progress.
+async function preloadSpeech() {
+    const btn = document.getElementById('btnTtsPreload');
+    const out = document.getElementById('ttsPreloadStatus');
+    const say = (msg, color) => { if (out) { out.textContent = msg; out.style.color = color || '#888'; } };
+    if (btn) btn.disabled = true;
+    say('Scanning sessions…');
+    try {
+        const r = await preloadAllSpeech(({ done, total, ok, failed, cached }) => {
+            say(`Preloading speech… ${done}/${total} (${ok} new, ${cached} cached${failed ? ', ' + failed + ' failed' : ''})`);
+        });
+        if (r.total === 0) {
+            say('No speech (S) lines found in any session.', '#888');
+        } else if (r.failed === 0) {
+            say(`✓ Done — ${r.total} phrases ready offline (${r.ok} generated, ${r.cached} already cached) for the "${r.engine}" engine.`, '#28a745');
+        } else {
+            say(`Finished with ${r.failed} failure(s): ${r.ok} generated, ${r.cached} cached, ${r.failed} failed (${r.total} total). Check your connection / engine and run again.`, '#dc3545');
+        }
+    } catch (e) {
+        say('Preload failed: ' + ((e && e.message) || e), '#dc3545');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 function bind(id, fn) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', fn);
@@ -374,6 +403,7 @@ export function settingsInit() {
     bind('btnSettingsReload', loadSettings);
     bind('btnSettingsExport', exportSettings);
     bind('btnSettingsImport', importSettings);
+    bind('btnTtsPreload', preloadSpeech);
     const fileEl = document.getElementById('settingsImportFile');
     if (fileEl) fileEl.addEventListener('change', onImportFile);
 

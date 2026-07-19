@@ -1,0 +1,43 @@
+# 01_sleep_onset_RGB.ledc — Sleep Descent, RGB inner/outer build
+# RGB variant of 01_sleep_onset. Audio + speech IDENTICAL; LEDs re-authored for the
+# concentric inner/outer RGB mask (inner ring = mask 9, outer ring = mask 6).
+#
+# VISUAL: warm radial sleep field — inner ring warm amber (255,160,32), outer ring
+#   deep amber (255,80,0), run 180 ANTIPHASE with a SINE gate. Mean luminance stays
+#   ~flat (invisible-flicker comfort) while the retina still gets the beat, and the
+#   inner<->outer alternation is a slow warm radial breath. Both colours >=620 nm so
+#   they pass the closed eyelid. 10->2 Hz (all <=10 Hz, never the 15-25 Hz band),
+#   brightness capped <=30%, ramps in 10 s, Soft Off to 0. See base header for safety.
+#
+# LED: time freq duty bright R G B mask [env phase]   (env 1=sine)
+
+# --- Induction ~10 Hz, warm radial, brightness ramp-in over 10 s ---
+0       >10 50 >0  255 160 32 9  1 0     # inner amber: 10 Hz sine, bright 0-> (10 s ramp-in)
+0       >10 50 >0  255 80 0 6  1 180   # outer deep-red: antiphase radial
+10000   10 50 ~25:30:10000 255 160 32 9 1 0    # inner: hold 10 Hz, breathing LFO 25<->30%
+10000   10 50 ~25:30:10000 255 80 0 6 1 180  # outer: breathing (antiphase)
+A 0     240 0 >0 0 1 250 0                # ch1 binaural: carrier 240 / R250 = 10 Hz beat; vol fade-in
+A 0     0 0 >0 0 3 0 5                    # ch3 pink-noise bed (wave 5); vol fade-in
+S 3000 default 65 "Beginning at ten hertz, in alpha. Let your breath slow and your body grow heavy."
+A 30000 0 0 16 0 3 0 5                    # ch3 pink-noise bed steady at 16
+A 45000 240 0 55 0 1 250 0                # ch1 vol 55, beat holds 10 Hz
+
+# --- Deepening: glide 10->2 Hz over 18 min (~0.44 Hz/min); brightness descends ---
+120000  >10 50 >25 255 160 32 9 1 0      # inner: freq 10->2, bright 25->8
+120000  >10 50 >25 255 80 0 6 1 180    # outer: antiphase
+A 120000 >240 0 55 0 1 250 0              # carrier 240->248 => beat 10->2 over 18 min
+S 120000 default 65 "Drifting down now. Sinking through theta toward deep, slow delta."
+
+# --- Soft Off begins at 2 Hz: brightness + volume fade to 0 together. No wake-up. ---
+1200000 >2 50 >8 255 160 32 9 1 0        # inner: 2 Hz, bright 8->0
+1200000 >2 50 >8 255 80 0 6 1 180      # outer: 2 Hz, bright 8->0
+A 1200000 248 0 *55 0 1 250 0            # beat 2 Hz held; quad vol fade 55->0
+A 1200000 0 0 *16 0 3 0 5                # pink-noise quad fade 16->0
+S 1200000 default 65 "Falling into deep delta, two hertz. The sound and light are fading. Sleep now."
+
+# --- End: dark + silent, no loop ---
+1500000 2 50 0 255 160 32 9 1 0          # inner off
+1500000 2 50 0 255 80 0 6 1 180        # outer off
+A 1500000 248 0 0 0 1 250 0              # ch1 beat 2 Hz, vol 0
+A 1500000 0 0 0 0 3 0 5                  # ch3 pink-noise vol 0
+S 1500000 default 65 "Two hertz, deep sleep. Rest."

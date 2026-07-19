@@ -1,0 +1,60 @@
+# 20_gateway_focus10_RGB.ledc — Gateway Focus 10, RGB inner/outer build
+# RGB variant of 20_gateway_focus10. Audio + speech IDENTICAL (delta bed + septon theta
+# stack + phased pink bed; HEADPHONES REQUIRED). The LED is a dim violet 4 Hz flicker the
+# whole session; on this build it is inner violet (mask 9, 90,0,200) + outer calm-blue
+# (mask 6, 32,96,255), 180 antiphase, SINE gate. Flicker fixed 4 Hz; brightness <=25%.
+# See base header for the full method/safety.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# --- Prep / fade-in: delta bed + phased pink bed + LED fade in ---
+0 4 50 >0 90 0 200 9 1 0        # inner violet: 4 Hz sine, fade-in
+0 4 50 >0 32 96 255 6 1 180     # outer blue: antiphase
+A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta bed; vol fades 0->30; sine
+A 0 200 ~-100:100:6000 >0 0 7 0 5   # ch7 phased pink bed; pan L<->R 6 s LFO; vol 0->8; wave 5
+S 2000 default 65 "Settle in. Let the breath slow and the body grow heavy, softening from head to toe."
+20000 4 50 20 90 0 200 9 1 0    # inner: 20% reached
+20000 4 50 20 32 96 255 6 1 180 # outer
+30000 4 50 ~12:22:10000 90 0 200 9 1 0   # inner: breathing 12<->22%
+30000 4 50 ~12:22:10000 32 96 255 6 1 180 # outer
+A 60000 100 0 60 0 1 101.5 7  # ch1 delta holds vol 30
+A 60000 200 ~-100:100:6000 16 0 7 0 5   # ch7 pink bed holds vol 8; pan LFO continues
+
+# --- Focus-10 establishment: bring in the septon theta stack ---
+S 180000 default 65 "Entering Focus Ten. The body drifts toward sleep while the mind stays clear, awake, and watchful."
+A 180000 200 0 >0 0 2 204 7  # ch2 septon 200->204; vol 0->22
+A 180000 204 0 >0 0 5 208 7  # ch5 septon 204->208; vol 0->22
+A 180000 208 0 >0 0 6 212 7  # ch6 septon 208->212; vol 0->22
+A 180000 250 0 >0 0 3 254 7  # ch3 250[4.0] theta; vol 0->30
+A 180000 300 0 >0 0 4 304 7  # ch4 300[4.0] theta; vol 0->30
+A 225000 200 0 44 0 2 204 7  # ch2 septon holds 22
+A 225000 204 0 44 0 5 208 7  # ch5 septon holds 22
+A 225000 208 0 44 0 6 212 7  # ch6 septon holds 22
+A 225000 250 0 60 0 3 254 7  # ch3 theta holds 30
+A 225000 300 0 60 0 4 304 7  # ch4 theta holds 30
+
+# --- Long steady hold: full F10 stack, no changes ---
+S 480000 default 65 "Mind awake, body asleep. Rest in this open, effortless stillness."
+S 960000 default 65 "Nothing to do here. Simply notice, and let awareness float, quiet and wide."
+
+# --- Gentle return + soft fade: fade the stack, bed, and light to zero ---
+S 1560000 default 65 "Beginning to return now. Draw your awareness gently back toward the body."
+A 1560000 100 0 >60 0 1 101.5 7  # ch1 delta vol 30->0
+A 1560000 200 0 >44 0 2 204 7  # ch2 septon vol 22->0
+A 1560000 204 0 >44 0 5 208 7  # ch5 septon vol 22->0
+A 1560000 208 0 >44 0 6 212 7  # ch6 septon vol 22->0
+A 1560000 250 0 >60 0 3 254 7  # ch3 theta vol 30->0
+A 1560000 300 0 >60 0 4 304 7  # ch4 theta vol 30->0
+A 1560000 200 ~-100:100:6000 >16 0 7 0 5   # ch7 pink bed vol 8->0
+1560000 4 50 >20 90 0 200 9 1 0     # inner: brightness 20->0
+1560000 4 50 >20 32 96 255 6 1 180  # outer
+S 1770000 default 65 "Coming fully back to the room, calm, clear, and rested."
+A 1800000 100 0 0 0 1 101.5 7  # end: ch1 volume 0
+A 1800000 200 0 0 0 2 204 7  # end: ch2 volume 0
+A 1800000 204 0 0 0 5 208 7  # end: ch5 volume 0
+A 1800000 208 0 0 0 6 212 7  # end: ch6 volume 0
+A 1800000 250 0 0 0 3 254 7  # end: ch3 volume 0
+A 1800000 300 0 0 0 4 304 7  # end: ch4 volume 0
+A 1800000 200 ~-100:100:6000 0 0 7 0 5   # end: ch7 pink bed volume 0
+1800000 4 50 0 90 0 200 9 1 0       # inner off
+1800000 4 50 0 32 96 255 6 1 180    # outer off

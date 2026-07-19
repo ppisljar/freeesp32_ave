@@ -1,0 +1,46 @@
+# 12_astral_focus10_RGB.ledc — Astral Focus 10, RGB inner/outer build
+# RGB variant of 12_astral_focus10. Audio + speech IDENTICAL (binaural OBE-launch arc).
+# OBE wants near-darkness, so NO flicker (freq 0 = steady) and very dim warm amber. On
+# this build: inner amber ember (mask 9, 255,160,32) + outer deep-red ember (mask 6,
+# 255,24,16), steady, with a slow breathing brightness LFO; the deep hold dims to a
+# near-dark ~5%. Brightness <=15%. See base header for safety.
+#
+# LED: time freq duty bright R G B mask   (freq 0 = STEADY, no flicker)
+
+# --- Induction: alpha 10 Hz; vol + light fade in ---
+0 0 50 >0 255 160 32 9      # inner amber ember: steady, bright fade-in
+0 0 50 >0 255 24  16 6      # outer deep-red ember: steady
+A 0 136 0 >0 0 1 146 0       # ch1 binaural: carrier 136 / R146 => 10 Hz beat; vol fade-in
+S 3000 default 65 "Relax completely. Let the body grow heavy and still, and simply rest."
+15000 0 50 15 255 160 32 9  # inner: 15% reached
+15000 0 50 15 255 24  16 6  # outer
+30000 0 50 ~6:12:12000 255 160 32 9   # inner: breathing 6<->12%
+30000 0 50 ~6:12:12000 255 24  16 6   # outer
+A 60000 136 0 80 0 1 146 0   # vol 40; carrier held 136 => alpha 10 Hz
+
+# --- Descent to theta (beat 10->5) ---
+A 360000 >136 0 80 0 1 146 0  # carrier 136->141 => beat 10->5 over 6 min
+360000 0 50 ~4:10:12000 255 160 32 9  # inner: dimmer breathing 4<->10%
+360000 0 50 ~4:10:12000 255 24  16 6  # outer
+S 360000 default 65 "Let go now, drifting downward, deeper and deeper with every breath."
+
+# --- Deep theta plateau: long flat hold (beat ~5 Hz) ---
+A 720000 141 0 80 0 1 146 0   # carrier 141 => beat 5 Hz held flat; "mind awake, body asleep"
+720000 0 50 5 255 160 32 9    # inner: near-dark ember ~5%
+720000 0 50 5 255 24  16 6    # outer
+S 720000 default 65 "Mind awake, body asleep. Rest here at the threshold, quiet and open."
+
+# --- Gentle return to alpha (beat 5->10) ---
+A 1440000 >141 0 80 0 1 146 0 # carrier 141->136 => beat 5->10; resurface
+1440000 0 50 >5 255 160 32 9  # inner: bright 5->12
+1440000 0 50 >5 255 24  16 6  # outer
+S 1440000 default 65 "Gently now. Beginning to return, slowly rising toward the surface."
+
+# --- Soft close: vol + brightness fade out ---
+A 1740000 136 0 >80 0 1 146 0 # beat alpha 10; vol 40->0 over final 60 s
+1740000 0 50 >12 255 160 32 9 # inner: bright 12->0
+1740000 0 50 >12 255 24  16 6 # outer
+S 1740000 default 65 "Coming back to the room now, calm, clear, and whole."
+A 1800000 136 0 0 0 1 146 0   # volume 0
+1800000 0 50 0 255 160 32 9   # inner off
+1800000 0 50 0 255 24  16 6   # outer off

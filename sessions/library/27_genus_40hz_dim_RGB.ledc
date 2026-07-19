@@ -1,0 +1,32 @@
+# 27_genus_40hz_dim_RGB.ledc — 40 Hz GENUS, DIM invisible-flicker, RGB inner/outer build
+# RGB variant of 27_genus_40hz_dim. Audio IDENTICAL (40 Hz / 4% click, dim). This is the
+# invisible-flicker comfort GENUS: two complementary-colour banks at 40 Hz in ANTIPHASE.
+# On this build the banks map cleanly to the concentric rings: inner ring warm amber
+# (mask 9, 255,160,32, phase 0) + outer ring calm blue (mask 6, 32,96,255, phase 180),
+# matched dim brightness -> mean luminance ~flat (little visible flicker) while the retina
+# still gets the 40 Hz oscillation. 40 Hz is above the danger band; brightness DIM <=20%.
+# See base header for method/safety. (The original used the old warm/cool diagonal masks;
+# this uses the true inner/outer rings.)
+#
+# LED: time freq duty bright R G B mask [env phase]   (env 0 = square gate)
+
+# --- Ramp-in: both antiphase rings ease up together ---
+0 40 50 >0 255 160 32 9 0 0        # inner amber ring: 40 Hz square, phase 0; bright fade-in
+0 40 50 >0 32 96 255 6 0 180       # outer blue ring: 40 Hz, phase 180 (antiphase)
+A 0 10000 0 >0 40 1 0 0 4 0        # ch1 GENUS click: 10 kHz carrier, 40 Hz gate, 4% duty; vol fade-in
+S 3000 default 65 "Beginning a gentle forty hertz session. The light is dim and steady to the eye — just relax."
+15000 40 50 20 255 160 32 9 0 0    # inner: 20% dim cap
+15000 40 50 20 32 96 255 6 0 180   # outer: 20% dim cap (matched -> luminance ~flat)
+A 30000 10000 0 80 40 1 0 0 4 0    # ch1 vol settled 40 (dim), 40 Hz / 4% click held
+S 30000 default 65 "Holding steady at forty hertz. Let it work in the background."
+
+# --- Hold: steady antiphase 40 Hz, dim ---
+
+# --- Ramp-out: simultaneous fade of both rings + audio to 0 ---
+1770000 40 50 >20 255 160 32 9 0 0  # inner: ramp-out START 20 ...
+1770000 40 50 >20 32 96 255 6 0 180 # outer: ramp-out START 20 ...
+A 1770000 10000 0 >80 40 1 0 0 4 0 # ch1 volume ramp-out START 40 ...
+S 1770000 default 65 "The session is closing now. The light and tone gently fade. Well done."
+1800000 40 50 0 255 160 32 9 0 0    # inner -> 0
+1800000 40 50 0 32 96 255 6 0 180   # outer -> 0
+A 1800000 10000 0 0 40 1 0 0 4 0   # ch1 volume -> 0

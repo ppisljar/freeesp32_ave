@@ -1,0 +1,53 @@
+# 35_wbtb_lucid_gamma_RGB.ledc — WBTB Lucid + 40 Hz Gamma, RGB inner/outer build
+# RGB variant of 35_wbtb_lucid_gamma. Audio + speech IDENTICAL (5 Hz theta iso bed + 40 Hz
+# gamma clicks panned L/R antiphase on ch2/3).
+#
+# The concentric-ring hardware lets the two signature layers run on SEPARATE zones instead of
+# fighting for the same pixels (the old cool/warm banks overlapped the eye-split):
+#   * INNER rings = INVISIBLE 40 Hz GAMMA  — inner-left (mask 1) amber phase 0 + inner-right
+#     (mask 8) calm blue phase 180. Left/right complementary at 40 Hz -> retina gets the gamma
+#     drive while mean colour/luminance across the inner ring stays ~flat (near-invisible).
+#   * OUTER rings = SPLIT-FIELD THETA — outer-left (mask 2) 6.5 Hz cool blue (alert cue),
+#     outer-right (mask 4) 4.5 Hz warm amber (dream cue). Dichoptic frequency + colour split.
+# All rates are 40 Hz (above the danger band) or <=6.5 Hz — NO 15-25 Hz flicker. Gamma DIM
+# (<=16%), theta <=20%. See base header for safety.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# --- Induction: BOTH eyes 10 Hz alpha, dim cool-blue, fade in ---
+0 10 50 >0 60 120 255 15 1 0        # both eyes (mask 15) 10 Hz sine; bright fade-in
+A 0 200 0 >0 5 1 0 0 30 1           # ch1 theta dream bed: 5 Hz iso (sine gate, 30% duty); vol fade-in
+S 3000 default 65 "Rest back and let a calm alpha rhythm settle you toward the dream. You will stay just aware enough to notice."
+15000 10 50 20 60 120 255 15 1 0    # brightness 20% (>=10 s ramp-in)
+A 60000 200 0 80 5 1 0 0 30 1       # theta bed settled
+
+# --- Split: inner rings = invisible 40 Hz gamma / outer rings = split-field theta ---
+90000 40 50 >0 255 160 32 1 0 0     # inner-LEFT (mask 1): amber 40 Hz phase 0 (gamma); fade in
+90000 40 50 >0 32 96 255 8 0 180    # inner-RIGHT (mask 8): blue 40 Hz phase 180 (antiphase, ~invisible)
+90000 6.5 50 20 32 96 255 2 1 0     # outer-LEFT (mask 2): 6.5 Hz theta, cool blue (alert)
+90000 4.5 50 20 255 160 32 4 1 0    # outer-RIGHT (mask 4): 4.5 Hz theta, warm amber (dream)
+A 90000 340 -60 >0 40 2 0 0 10 0 0 3    # ch2 gamma CLICK left: 40 Hz, 10% duty, panned left; fade in
+A 90000 340 60 >0 40 3 0 0 10 0 180 3   # ch3 gamma CLICK right: 40 Hz, phase 180, panned right
+105000 40 50 16 255 160 32 1 0 0    # inner-L gamma reaches 16%
+105000 40 50 16 32 96 255 8 0 180   # inner-R gamma 16% (matched -> ~invisible shimmer)
+A 150000 340 -60 60 40 2 0 0 10 0 0 3   # left click settled
+A 150000 340 60 60 40 3 0 0 10 0 180 3  # right click settled
+S 90000 default 65 "One eye quickens, one eye slows. A soft forty-hertz shimmer whispers: notice. If you see a dream, you are dreaming."
+S 600000 default 65 "Whenever you realise you are dreaming, stay calm and steady. You are lucid. Look at your hands, and stay."
+
+# --- Soft off (no wake-up) ---
+1200000 40 50 >16 255 160 32 1 0 0  # inner-L gamma fade
+1200000 40 50 >16 32 96 255 8 0 180 # inner-R gamma fade
+1200000 6.5 50 >20 32 96 255 2 1 0  # outer-L theta fade
+1200000 4.5 50 >20 255 160 32 4 1 0 # outer-R theta fade
+A 1200000 200 0 >80 5 1 0 0 30 1    # theta bed fade
+A 1200000 340 -60 >60 40 2 0 0 10 0 0 3   # left click fade
+A 1200000 340 60 >60 40 3 0 0 10 0 180 3  # right click fade
+S 1200000 default 65 "Letting every light and tone fade now. Sink fully into sleep, or dream on, aware."
+1500000 40 50 0 255 160 32 1 0 0    # inner-L off
+1500000 40 50 0 32 96 255 8 0 180   # inner-R off
+1500000 6.5 50 0 32 96 255 2 1 0    # outer-L off
+1500000 4.5 50 0 255 160 32 4 1 0   # outer-R off
+A 1500000 200 0 0 5 1 0 0 30 1      # theta bed 0
+A 1500000 340 -60 0 40 2 0 0 10 0 0 3    # left click 0
+A 1500000 340 60 0 40 3 0 0 10 0 180 3   # right click 0

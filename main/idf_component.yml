@@ -1,0 +1,8 @@
+## Managed component dependencies for the main component.
+## espressif/mdns provides the mDNS responder so the device is reachable at a
+## fixed http://esp32-ave.local on any network (STA or SoftAP) without needing
+## to know its DHCP IP. See wifi_manager_start_mdns().
+dependencies:
+  espressif/mdns: "^1.2"
+  idf:
+    version: ">=5.0"

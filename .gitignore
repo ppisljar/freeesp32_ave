@@ -2,3 +2,6 @@ build/
 .cache/
 components/
 tmp/
+managed_components/
+sdkconfig.bak*
+sdkconfig.old
