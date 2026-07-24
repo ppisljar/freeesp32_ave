@@ -248,6 +248,16 @@ esp_err_t web_server_init(void)
     // stack-overflow guard ("stack overflow in task httpd"). 8192 gives margin;
     // internal DRAM has ample headroom now that eeg_lut moved to PSRAM.
     config.stack_size = 8192;
+    // Raise the httpd task above the default (tskIDLE+5 = 5) so it isn't starved
+    // by LWIP (prio 22) / WiFi (prio 23) on core 0 during a sustained WS BG-audio
+    // push — at prio 5 the WS receiver drained frames slowly, leaving the device
+    // ring chronically near-empty (~46 ms) and audio underrunning. 18 matches the
+    // (idle-during-push) bg_streamer task and sits below LWIP/WiFi so it runs in
+    // their gaps. Pin to CORE 0 so httpd NEVER competes on core 1 with the
+    // timing-critical LED flicker (prio 24) / audio_output (23) tasks — flicker
+    // and audio precision are unaffected by this change.
+    config.task_priority = 18;
+    config.core_id       = 0;
     // Enable wildcard matching so "/*" can serve arbitrary static assets.
     // Exact /api/... handlers are registered first and keep priority.
     config.uri_match_fn = httpd_uri_match_wildcard;

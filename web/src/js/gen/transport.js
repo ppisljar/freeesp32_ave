@@ -89,6 +89,21 @@ let s_pushAbort = null;
 // a time; a new pushBgWs supersedes it, and stopBg/stopBgWs close it.
 let s_bgWs = null;
 
+// Throttle-proof pump scheduling. setTimeout/setInterval are throttled to ~1/60s
+// in a backgrounded / screen-locked tab, which STALLS the PCM feed and starves
+// the device ring (the observed once-a-minute underrun bursts). MessageChannel
+// postMessage is NOT subject to that throttling, so while the tab is hidden we
+// re-arm the pump through it; while visible we use the cheaper setTimeout. See
+// websocket_bg_push_reliability_investigation.md (Regime 2).
+const s_pumpChan = (typeof MessageChannel !== 'undefined') ? new MessageChannel() : null;
+let s_pumpTask = null;
+if (s_pumpChan) s_pumpChan.port1.onmessage = () => { const t = s_pumpTask; s_pumpTask = null; if (t) t(); };
+function armPump(fn, ms) {
+    const hidden = (typeof document !== 'undefined') && document.hidden;
+    if (hidden && s_pumpChan) { s_pumpTask = fn; s_pumpChan.port2.postMessage(0); }
+    else setTimeout(fn, ms);
+}
+
 // Stream a canonical WAV Blob to the device as the active background track.
 // The POST body is fixed-length (a Blob), so it works over the device's
 // HTTP/1.1 server; TCP flow control paces the upload to playback rate. The
@@ -165,7 +180,7 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
             while (off < pcmBytes.length) {
                 if (ws.bufferedAmount > WS_HIGH_WATER) {          // let the socket drain
                     sending = false;
-                    setTimeout(pump, 30);
+                    armPump(pump, 30);   // throttle-proof while backgrounded
                     return;
                 }
                 const end = Math.min(off + WS_CHUNK_BYTES, pcmBytes.length);
@@ -180,18 +195,26 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
             // sees a clean end-of-stream and drains its ring (natural completion).
             (function closeWhenDrained() {
                 if (ws.readyState !== WebSocket.OPEN) return;
-                if (ws.bufferedAmount > 0) { setTimeout(closeWhenDrained, 50); return; }
+                if (ws.bufferedAmount > 0) { armPump(closeWhenDrained, 50); return; }
                 try { ws.close(1000, 'eos'); } catch (e) { /* ignore */ }
             })();
         }
 
         ws.onopen = () => { clogI('ws', 'open — sending handshake'); ws.send(wsHandshakeMsg(pan, loudness)); pump(); };
         ws.onmessage = (ev) => {
-            // Back-channel {consumed, ring_ms} — pacing/stall hints (advisory in v1).
+            // Back-channel {consumed, ring_ms} — device ring fill. Used as active
+            // flow control: WebSocket message events are NOT throttled in a
+            // backgrounded tab, so a low-ring report kicks the pump even when
+            // timers are throttled (belt-and-braces with the MessageChannel pump).
             try {
                 const m = JSON.parse(ev.data);
-                if (m && typeof m.ring_ms === 'number' && m.ring_ms < 200) clogW('ws', 'device ring low: ' + m.ring_ms + ' ms (underrun risk)');
-                if (onProgress && m && typeof m.ring_ms === 'number') { /* hook for UI */ }
+                if (m && typeof m.ring_ms === 'number') {
+                    if (m.ring_ms < 200) {
+                        clogW('ws', 'device ring low: ' + m.ring_ms + ' ms (underrun risk)');
+                        if (!sending && !sentAll) armPump(pump, 0);   // feed now
+                    }
+                    if (onProgress) { /* ring_ms hook for UI */ }
+                }
             } catch (e) { /* ignore non-JSON */ }
         };
         ws.onclose = (ev) => {

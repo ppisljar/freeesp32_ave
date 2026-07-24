@@ -480,7 +480,13 @@ esp_err_t config_parser_parse_file(const char *file_path, config_timeline_t *tim
  * BG_PRIME_THRESHOLD_MS (or BG_PRIME_TIMEOUT_MS elapses — start anyway). Then the
  * timeline task latches T0, releases the hold, and dispatches t=0 in one breath.
  */
-#define BG_PRIME_THRESHOLD_MS    500u
+// Prebuffer depth before releasing the timeline at t=0. Raised 500 -> 2000 ms:
+// during the hold the consumer does NOT drain the ring, so it fills deep (well
+// past the steady-state TCP-window limit) — a 2 s cushion lets the pushed BG
+// audio ride out the ~60 s WiFi block-ACK (DELBA) dropouts that were underrunning
+// the ring. Reachable well within the 5 s timeout at normal WiFi throughput;
+// costs ~1-2 s extra startup (hidden behind the Home pre-roll delay).
+#define BG_PRIME_THRESHOLD_MS   2000u
 #define BG_PRIME_TIMEOUT_MS     5000u
 static volatile bool      bg_prime_pending = false;
 static uint32_t           bg_prime_deadline_ms = 0;
