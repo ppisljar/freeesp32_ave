@@ -185,10 +185,53 @@ function setAuto(on) {
     if (!on && autoTimer) { clearInterval(autoTimer); autoTimer = null; }
 }
 
+// --- runtime log levels (GET/POST /api/loglevels) --------------------------
+// Loaded once when the tab opens (NOT in the auto-refresh poll, so it never
+// clobbers a dropdown mid-selection). Each category maps to a set of ESP_LOG
+// tags; changing a level POSTs {category: level} and applies it immediately.
+async function loadLogLevels() {
+    const box = $('diagLogLevels');
+    if (!box) return;
+    let data;
+    try {
+        data = await fetch('/api/loglevels', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+    } catch (e) { box.textContent = '(log levels unavailable)'; return; }
+    if (!data || !Array.isArray(data.categories)) { box.textContent = '(log levels unavailable)'; return; }
+    const levels = data.levels || ['none', 'error', 'warn', 'info', 'debug', 'verbose'];
+    const optionsFor = (cur) => levels.map(l =>
+        '<option value="' + esc(l) + '"' + (l === cur ? ' selected' : '') + '>' + esc(l) + '</option>').join('');
+    let html = '<div class="diag-loglevels">';
+    for (const c of data.categories) {
+        const tags = Array.isArray(c.tags) ? c.tags.join(', ') : '';
+        html += '<label class="diag-llrow">' +
+                '<span class="diag-llname" title="' + esc(tags) + '">' + esc(c.name) + '</span>' +
+                '<select data-cat="' + esc(c.name) + '">' + optionsFor(c.level) + '</select></label>';
+    }
+    html += '</div>';
+    box.innerHTML = html;
+    box.querySelectorAll('select[data-cat]').forEach(sel =>
+        sel.addEventListener('change', () => setLogLevel(sel.getAttribute('data-cat'), sel.value)));
+}
+
+async function setLogLevel(cat, level) {
+    try {
+        const body = {}; body[cat] = level;
+        const r = await fetch('/api/loglevels', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        showMessage('Log level: ' + cat + ' → ' + level, 'success');
+    } catch (e) {
+        showMessage('Failed to set log level: ' + (e.message || e), 'error');
+    }
+}
+
 function onTabVisible() {
     const active = location.hash.replace('#', '') === 'diagnostics';
     if (active) {
         refreshAll();
+        loadLogLevels();   // load once on tab open (kept out of the poll)
         setAuto($('diagAuto') && $('diagAuto').checked);
     } else {
         setAuto(false);   // stop polling when the user leaves the tab
@@ -204,7 +247,8 @@ export function diagnosticsInit() {
     on('diagReboot',  'click', rebootDevice);
     on('diagAuto',    'change', () => setAuto($('diagAuto').checked));
 
+    on('diagRefresh', 'click', loadLogLevels);   // Refresh also re-reads levels
     window.addEventListener('hashchange', onTabVisible);
     // If the page loads directly on #diagnostics, kick off a refresh.
-    if (location.hash.replace('#', '') === 'diagnostics') refreshAll();
+    if (location.hash.replace('#', '') === 'diagnostics') { refreshAll(); loadLogLevels(); }
 }
