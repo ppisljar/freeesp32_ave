@@ -1470,8 +1470,8 @@ uint32_t bg_player_push_bytes_streamed(void)
 /* Prime gate: buffer the pushed BG but DON'T play it yet (mix_into stays silent
  * and leaves the ring untouched). Set from config_parser when a push:// session
  * is armed, cleared when the timeline actually starts (or on stop).            */
-void bg_player_push_hold(void)    { s_bg.hold = true;  }
-void bg_player_push_release(void) { s_bg.hold = false; }
+void bg_player_push_hold(void)    { s_bg.hold = true;  ESP_LOGD(TAG, "BGDBG prime: hold ON (buffering, mix silent)"); }
+void bg_player_push_release(void) { s_bg.hold = false; ESP_LOGD(TAG, "BGDBG prime: hold RELEASED (start draining, buffered=%ums)", (unsigned)bg_player_push_buffered_ms()); }
 
 esp_err_t bg_player_start_push(float pan, float loudness)
 {
@@ -1548,6 +1548,10 @@ size_t bg_player_push_pcm(const int16_t *pcm, size_t frames,
 {
     if (pcm == NULL || frames == 0u) return 0u;
     if (s_bg.producer_kind != BG_PRODUCER_PUSH) return 0u;
+
+    ESP_LOGD(TAG, "BGDBG push_pcm: %zu frames ch=%u up2x=%d ring_free=%zuB",
+             frames, channels, upsample_2x ? 1 : 0,
+             s_bg.ring ? xStreamBufferSpacesAvailable(s_bg.ring) : 0u);
 
     /* Same watermark as the pull path: never issue a ring send that could
      * block for long. When the ring is near-full we yield and retry the SAME

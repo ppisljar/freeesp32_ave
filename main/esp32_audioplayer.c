@@ -20,6 +20,7 @@
 #include "memory_pool.h"
 #include "bg_player.h"
 #include "settings.h"
+#include "log_ctrl.h"
 
 static const char* TAG = "main";
 
@@ -268,6 +269,11 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "settings_init returned %s — using in-RAM defaults", esp_err_to_name(ret));
     }
+
+    // Restore persisted per-category log levels (namespace "devcfg", separate
+    // key from the settings blob) and apply them via esp_log_level_set(). No-op
+    // for any category left at the compile-time default.
+    log_ctrl_init();
 
     // Boot is NON-FATAL from here on: if a subsystem (timing, audio, LED …)
     // can't init, we log it, record its health for the diagnostics page, and

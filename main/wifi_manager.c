@@ -39,6 +39,17 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         current_state = WIFI_STATE_DISCONNECTED;
+        // Reason code is invaluable for diagnosing flaky links (e.g. reason 8 =
+        // ASSOC_LEAVE, 200/206 = 4-way handshake, 39 = DELBA/timeout). Task/event
+        // context — ESP_LOG is safe.
+        {
+            const wifi_event_sta_disconnected_t *d =
+                (const wifi_event_sta_disconnected_t *)event_data;
+            if (d) {
+                ESP_LOGD(TAG, "WIFIDBG disconnect: reason=%d rssi=%d ssid=%.*s",
+                         (int)d->reason, (int)d->rssi, (int)d->ssid_len, (const char *)d->ssid);
+            }
+        }
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         if (s_ever_connected || s_retry_num < WIFI_MAX_RETRY) {
             // Either a post-association drop (retry forever) or still within the
@@ -59,6 +70,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         current_state = WIFI_STATE_CONNECTED;
         s_ever_connected = true;
         s_retry_num = 0;
+        {
+            wifi_ap_record_t ap;
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                ESP_LOGD(TAG, "WIFIDBG connected: ssid=%s rssi=%d ch=%d",
+                         (const char *)ap.ssid, (int)ap.rssi, (int)ap.primary);
+            }
+        }
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
 
         /* Re-apply WIFI_PS_NONE on every (re)connect. ESP-IDF restores

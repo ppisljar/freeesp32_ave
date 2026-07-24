@@ -541,6 +541,10 @@ esp_err_t audio_generator_start_sweep_locked(int channel, audio_param_t param,
     ch->sweeps[param].start_sample     = ch->samples_generated;
     ch->sweeps[param].duration_samples = duration_samples;
     ch->sweeps[param].curve            = curve;
+    // Task-context only (timeline task / web handlers) — never the ISR.
+    ESP_LOGD(TAG, "AUDDBG sweep ch=%d param=%d %.3f->%.3f over %llu samples curve=%d",
+             channel, (int)param, start, target,
+             (unsigned long long)duration_samples, (int)curve);
     return ESP_OK;
 }
 

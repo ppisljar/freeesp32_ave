@@ -11,6 +11,7 @@
 #include "diagnostics.h"         // GET /api/logs, /api/coredump, reset reason in /api/state
 #include "esp_heap_caps.h"       // heap_caps_get_free_size (PSRAM) for /api/state diag
 #include "settings.h"            // runtime device settings (GET/POST /api/settings)
+#include "log_ctrl.h"            // runtime categorized logging (GET/POST /api/loglevels)
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -96,6 +97,8 @@ static esp_err_t report_handler(httpd_req_t *req);
 static esp_err_t settings_get_handler(httpd_req_t *req);
 static esp_err_t settings_post_handler(httpd_req_t *req);
 static esp_err_t settings_reset_handler(httpd_req_t *req);
+static esp_err_t loglevels_get_handler(httpd_req_t *req);
+static esp_err_t loglevels_post_handler(httpd_req_t *req);
 static esp_err_t reboot_handler(httpd_req_t *req);
 static esp_err_t ota_handler(httpd_req_t *req);
 static esp_err_t version_handler(httpd_req_t *req);
@@ -237,8 +240,9 @@ esp_err_t web_server_init(void)
     // Must be >= the number of httpd_register_uri_handler() calls below. When
     // this is too small, the LAST handlers to register (incl. the catch-all "/*"
     // static file handler) silently fail, and every unmatched path — including
-    // "/" — returns 404. Keep headroom above the current count (~28).
-    config.max_uri_handlers = 40;
+    // "/" — returns 404. Keep headroom above the current count (39 with PUSH+WS
+    // on: +2 for GET/POST /api/loglevels).
+    config.max_uri_handlers = 44;
     // Bigger httpd task stack (default 4096). The /api/patch-config path — hit
     // rapidly by the Live Control sliders — runs config_parser_apply_patch →
     // parse_content → parse_line → parse_audio/led_line on THIS task's stack,
@@ -473,6 +477,22 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &settings_reset_uri);
+
+    httpd_uri_t loglevels_get_uri = {
+        .uri = "/api/loglevels",
+        .method = HTTP_GET,
+        .handler = loglevels_get_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &loglevels_get_uri);
+
+    httpd_uri_t loglevels_post_uri = {
+        .uri = "/api/loglevels",
+        .method = HTTP_POST,
+        .handler = loglevels_post_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &loglevels_post_uri);
 
     httpd_uri_t reboot_uri = {
         .uri = "/api/reboot",
@@ -1042,6 +1062,66 @@ static esp_err_t settings_reset_handler(httpd_req_t *req)
     }
     char buf[1024];
     int n = settings_to_json(buf, sizeof(buf));
+    httpd_resp_set_type(req, "application/json");
+    if (n < 0) {
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+    } else {
+        httpd_resp_send(req, buf, n);
+    }
+    return ESP_OK;
+}
+
+// GET /api/loglevels — list the logical log categories, each with its current
+// level and member TAGs, plus the set of valid level strings.
+static esp_err_t loglevels_get_handler(httpd_req_t *req)
+{
+    char buf[1536];
+    int n = log_ctrl_to_json(buf, sizeof(buf));
+    if (n < 0) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "loglevels serialize failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, n);
+    return ESP_OK;
+}
+
+// POST /api/loglevels — apply {"<category>":"<level>", ...}. "*"/"all" set the
+// global wildcard default. Applies via esp_log_level_set, persists to NVS, and
+// returns the new full state (same shape as GET).
+static esp_err_t loglevels_post_handler(httpd_req_t *req)
+{
+    int total = req->content_len;
+    if (total <= 0 || total > 2048) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid body length");
+        return ESP_FAIL;
+    }
+    char *body = malloc(total + 1);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    int received = 0;
+    while (received < total) {
+        int r = httpd_req_recv(req, body + received, total - received);
+        if (r <= 0) {
+            free(body);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed");
+            return ESP_FAIL;
+        }
+        received += r;
+    }
+    body[total] = '\0';
+
+    int applied = log_ctrl_apply_json(body, total);
+    free(body);
+    if (applied < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "loglevels parse error");
+        return ESP_FAIL;
+    }
+
+    char buf[1536];
+    int n = log_ctrl_to_json(buf, sizeof(buf));
     httpd_resp_set_type(req, "application/json");
     if (n < 0) {
         httpd_resp_sendstr(req, "{\"ok\":true}");
@@ -1901,6 +1981,9 @@ static esp_err_t bg_ws_handler(httpd_req_t *req)
             if (bg_player_start_push(0.0f, 0.5f) != ESP_OK) return ESP_FAIL;
             c->armed = true;
         }
+        ESP_LOGD(TAG, "WSDBG bg-ws frame=%uB carry=%u ring_ms=%u",
+                 (unsigned)frame.len, (unsigned)c->carry_len,
+                 (unsigned)bg_player_push_buffered_ms());
         if (!bg_stream_feed_pcm(c->rb, frame.len, c->stage, c->carry, &c->carry_len)) {
             return ESP_FAIL;                             // push superseded/stopped → close
         }

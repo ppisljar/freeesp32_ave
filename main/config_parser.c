@@ -1814,6 +1814,11 @@ static void timeline_execution_task(void *pvParameters)
             batch_end_index = i + 1;
         }
 
+        // Timeline task context — ESP_LOG safe. Greppable trace of the batch span.
+        ESP_LOGD(TAG, "CFGDBG dispatch t=%ums entries[%zu..%zu) count=%zu",
+                 batch_timestamp, batch_start_index, batch_end_index,
+                 batch_end_index - batch_start_index);
+
         // Layer 4 (Plan 007 Step 4.1): Two-pass batch dispatch for audio-audio
         // phase coherence.
         //

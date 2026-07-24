@@ -1707,6 +1707,13 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
     esp_err_t ret = s_ensure_timer_and_task(init_freq_milliHz);
     if (ret != ESP_OK) return ret;
 
+    // Task context (timeline task / web handlers) — NOT the ISR, so ESP_LOG is
+    // safe here. The ISR flicker callback stays log-free.
+    ESP_LOGD(TAG, "LEDDBG sweep mask=0x%02x freq=%umHz->%umHz dur=%ums duty=%u bri=%u",
+             channel_mask, (unsigned)spec->freq_milliHz_start,
+             (unsigned)spec->freq_milliHz_target, (unsigned)spec->duration_ms,
+             (unsigned)spec->duty_start, (unsigned)spec->bright_start);
+
     uint64_t sweep_duration_us = (uint64_t)spec->duration_ms * 1000ULL;
     // Transport-clock anchor (Layer 2): when the caller supplies a non-zero
     // cycle_hint_us (= transport_origin_us + entry->time_ms * 1000), use it as
