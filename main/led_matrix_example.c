@@ -63,6 +63,12 @@ typedef struct {
     volatile uint32_t frequency_milliHz; // Current flicker frequency (Hz * 1000 for precision)
     volatile uint8_t duty_cycle;       // On-time percentage (0-100); written at cycle boundary by ISR
     volatile uint8_t brightness;       // Maximum brightness (0-100); written at cycle boundary by ISR
+    // Q8.8 companions of duty_cycle/brightness (value = percent<<8, 0..25600). The
+    // ISR keeps these at full sweep resolution so slow fades over a small range
+    // render smoothly instead of stepping across the ~18 integer-percent levels.
+    // The uint8_t fields above are kept for reporting / sweep-restart carryover.
+    volatile uint16_t duty_q8;         // Q8.8 on-time percent; drives latched_on_time_us
+    volatile uint16_t brightness_q8;   // Q8.8 max brightness; handed to the strip layer
     volatile uint8_t red, green, blue; // LED colors when ON; written at cycle boundary by ISR
     volatile bool led_state;           // Target ON/OFF state; written by ISR, read by flicker task
     volatile bool led_dirty;           // ISR sets true when led_state changes; task clears it
@@ -80,7 +86,8 @@ typedef struct {
     uint16_t          attack_ms;           // trapezoid edge duration (latched at start)
     uint32_t          jitter_millihz;      // flicker-rate jitter amplitude (0 = off)
     uint32_t          jitter_period_us;    // jitter wander period
-    volatile uint8_t  output_level;        // non-square: ISR-computed 0..brightness output
+    volatile uint8_t  output_level;        // non-square: ISR-computed 0..brightness output (coarse, kept for compat)
+    volatile uint16_t output_level_q8;     // non-square: Q8.8 (0..brightness_q8) output handed to the strip
 
     // V-E2 (entrainment_firmware_plan): flicker phase offset in DEGREES (0..359).
     // Applied at USE-TIME in the ISR (delay = deg * live_period / 360), so it stays
@@ -119,6 +126,8 @@ static led_flicker_state_t flicker_state[NUM_LED_CHANNELS] = {
         .frequency_milliHz    = 0,
         .duty_cycle           = 50,
         .brightness           = 100,
+        .duty_q8              = 50 * 256,
+        .brightness_q8        = 100 * 256,
         .red                  = 255,
         .green                = 255,
         .blue                 = 255,
@@ -571,10 +580,10 @@ static inline int32_t IRAM_ATTR led_eval_mod_iram(const led_mod_slot_t *m, uint6
  * LUMINANCE-LINEAR (no perceptual gamma) so a 180°-antiphase pair of raised
  * sines sums to a constant → luminance-flat "invisible" flicker.
  */
-static inline uint8_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t elapsed_us,
-                                                       uint32_t cycle_us, uint8_t brightness,
+static inline uint16_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t elapsed_us,
+                                                       uint32_t cycle_us, uint16_t brightness_q8,
                                                        uint32_t duty_q16, uint32_t attack_q16) {
-    if (cycle_us == 0u) return brightness;
+    if (cycle_us == 0u) return brightness_q8;
     // phase_q16 = elapsed_us * 65536 / cycle_us — rescale to stay 32-bit.
     uint32_t period = cycle_us;
     uint32_t t      = elapsed_us;
@@ -605,8 +614,8 @@ static inline uint8_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t el
         shape_q16          = (p_q8 * one_minus) << 2;
         if (shape_q16 > 65536u) shape_q16 = 65536u;
     }
-    // output = brightness * shape / 65536; brightness ≤100, product ≤6.5e6 fits u32.
-    return (uint8_t)(((uint32_t)brightness * shape_q16) >> 16);
+    // output = brightness_q8 * shape / 65536; brightness_q8 ≤25600, product ≤1.68e9 fits u32.
+    return (uint16_t)(((uint32_t)brightness_q8 * shape_q16) >> 16);
 }
 
 // LED flicker-rate jitter (anti-habituation): a slow bipolar triangle LFO returning
@@ -679,6 +688,47 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             continue;
         }
 
+        // --- DC channel (frequency 0): constant-on, no flicker gate ----------
+        // Evaluate the brightness/colour SWEEPS and any periodic MODULATION
+        // EVERY tick (not just at flicker-cycle boundaries, which the freq=0
+        // channel has none of). This is what lets a single channel run a fast
+        // chromatic swap — e.g. a 40 Hz blue<->green antiphase colour mod that
+        // stays luminance-flat — instead of a spatial two-ring antiphase pair.
+        // It also avoids the divide-by-zero the cycle path below would hit.
+        if (s->frequency_milliHz == 0u) {
+            portENTER_CRITICAL_ISR(&s_flicker_mux);
+            uint32_t dc_prog;
+            uint64_t sweep_dur = s->sweep_duration_us;
+            if (sweep_dur == 0) {
+                dc_prog = 65536u;
+            } else {
+                uint64_t es = (now_us >= s->sweep_start_us) ? (now_us - s->sweep_start_us) : 0;
+                uint64_t p  = (es * 65536ULL) / sweep_dur;
+                dc_prog = (p > 65536ULL) ? 65536u : (uint32_t)p;
+            }
+            uint32_t bri_q8 = led_interp_param(&s->sw_brightness, dc_prog);
+            if (s->mod_brightness.active) { int32_t mv = led_eval_mod_iram(&s->mod_brightness, now_us); bri_q8 = (mv < 0) ? 0 : (uint32_t)mv; }
+            uint32_t r_q8 = led_interp_param(&s->sw_r, dc_prog);
+            uint32_t g_q8 = led_interp_param(&s->sw_g, dc_prog);
+            uint32_t b_q8 = led_interp_param(&s->sw_b, dc_prog);
+            if (s->mod_r.active) { int32_t mv = led_eval_mod_iram(&s->mod_r, now_us); r_q8 = (mv < 0) ? 0 : (uint32_t)mv; }
+            if (s->mod_g.active) { int32_t mv = led_eval_mod_iram(&s->mod_g, now_us); g_q8 = (mv < 0) ? 0 : (uint32_t)mv; }
+            if (s->mod_b.active) { int32_t mv = led_eval_mod_iram(&s->mod_b, now_us); b_q8 = (mv < 0) ? 0 : (uint32_t)mv; }
+            uint16_t new_bri_q8 = (uint16_t)bri_q8;
+            uint8_t nr = (uint8_t)(r_q8 >> 8), ng = (uint8_t)(g_q8 >> 8), nb = (uint8_t)(b_q8 >> 8);
+            bool changed = !s->led_state || new_bri_q8 != s->brightness_q8 ||
+                           nr != s->red || ng != s->green || nb != s->blue;
+            s->brightness_q8 = new_bri_q8;
+            s->brightness    = (uint8_t)(new_bri_q8 >> 8);
+            s->red = nr; s->green = ng; s->blue = nb;
+            s->led_state = true;              // DC = always on (no duty gate)
+            s->output_level_q8 = new_bri_q8;  // smooth-carrier readers get full level
+            s->output_level    = s->brightness;
+            if (changed) { s->led_dirty = true; any_dirty = true; }
+            portEXIT_CRITICAL_ISR(&s_flicker_mux);
+            continue;
+        }
+
         // cycle_duration_us = 1,000,000,000 / frequency_milliHz  (all integer, no FPU)
         uint64_t cycle_duration_us = (1000000ULL * 1000ULL) / s->frequency_milliHz;
         // now_us >= cycle_start_time_us is guaranteed by the pre-anchor check above.
@@ -738,9 +788,11 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
                 duty_q8 = (mv < 0) ? 0 : (uint32_t)mv;
             }
             s->duty_cycle = (uint8_t)(duty_q8 >> 8);
+            s->duty_q8    = (uint16_t)duty_q8;   // full Q8.8 (0..25600)
             // Latch on_time_us at cycle boundary so mid-cycle duty writes from task
-            // context take effect only at the next cycle, never mid-cycle.
-            s->latched_on_time_us = (cycle_duration_us * s->duty_cycle) / 100;
+            // context take effect only at the next cycle, never mid-cycle. Use the
+            // Q8.8 duty so a duty sweep moves the on-time smoothly, not in 1% steps.
+            s->latched_on_time_us = (cycle_duration_us * s->duty_q8) / LED_BRIGHTNESS_Q8_MAX;
 
             // Brightness (Q8.8 → truncate to uint8_t 0-100).
             uint32_t bri_q8 = led_interp_param(&s->sw_brightness, progress_q16);
@@ -748,7 +800,8 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
                 int32_t mv = led_eval_mod_iram(&s->mod_brightness, now_us);
                 bri_q8 = (mv < 0) ? 0 : (uint32_t)mv;
             }
-            s->brightness = (uint8_t)(bri_q8 >> 8);
+            s->brightness    = (uint8_t)(bri_q8 >> 8);
+            s->brightness_q8 = (uint16_t)bri_q8;   // full Q8.8 (0..25600) → smooth fades
 
             // Colour channels (Q8.8 → truncate to uint8_t 0-255).
             uint32_t r_q8 = led_interp_param(&s->sw_r, progress_q16);
@@ -787,18 +840,19 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             // Dirty whenever the level changes (≈ every tick), so the task refreshes
             // the strip continuously. Cheap for DIRECT/DOTSTAR; heavier for NEOPIXEL.
             uint32_t cyc_us    = (uint32_t)cycle_duration_us;
-            uint32_t duty_q16  = ((uint32_t)s->duty_cycle * 65536u) / 100u;
+            uint32_t duty_q16  = ((uint32_t)s->duty_q8 * 65536u) / LED_BRIGHTNESS_Q8_MAX;
             uint32_t attack_us = (uint32_t)s->attack_ms * 1000u;
             if (attack_us > 60000u) attack_us = 60000u;       // keep <<16 in 32-bit
             uint32_t attack_q16 = cyc_us ? ((attack_us << 16) / cyc_us) : 0u;
-            uint8_t lvl = led_carrier_level_iram(s->carrier_waveform,
-                                                 eff_elapsed, cyc_us,
-                                                 s->brightness, duty_q16, attack_q16);
-            if (lvl != s->output_level) {
-                s->output_level = lvl;
-                s->led_state    = (lvl > 0u);   // keep active/exit bookkeeping sane
-                s->led_dirty    = true;
-                any_dirty       = true;
+            uint16_t lvl = led_carrier_level_iram(s->carrier_waveform,
+                                                  eff_elapsed, cyc_us,
+                                                  s->brightness_q8, duty_q16, attack_q16);
+            if (lvl != s->output_level_q8) {
+                s->output_level_q8 = lvl;
+                s->output_level    = (uint8_t)(lvl >> 8);  // coarse mirror (compat)
+                s->led_state       = (lvl > 0u);   // keep active/exit bookkeeping sane
+                s->led_dirty       = true;
+                any_dirty          = true;
             }
         }
     }
@@ -856,20 +910,22 @@ static void led_flicker_task(void *arg) {
         // portENTER_CRITICAL_ISR; reading them unprotected produces torn
         // (mixed-epoch) color triples.  One critical section per channel
         // is adequate — the ISR's cycle-boundary block takes the same mux.
-        bool    ch_active[NUM_LED_CHANNELS], ch_led_state[NUM_LED_CHANNELS];
-        uint8_t ch_brightness[NUM_LED_CHANNELS], ch_red[NUM_LED_CHANNELS], ch_green[NUM_LED_CHANNELS], ch_blue[NUM_LED_CHANNELS];
-        uint8_t ch_carrier[NUM_LED_CHANNELS], ch_output[NUM_LED_CHANNELS];
+        bool     ch_active[NUM_LED_CHANNELS], ch_led_state[NUM_LED_CHANNELS];
+        uint16_t ch_brightness[NUM_LED_CHANNELS];   // Q8.8 (0..25600)
+        uint8_t  ch_red[NUM_LED_CHANNELS], ch_green[NUM_LED_CHANNELS], ch_blue[NUM_LED_CHANNELS];
+        uint8_t  ch_carrier[NUM_LED_CHANNELS];
+        uint16_t ch_output[NUM_LED_CHANNELS];       // Q8.8 (0..25600)
         for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
             led_flicker_state_t *s = &flicker_state[ch];
             portENTER_CRITICAL(&s_flicker_mux);
             ch_active[ch]     = s->active;
             ch_led_state[ch]  = s->led_state;
-            ch_brightness[ch] = s->brightness;
+            ch_brightness[ch] = s->brightness_q8;
             ch_red[ch]        = s->red;
             ch_green[ch]      = s->green;
             ch_blue[ch]       = s->blue;
             ch_carrier[ch]    = s->carrier_waveform;
-            ch_output[ch]     = s->output_level;
+            ch_output[ch]     = s->output_level_q8;
             portEXIT_CRITICAL(&s_flicker_mux);
         }
 
@@ -1095,11 +1151,14 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         s->frequency_milliHz   = freq_milliHz;
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
+        s->duty_q8             = (uint16_t)duty_cycle * 256u;   // Q8.8 mirrors
+        s->brightness_q8       = (uint16_t)brightness * 256u;
         s->carrier_waveform    = s_flicker_carrier;   // B2: latch the current carrier
         s->attack_ms           = s_flicker_attack_ms; // trapezoid edge duration
         s->jitter_millihz      = s_flicker_jitter_millihz;    // C3: flicker-rate jitter
         s->jitter_period_us    = s_flicker_jitter_period_us;
         s->output_level        = 0;
+        s->output_level_q8     = 0;
         // Only reset the cycle origin and force the LED off on FIRST activation.
         // When the channel is already running, preserve cycle_start_time_us so the
         // ISR continues the existing rhythm — resetting it here would produce a
@@ -1355,6 +1414,8 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
         s->frequency_milliHz   = new_freq_milliHz;
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
+        s->duty_q8             = (uint16_t)duty_cycle * 256u;
+        s->brightness_q8       = (uint16_t)brightness * 256u;
         // Do NOT reset cycle_start_time_us here — the channel is already running
         // and its cycle origin must be preserved.  The new frequency takes effect at
         // the next cycle boundary when the ISR recomputes cycle_duration_us from
@@ -1390,6 +1451,7 @@ esp_err_t led_matrix_update_brightness_masked(uint8_t channel_mask, uint8_t brig
         led_flicker_state_t *s = &flicker_state[ch];
         portENTER_CRITICAL(&s_flicker_mux);
         s->brightness = brightness;
+        s->brightness_q8 = (uint16_t)brightness * 256u;
         // Mirror into sw_brightness so the ISR's cycle-boundary recompute
         // (which reads sw_brightness via led_interp_param) preserves this
         // value instead of reverting to the prior sweep target.
@@ -1462,6 +1524,7 @@ esp_err_t led_matrix_update_duty_masked(uint8_t channel_mask, uint8_t duty_cycle
         led_flicker_state_t *s = &flicker_state[ch];
         portENTER_CRITICAL(&s_flicker_mux);
         s->duty_cycle = duty_cycle;
+        s->duty_q8    = (uint16_t)duty_cycle * 256u;
         s->sw_duty = (led_sweep_param_t){ (uint32_t)duty_cycle * 256u,
                                           (uint32_t)duty_cycle * 256u,
                                           LED_INTERP_NONE };
@@ -1685,6 +1748,8 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
         s->frequency_milliHz   = (spec->freq_curve   != LED_INTERP_NONE) ? eff_freq_start   : init_freq_milliHz;
         s->duty_cycle          = (spec->duty_curve   != LED_INTERP_NONE) ? eff_duty_start   : spec->duty_target;
         s->brightness          = (spec->bright_curve != LED_INTERP_NONE) ? eff_bright_start : spec->bright_target;
+        s->duty_q8             = (uint16_t)s->duty_cycle * 256u;   // Q8.8 mirrors of the start values
+        s->brightness_q8       = (uint16_t)s->brightness * 256u;
         s->red                 = (spec->r_curve      != LED_INTERP_NONE) ? eff_r_start      : spec->r_target;
         s->green               = (spec->g_curve      != LED_INTERP_NONE) ? eff_g_start      : spec->g_target;
         s->blue                = (spec->b_curve      != LED_INTERP_NONE) ? eff_b_start      : spec->b_target;

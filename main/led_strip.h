@@ -32,6 +32,17 @@ extern "C" {
 #define NUM_LED_CHANNELS 8
 
 /**
+ * @brief Full-scale value for Q8.8 fixed-point brightness/duty (100.00%).
+ *
+ * Brightness and duty are carried as Q8.8 percent (value = percent << 8) so a
+ * slow fade over a small range (e.g. 0→18%) renders smoothly instead of
+ * stepping across the ~18 integer-percent levels it used to be truncated to.
+ * 100% = 100 << 8 = 25600.  led_strip_set_channel() takes brightness on this
+ * scale; the backends map it to their native output resolution.
+ */
+#define LED_BRIGHTNESS_Q8_MAX 25600u
+
+/**
  * @brief LED Strip Control Component
  *
  * Provides a unified API for three physical LED backends:
@@ -124,7 +135,7 @@ typedef struct {
 
     /* --- DIRECT (LEDC PWM) backend fields --- */
     ledc_channel_t ledc_channels[NUM_LED_CHANNELS];          /**< LEDC channel numbers for ch 0..7 */
-    uint8_t direct_channel_brightness[NUM_LED_CHANNELS];     /**< Current brightness (0-100) per channel */
+    uint16_t direct_channel_brightness[NUM_LED_CHANNELS];    /**< Current brightness, Q8.8 percent (0..LED_BRIGHTNESS_Q8_MAX) per channel */
     gpio_num_t direct_pins[NUM_LED_CHANNELS];                /**< GPIO per logical channel */
 } led_strip_handle_t;
 
@@ -232,7 +243,7 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
  *
  * @param handle       LED strip handle.
  * @param channel_idx  Logical channel index (0 to NUM_LED_CHANNELS-1).
- * @param brightness   Channel brightness 0-100 percent.
+ * @param brightness   Channel brightness in Q8.8 percent (0..LED_BRIGHTNESS_Q8_MAX = 100.00%).
  * @param red          Red component 0-255 (ignored in DIRECT mode).
  * @param green        Green component 0-255 (ignored in DIRECT mode).
  * @param blue         Blue component 0-255 (ignored in DIRECT mode).
@@ -240,7 +251,7 @@ esp_err_t led_strip_init(const led_strip_config_t *config, led_strip_handle_t **
  */
 esp_err_t led_strip_set_channel(led_strip_handle_t *handle,
                                 uint8_t channel_idx,
-                                uint8_t brightness,
+                                uint16_t brightness,
                                 uint8_t red,
                                 uint8_t green,
                                 uint8_t blue);

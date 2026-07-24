@@ -67,7 +67,7 @@ static esp_err_t s_neopixel_encode_data(led_strip_handle_t *handle, rmt_symbol_w
 
 /* Shared addressable-backend helpers (used by both NEOPIXEL and DOTSTAR) */
 static esp_err_t s_addressable_set_channel(led_strip_handle_t *handle,
-                                            uint8_t channel_idx, uint8_t brightness,
+                                            uint8_t channel_idx, uint16_t brightness,
                                             uint8_t red, uint8_t green, uint8_t blue);
 static esp_err_t s_addressable_set_pixel_rgb(led_strip_handle_t *handle,
                                               uint32_t pixel_num,
@@ -89,7 +89,7 @@ static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle);
 /* Direct (LEDC PWM) backend helpers — Step 6 */
 static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[NUM_LED_CHANNELS]);
 static esp_err_t s_direct_set_channel(led_strip_handle_t *handle,
-                                       uint8_t ch, uint8_t brightness,
+                                       uint8_t ch, uint16_t brightness,
                                        uint8_t r, uint8_t g, uint8_t b);
 static esp_err_t s_direct_set_pixel_rgb(led_strip_handle_t *handle,
                                          uint32_t pixel_num,
@@ -437,16 +437,20 @@ static esp_err_t s_addressable_get_pixel_color(led_strip_handle_t *handle,
  * Both backends use the same 3-byte led_color_t buffer layout.
  */
 static esp_err_t s_addressable_set_channel(led_strip_handle_t *handle,
-                                            uint8_t channel_idx, uint8_t brightness,
+                                            uint8_t channel_idx, uint16_t brightness,
                                             uint8_t red, uint8_t green, uint8_t blue)
 {
     if (channel_idx >= NUM_LED_CHANNELS) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t r = (uint8_t)(((uint32_t)red   * brightness) / 100);
-    uint8_t g = (uint8_t)(((uint32_t)green * brightness) / 100);
-    uint8_t b = (uint8_t)(((uint32_t)blue  * brightness) / 100);
+    /* brightness is Q8.8 percent (0..LED_BRIGHTNESS_Q8_MAX). Scale the 8-bit
+     * colour by it at full precision so a dim fade steps through every 8-bit
+     * level rather than the ~18 that integer-percent scaling produced. The
+     * panel is still 8-bit per channel, so the product truncates to 0..255. */
+    uint8_t r = (uint8_t)(((uint32_t)red   * brightness) / LED_BRIGHTNESS_Q8_MAX);
+    uint8_t g = (uint8_t)(((uint32_t)green * brightness) / LED_BRIGHTNESS_Q8_MAX);
+    uint8_t b = (uint8_t)(((uint32_t)blue  * brightness) / LED_BRIGHTNESS_Q8_MAX);
 
     xSemaphoreTake(handle->access_mutex, portMAX_DELAY);
 
@@ -489,7 +493,7 @@ static inline esp_err_t s_neopixel_get_pixel_color(led_strip_handle_t *handle,
 
 /* 3.3 + 4.2: set_channel for the neopixel backend (delegates to shared helper). */
 static inline esp_err_t s_neopixel_set_channel(led_strip_handle_t *handle,
-                                                uint8_t channel_idx, uint8_t brightness,
+                                                uint8_t channel_idx, uint16_t brightness,
                                                 uint8_t red, uint8_t green, uint8_t blue)
 {
     return s_addressable_set_channel(handle, channel_idx, brightness, red, green, blue);
@@ -863,7 +867,7 @@ static esp_err_t s_dotstar_refresh(led_strip_handle_t *handle)
  * (same working_buffer layout, same per-pixel channel semantics). */
 
 static inline esp_err_t s_dotstar_set_channel(led_strip_handle_t *handle,
-                                               uint8_t channel_idx, uint8_t brightness,
+                                               uint8_t channel_idx, uint16_t brightness,
                                                uint8_t red, uint8_t green, uint8_t blue)
 {
     return s_addressable_set_channel(handle, channel_idx, brightness, red, green, blue);
@@ -966,6 +970,16 @@ static esp_err_t s_dotstar_deinit(led_strip_handle_t *handle)
  * pins.  Stores the channel IDs and pins in the handle; initialises
  * direct_channel_brightness[] to 0.
  */
+/* DIRECT backend PWM resolution. 11-bit (2048 levels) instead of 8-bit (256):
+ * a dim fade (e.g. 0→18%) only reaches 18% of full duty, so at 8-bit it had
+ * just ~46 usable steps → visibly steppy over a long (minutes-long) fade. At
+ * 11-bit that same 18% span has ~368 steps → smooth. 25 kHz × 2^11 = 51.2 MHz
+ * ≤ the 80 MHz APB clock, so the timer is still valid. DUTY_MAX (2^bits) is the
+ * ESP-IDF LEDC "constant HIGH, no LOW pulse" special value (needed to fully
+ * extinguish active-low LEDs). */
+#define LED_DIRECT_DUTY_RES  LEDC_TIMER_11_BIT
+#define LED_DIRECT_DUTY_MAX  2048u
+
 static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_ch[NUM_LED_CHANNELS])
 {
     /* Force a clean reset of the LEDC peripheral. erase-flash + reflash does
@@ -990,7 +1004,7 @@ static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_
      * the APB clock range. */
     ledc_timer_config_t timer_cfg = {
         .speed_mode      = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_8_BIT,
+        .duty_resolution = LED_DIRECT_DUTY_RES,
         .timer_num       = LEDC_TIMER_0,
         .freq_hz         = 25000,
         .clk_cfg         = LEDC_AUTO_CLK,
@@ -1031,7 +1045,7 @@ static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_
             .timer_sel  = LEDC_TIMER_0,
             .intr_type  = LEDC_INTR_DISABLE,
             .gpio_num   = pin_ch[i],
-            .duty       = (active_low_mask & (1u << i)) ? 256 : 0,
+            .duty       = (active_low_mask & (1u << i)) ? LED_DIRECT_DUTY_MAX : 0,
             .hpoint     = 0,
         };
         esp_err_t ret = ledc_channel_config(&ch_cfg);
@@ -1053,12 +1067,12 @@ static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_
  * (documented contract — no log to avoid UART flooding at flicker frequencies).
  */
 static esp_err_t s_direct_set_channel(led_strip_handle_t *handle,
-                                       uint8_t ch, uint8_t brightness,
+                                       uint8_t ch, uint16_t brightness,
                                        uint8_t r, uint8_t g, uint8_t b)
 {
     (void)r; (void)g; (void)b;  /* silently discard — documented contract */
 
-    if (ch >= NUM_LED_CHANNELS || brightness > 100) {
+    if (ch >= NUM_LED_CHANNELS || brightness > LED_BRIGHTNESS_Q8_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1094,7 +1108,7 @@ static esp_err_t s_direct_set_pixel_rgb(led_strip_handle_t *handle,
  */
 static esp_err_t s_direct_refresh(led_strip_handle_t *handle)
 {
-    uint8_t brightness[NUM_LED_CHANNELS];
+    uint16_t brightness[NUM_LED_CHANNELS];   /* Q8.8 percent (0..LED_BRIGHTNESS_Q8_MAX) */
 
     xSemaphoreTake(handle->access_mutex, portMAX_DELAY);
     memcpy(brightness, handle->direct_channel_brightness, sizeof(brightness));
@@ -1112,8 +1126,10 @@ static esp_err_t s_direct_refresh(led_strip_handle_t *handle)
     const uint8_t active_low_mask = (uint8_t)settings_get()->led_direct_active_low_mask;
     for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (handle->direct_pins[ch] == GPIO_NUM_NC) continue;
-        uint32_t duty = ((uint32_t)brightness[ch] * 256U) / 100U;
-        if (active_low_mask & (1u << ch)) duty = 256U - duty;
+        /* Q8.8 percent → 11-bit duty: duty = bri_q8 * DUTY_MAX / Q8_MAX. Max
+         * (25600) maps to DUTY_MAX (constant HIGH). Product ≤ 25600*2048 fits u32. */
+        uint32_t duty = ((uint32_t)brightness[ch] * LED_DIRECT_DUTY_MAX) / LED_BRIGHTNESS_Q8_MAX;
+        if (active_low_mask & (1u << ch)) duty = LED_DIRECT_DUTY_MAX - duty;
         ledc_set_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch], duty);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch]);
     }
@@ -1224,7 +1240,7 @@ esp_err_t led_strip_get_pixel_color(led_strip_handle_t *handle, uint32_t pixel_n
 
 esp_err_t led_strip_set_channel(led_strip_handle_t *handle,
                                  uint8_t channel_idx,
-                                 uint8_t brightness,
+                                 uint16_t brightness,
                                  uint8_t red, uint8_t green, uint8_t blue)
 {
     if (!handle || !handle->initialized) {
