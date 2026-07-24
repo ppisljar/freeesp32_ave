@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"       // heap_caps_get_free_size (PSRAM) for /api/state diag
 #include "settings.h"            // runtime device settings (GET/POST /api/settings)
 #include "log_ctrl.h"            // runtime categorized logging (GET/POST /api/loglevels)
+#include "isr_profiling.h"       // g_isr_profiles for GET /api/isrprofile
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -111,6 +112,7 @@ static esp_err_t reports_get_handler(httpd_req_t *req);
 static esp_err_t reports_put_handler(httpd_req_t *req);
 static esp_err_t reports_delete_handler(httpd_req_t *req);
 static esp_err_t logs_handler(httpd_req_t *req);
+static esp_err_t isrprofile_handler(httpd_req_t *req);
 static esp_err_t coredump_handler(httpd_req_t *req);
 static esp_err_t coredump_erase_handler(httpd_req_t *req);
 
@@ -416,6 +418,14 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &logs_uri);
+
+    httpd_uri_t isrprofile_uri = {
+        .uri = "/api/isrprofile",
+        .method = HTTP_GET,
+        .handler = isrprofile_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &isrprofile_uri);
 
     httpd_uri_t coredump_uri = {
         .uri = "/api/coredump",
@@ -2293,6 +2303,40 @@ static esp_err_t logs_handler(httpd_req_t *req)
             }
         }
     }
+    return ESP_OK;
+}
+
+// GET /api/isrprofile — surface the accumulated ISR timing (CONFIG_ISR_PROFILING).
+// slot 0 = timing_engine_alarm, slot 1 = led_flicker. max_us is the worst-case
+// ISR duration since boot; compare to the flicker tick period (100 us at the
+// 10 kHz peak tick) to see the timing headroom. Read-only, cheap.
+static esp_err_t isrprofile_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+#if CONFIG_ISR_PROFILING
+    static const char *names[ISR_PROFILE_SLOT_COUNT] = { "timing_engine_alarm", "led_flicker" };
+    const int mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    char buf[640];
+    int off = snprintf(buf, sizeof(buf), "{\"cpu_mhz\":%d,\"flicker_tick_period_us_max\":100,\"isrs\":[", mhz);
+    for (int i = 0; i < ISR_PROFILE_SLOT_COUNT && off < (int)sizeof(buf) - 160; i++) {
+        isr_profile_t *p = &g_isr_profiles[i];
+        uint32_t cnt = p->count;
+        uint32_t mx  = p->max_cycles;
+        uint32_t mn  = cnt ? p->min_cycles : 0u;
+        uint32_t avg = cnt ? (uint32_t)(p->sum_cycles / cnt) : 0u;
+        // Report raw cycles + cpu_mhz (avoid %f — nano printf may drop it); also
+        // ns fields (integer) for convenience: ns = cyc * 1000 / mhz.
+        off += snprintf(buf + off, sizeof(buf) - off,
+            "%s{\"name\":\"%s\",\"count\":%u,\"min_cyc\":%u,\"max_cyc\":%u,\"avg_cyc\":%u,\"max_ns\":%u,\"avg_ns\":%u}",
+            i ? "," : "", names[i], (unsigned)cnt, (unsigned)mn, (unsigned)mx, (unsigned)avg,
+            (unsigned)(mhz ? (uint32_t)(((uint64_t)mx * 1000u) / mhz) : 0u),
+            (unsigned)(mhz ? (uint32_t)(((uint64_t)avg * 1000u) / mhz) : 0u));
+    }
+    off += snprintf(buf + off, sizeof(buf) - off, "]}");
+    httpd_resp_send(req, buf, off);
+#else
+    httpd_resp_sendstr(req, "{\"error\":\"CONFIG_ISR_PROFILING disabled\"}");
+#endif
     return ESP_OK;
 }
 
