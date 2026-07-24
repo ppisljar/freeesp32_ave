@@ -3,6 +3,12 @@
 Implementation reports. Reports not tied to a numbered plan live under
 `non_planned_reports/`.
 
+- `non_planned_reports/websocket_bg_push_reliability_investigation.md` — 6-agent
+  investigation (2026-07-24) of the raw-PCM-over-WS BG push starving the device ring
+  (46–69 ms). Root causes: 32 KB TCP window + httpd prio 5 (structural floor),
+  background-tab timer throttling (silent keepalive fails), DELBA/WiFi ceiling.
+  Tier-1 fixes (TCP window, httpd priority, deeper prebuffer, MessageChannel pump,
+  ring_ms flow control) vs Tier-2 (compress MP3/Opus over WS). NOT yet implemented.
 - `non_planned_reports/bg_browser_push_report.md` — browser-push BG audio +
   session-bounce-to-WAV (plan `bg_browser_push_plan.md`); Phases 1–3.5 built,
   build + web tests clean, hardware verification pending.
