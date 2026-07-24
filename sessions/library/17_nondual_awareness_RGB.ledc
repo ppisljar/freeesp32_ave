@@ -10,7 +10,7 @@
 0 10 50 >0 60 30 200 9 1 0       # inner violet-blue: 10 Hz sine, fade-in
 0 10 50 >0 32 96 255 6 1 180     # outer blue: antiphase
 A 0 200 0 >0 0 1 210 0            # binaural: carrier 200 / R210 => 10 Hz beat; vol fade-in
-S 3000 default 65 "Settle, and let the breath find its own rhythm. Nowhere to go, nothing to fix."
+S 3000 default 52 "Settle, and let the breath find its own rhythm. Nowhere to go, nothing to fix."
 15000 10 50 18 60 30 200 9 1 0   # inner: 18% reached
 15000 10 50 18 32 96 255 6 1 180 # outer
 30000 10 50 ~8:22:12000 60 30 200 9 1 0   # inner: slow breathing 8<->22%
@@ -21,26 +21,26 @@ A 60000 200 0 100 0 1 210 0       # alpha settle holds
 A 300000 >200 0 100 0 1 210 0     # carrier 200->203 (beat 10->7)
 300000 >10 50 ~8:22:12000 60 30 200 9 1 0   # inner: 10->7 lockstep
 300000 >10 50 ~8:22:12000 32 96 255 6 1 180 # outer
-S 300000 default 65 "Let awareness open and rest wherever it is. Choose nothing; receive everything."
+S 300000 default 52 "Let awareness open and rest wherever it is. Choose nothing; receive everything."
 
 # --- Long FLAT open hold (beat 7 Hz, deliberately steady) ---
 A 390000 203 0 100 0 1 210 0      # carrier 203 => beat 7 Hz held flat
 390000 7 50 ~8:22:12000 60 30 200 9 1 0    # inner: dim violet-blue 7 Hz
 390000 7 50 ~8:22:12000 32 96 255 6 1 180  # outer
-S 600000 default 65 "Rest in open awareness — nothing to do, nothing to hold."
-S 1080000 default 65 "Let awareness be vast and still, like a clear sky holding every passing cloud."
+S 600000 default 52 "Rest in open awareness — nothing to do, nothing to hold."
+S 1080000 default 52 "Let awareness be vast and still, like a clear sky holding every passing cloud."
 
 # --- Gentle return (beat 7->10) ---
 A 1560000 >203 0 100 0 1 210 0    # carrier 203->200 (beat 7->10)
 1560000 >7 50 ~8:22:12000 60 30 200 9 1 0   # inner: 7->10 lockstep
 1560000 >7 50 ~8:22:12000 32 96 255 6 1 180 # outer
-S 1560000 default 65 "Gently returning, carrying this stillness with you."
+S 1560000 default 52 "Gently returning, carrying this stillness with you."
 
 # --- Soft close: vol + brightness fade to 0 over 60 s ---
 A 1740000 200 0 >100 0 1 210 0    # beat alpha 10; vol 50->0
 1740000 10 50 >18 60 30 200 9 1 0    # inner: bright 18->0
 1740000 10 50 >18 32 96 255 6 1 180  # outer
-S 1740000 default 65 "Back at ten hertz. Gently return to the room, spacious and rested."
+S 1740000 default 52 "Back at ten hertz. Gently return to the room, spacious and rested."
 A 1800000 200 0 0 0 1 210 0       # volume 0
 1800000 10 50 0 60 30 200 9 1 0      # inner off
 1800000 10 50 0 32 96 255 6 1 180    # outer off

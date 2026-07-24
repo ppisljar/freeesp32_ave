@@ -12,7 +12,7 @@
 0 4 50 >0 255 80 0 6 1 180      # outer deep-amber: antiphase
 A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta: vol 0->55; sine
 A 0 200 ~-100:100:6000 >0 0 14 0 5   # pink bed ch14: 6 s L<->R pan, vol 0->8 (wave 5)
-S 3000 default 65 "Settle in and let the body grow heavy. We will begin drifting inward together."
+S 3000 default 52 "Settle in and let the body grow heavy. We will begin drifting inward together."
 15000 4 50 20 255 160 32 9 1 0  # inner: 20% reached
 15000 4 50 20 255 80 0 6 1 180  # outer
 30000 4 50 ~12:25:12000 255 160 32 9 1 0   # inner: breathing 12<->25%
@@ -31,7 +31,7 @@ A 180000 250 0 >0 0 3 254 7  # ch3 fades in
 A 240000 250 0 55 0 3 254 7
 A 180000 300 0 >0 0 4 304 7  # ch4 fades in
 A 240000 300 0 55 0 4 304 7
-S 180000 default 65 "Entering Focus 10 now. The body is asleep, the mind clear and awake."
+S 180000 default 52 "Entering Focus 10 now. The body is asleep, the mind clear and awake."
 
 # --- Rise to Focus 27: cross-fade F10 out, F27 stack in ---
 A 480000 100 0 >55 0 1 101.5 7  # ch1 delta fades 55->0
@@ -58,13 +58,13 @@ A 480000 750 0 >0 0 9 754 7  # ch9 750[4.0] fades in 0->45
 A 540000 750 0 45 0 9 754 7
 A 480000 900 0 >0 0 10 904 7  # ch10 900[4.0] fades in 0->40
 A 540000 900 0 40 0 10 904 7
-S 480000 default 65 "Expanding now, rising into Focus 27 — a warm, welcoming place of your own making."
+S 480000 default 52 "Expanding now, rising into Focus 27 — a warm, welcoming place of your own making."
 
 # --- The Park hold: warm, gentle, steady ---
 720000 4 50 ~15:28:12000 255 160 32 9 1 0   # inner: warmer breathing 15<->28%, 4 Hz
 720000 4 50 ~15:28:12000 255 80 0 6 1 180   # outer
-S 720000 default 65 "You have arrived at the Park. Rest here, at ease, and let it take shape around you."
-S 1200000 default 65 "There is no hurry. Explore this peaceful, creative space and simply be."
+S 720000 default 52 "You have arrived at the Park. Rest here, at ease, and let it take shape around you."
+S 1200000 default 52 "There is no hurry. Explore this peaceful, creative space and simply be."
 
 # --- Return ---
 A 1680000 750 0 >45 0 9 754 7  # ch9 750 fades 45->0
@@ -74,7 +74,7 @@ A 1860000 900 0 0 0 10 904 7
 1680000 4 50 ~10:20:12000 255 160 32 9 1 0  # inner: dims gently, 4 Hz
 1680000 4 50 ~10:20:12000 255 80 0 6 1 180  # outer
 A 1680000 200 ~-100:100:6000 >8 0 14 0 5   # pink bed begins slow fade
-S 1680000 default 65 "Beginning to return now, gently, carrying the calm of the Park back with you."
+S 1680000 default 52 "Beginning to return now, gently, carrying the calm of the Park back with you."
 A 1860000 50 0 >45 0 5 50.8 7  # ch5 sub-delta fades out
 A 1980000 50 0 0 0 5 50.8 7
 A 1860000 400 0 >55 0 6 404 7  # ch6 400 fades out
@@ -85,7 +85,7 @@ A 1860000 600 0 >50 0 8 604 7  # ch8 600 fades out
 A 1980000 600 0 0 0 8 604 7
 1860000 4 50 >18 255 160 32 9 1 0    # inner: brightness 18->0
 1860000 4 50 >18 255 80 0 6 1 180    # outer
-S 1860000 default 65 "Coming back to the room now, calm, clear, and refreshed."
+S 1860000 default 52 "Coming back to the room now, calm, clear, and refreshed."
 A 1980000 200 ~-100:100:6000 0 0 14 0 5   # pink bed reaches 0
 1980000 4 50 0 255 160 32 9 1 0      # inner off
 1980000 4 50 0 255 80 0 6 1 180      # outer off

@@ -25,7 +25,7 @@
 # --- Settle / alpha induction (00:00-06:00, beat 10 Hz): vol + light fade in ---
 0 10 50 >0 60 0 180 5           # LED 10 Hz flicker, deep violet, brightness ramps 0->20% over 20 s
 A 0 250 0 >0 0 1 260 0           # ch1 binaural: carrier 250 / freq_r 260 => 10 Hz beat; vol fades 0->45 over 45 s
-S 5000 default 65 "Settle. Let the body grow heavy and still, the breath slow and easy."
+S 5000 default 52 "Settle. Let the body grow heavy and still, the breath slow and easy."
 20000 10 50 20 60 0 180 5       # brightness reaches 20% (ramp-in >=15 s satisfied)
 45000 10 50 ~10:30:12000 60 0 180 5   # breathing LFO engages: brightness sine 10<->30% over 12 s
 A 45000 250 0 90 0 1 260 0       # vol settled 45 (~45 s fade-in); beat steady 10 Hz
@@ -33,22 +33,22 @@ A 45000 250 0 90 0 1 260 0       # vol settled 45 (~45 s fade-in); beat steady 1
 # --- Slow descent alpha -> theta (06:00-14:00, beat 10->6 Hz, ~0.5 Hz/min) ---
 A 360000 >250 0 90 0 1 260 0     # carrier ramp START 250 -> (target 254 at 14:00) => beat 10->6
 360000 >10 50 ~10:30:12000 60 0 180 5   # LED flicker tracks beat 10->6, breathing continues
-S 360000 default 65 "Rest your attention on the breath. Let it grow still and bright."
+S 360000 default 52 "Rest your attention on the breath. Let it grow still and bright."
 
 # --- Theta absorption hold (14:00-30:00 = 16 min, beat 6 Hz, isochronic layered): the core ---
 A 840000 254 0 90 6 1 260 0      # carrier fixed 254 => binaural 6 Hz; 6 Hz isochronic pulse added 1:1; very steady
 840000 6 50 ~10:30:12000 55 0 170 5   # deep violet, 6 Hz flicker, gentle breathing LFO
-S 840000 default 65 "Six hertz. Let attention merge with the stillness. Nothing to do, nowhere to go."
-S 1320000 default 65 "Abide here, quiet and luminous. Let each breath deepen the absorption."
+S 840000 default 52 "Six hertz. Let attention merge with the stillness. Nothing to do, nowhere to go."
+S 1320000 default 52 "Abide here, quiet and luminous. Let each breath deepen the absorption."
 
 # --- Gentle return theta -> alpha (30:00-34:00, beat 6->10 Hz, soft) ---
 A 1800000 >254 0 90 >6 1 260 0   # return: carrier 254->250 (beat 6->10); isochronic pulse 6->0 (fades out)
 1800000 >6 50 ~10:30:12000 55 0 170 5   # LED 6->10 lockstep, breathing continues
-S 1800000 default 65 "Slowly rising now, letting the light and breath carry you toward waking calm."
+S 1800000 default 52 "Slowly rising now, letting the light and breath carry you toward waking calm."
 
 # --- Soft close (34:00-35:00): vol + brightness fade to 0 ---
 A 2040000 250 0 >90 0 1 260 0    # beat back at alpha 10 Hz; vol ramps 45->0 over final 60 s
 2040000 10 50 >20 60 0 180 5    # brightness fades 20->0 (>=15 s), preempts LFO
-S 2040000 default 65 "Back at ten hertz. Gently return to the room, calm, clear, and refreshed."
+S 2040000 default 52 "Back at ten hertz. Gently return to the room, calm, clear, and refreshed."
 A 2100000 250 0 0 0 1 260 0      # end: volume 0
 2100000 10 50 0 60 0 180 5      # end: brightness 0

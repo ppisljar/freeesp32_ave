@@ -11,21 +11,21 @@
 0 0 100 >0 255 24 16 6           # outer deep-red: steady halo
 A 0 200 0 >0 0.85 1 0 5           # ch1 pink noise, 0.85 Hz sine AM; vol fade-in
 A 0 100 0 >0 0 2 0 6              # ch2 brown noise, steady warm bed; vol fade-in
-S 3000 default 65 "Settling in. Let the soft rush of sound carry you toward sleep."
+S 3000 default 52 "Settling in. Let the soft rush of sound carry you toward sleep."
 15000 0 100 12 255 160 32 9      # inner: 12% (dim)
 15000 0 100 12 255 24 16 6       # outer
 A 60000 200 0 90 0.85 1 0 5        # ch1 pink vol settled
 A 60000 100 0 60 0 2 0 6           # ch2 brown vol settled
 
 # --- Hold: steady dim light + AM pink bed + brown warmth ---
-S 600000 default 65 "Breathing slow. Nothing to do now but drift."
+S 600000 default 52 "Breathing slow. Nothing to do now but drift."
 
 # --- Soft Off: brightness + both noise beds fade to 0 (no wake-up) ---
 1680000 0 100 >12 255 160 32 9    # inner: brightness ramp-out
 1680000 0 100 >12 255 24 16 6     # outer
 A 1680000 200 0 *90 0.85 1 0 5     # ch1 pink quad fade
 A 1680000 100 0 *60 0 2 0 6        # ch2 brown quad fade
-S 1680000 default 65 "The sound is fading now. Let go completely. Sleep."
+S 1680000 default 52 "The sound is fading now. Let go completely. Sleep."
 1800000 0 100 0 255 160 32 9      # inner off (dark)
 1800000 0 100 0 255 24 16 6       # outer off
 A 1800000 200 0 0 0.85 1 0 5       # pink 0

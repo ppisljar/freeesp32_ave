@@ -1,20 +1,23 @@
-# 33_ego_dissolution_RGB.ledc — Non-Dual Gamma / Ego-Dissolution, RGB inner/outer build (base: 33_ego_dissolution_gamma; name shortened for SPIFFS 32-char limit)
-# RGB variant of 33_ego_dissolution_gamma. Audio + speech IDENTICAL (alpha -> 40 Hz gamma
-# binaural with beat jitter + harmonic stack -> alpha). The flagship INVISIBLE-FLICKER pair
-# maps cleanly to the concentric rings: inner ring warm amber (mask 9, 255,160,32, phase 0)
-# + outer ring calm blue (mask 6, 32,96,255, phase 180), 40 Hz, matched dim brightness ->
-# mean luminance ~flat while the retina still gets the 40 Hz. Amber<->blue = strongest SSVEP
-# pair AND luminance-complementary. 40 Hz above the danger band; DIM <=18%. See base header.
+# 33_ego_dissolution_swap.ledc — Non-Dual Gamma / Ego-Dissolution, SINGLE-CHANNEL blue<->green swap variant
+# Variant of 33_ego_dissolution_RGB. Audio + speech IDENTICAL (alpha -> 40 Hz gamma binaural
+# with beat jitter + harmonic stack -> alpha). ONLY the LED layer differs.
 #
-# LED: time freq duty bright R G B mask [env phase]   (env 0 = square)
+# Instead of two concentric rings in ANTIPHASE with each other (inner amber phase 0 vs outer
+# blue phase 180), this version does the antiphasing WITHIN one unified channel (mask 15 = all
+# rings). The invisible 40 Hz flicker is carried CHROMATICALLY: on every LED the GREEN and BLUE
+# components sweep 0<->255 in antiphase via the ~sine colour modulation. Green = ~255:0:25 (starts
+# full green), Blue = ~0:255:25 (starts full blue) — each a full sine cycle over 25 ms = 40 Hz.
+# Because green+blue = 255 at every instant, mean luminance stays ~flat (invisible), while the
+# retina's chromatic channel still gets the 40 Hz. No brightness flicker is used (freq 0 = steady
+# bright); the colour swap alone does the entrainment. 40 Hz above the danger band; DIM <=18%.
+#
+# LED: time freq duty bright R G B mask   (freq 0 = steady bright; 40 Hz carried by the G/B ~sine swap at 25 ms = 40 Hz)
 
-# --- Induction / alpha 10 Hz: antiphase pair + alpha bed fade in ---
-0 40 50 >0 255 160 32 9 0 0        # inner amber ring: 40 Hz, phase 0; bright fade-in
-0 40 50 >0 32 96 255 6 0 180       # outer blue ring: 40 Hz, phase 180 (antiphase)
+# --- Induction / alpha 10 Hz: single-channel green<->blue swap + alpha bed fade in ---
+0 0 50 >0 0 ~255:0:25 ~0:255:25 15     # all rings: green<->blue antiphase swap @40 Hz; bright fade-in
 A 0 340 0 >0 0 1 350 0             # ch1 alpha binaural: carrier 340 / R350 => 10 Hz beat; vol fade-in
 S 3000 default 52 "Settle, and let the breath grow slow. We begin softly at ten hertz."
-15000 40 50 18 255 160 32 9 0 0    # inner: 18% dim cap
-15000 40 50 18 32 96 255 6 0 180   # outer: 18% (matched -> mean luminance ~steady)
+15000 0 50 18 0 ~255:0:25 ~0:255:25 15 # dim cap 18%
 A 60000 340 0 90 0 1 350 0         # ch1 alpha vol settled
 
 # --- Cross-fade into gamma: alpha out, 40 Hz binaural + harmonic in ---
@@ -26,7 +29,7 @@ A 120000 170 0 >0 0 3 210 0        # ch3 HARMONIC octave-down 170/210 => same 40
 A 300000 170 0 44 0 3 210 0        # ch3 harmonic settled
 S 120000 default 52 "Now the field steadies to a gentle forty-hertz shimmer. Let self and surroundings blur at the edges."
 
-# --- GAMMA HOLD: antiphase 40 Hz light + binaural + harmonic, jitter on ---
+# --- GAMMA HOLD: chromatic 40 Hz swap + binaural + harmonic, jitter on ---
 S 300000 default 52 "Rest in open, boundaryless awareness. Nothing to hold, nowhere to stand. Just this."
 S 900000 default 52 "Let the sense of a separate centre soften. Vast, still, undivided — and the light asks nothing of your eyes."
 
@@ -39,11 +42,9 @@ A 1500000 340 0 >0 0 1 350 0       # ch1 alpha returns: fade in
 A 1620000 340 0 70 0 1 350 0       # alpha back at 10 Hz
 S 1500000 default 52 "Gently gathering back toward a centre now, carrying the spaciousness with you."
 
-# --- Soft close: alpha + antiphase pair fade to 0 ---
+# --- Soft close: alpha + green<->blue swap fade to 0 ---
 A 1680000 340 0 >70 0 1 350 0      # alpha vol fade
-1680000 40 50 >18 255 160 32 9 0 0 # inner: brightness fade
-1680000 40 50 >18 32 96 255 6 0 180 # outer
+1680000 0 50 >18 0 ~255:0:25 ~0:255:25 15 # brightness fade
 S 1680000 default 52 "Let the shimmer fade. Rest a moment, then open your eyes, whole and clear."
 A 1800000 340 0 0 0 1 350 0        # ch1 vol 0
-1800000 40 50 0 255 160 32 9 0 0   # inner off
-1800000 40 50 0 32 96 255 6 0 180  # outer off
+1800000 0 50 0 0 ~255:0:25 ~0:255:25 15   # all rings off

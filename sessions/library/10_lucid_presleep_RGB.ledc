@@ -40,8 +40,8 @@ A 1440000 250 0 >30 40 2               # Soft Off gamma -> 0
 A 1680000 250 0 0 40 2                 # silent
 
 # ---- Speech markers ----
-S 3000 default 65 "Settling into alpha. Let your body grow still while your awareness stays softly awake."
-S 360000 default 65 "Drifting down toward theta, the dream gateway."
-S 960000 default 65 "Resting in theta now. Hold one intention: tonight I will know that I am dreaming."
-S 1200000 default 65 "Let the images drift and form. Watch them, aware, as the body sleeps."
-S 1440000 default 65 "Let go now, and dream aware."
+S 3000 default 52 "Settling into alpha. Let your body grow still while your awareness stays softly awake."
+S 360000 default 52 "Drifting down toward theta, the dream gateway."
+S 960000 default 52 "Resting in theta now. Hold one intention: tonight I will know that I am dreaming."
+S 1200000 default 52 "Let the images drift and form. Watch them, aware, as the body sleeps."
+S 1440000 default 52 "Let go now, and dream aware."

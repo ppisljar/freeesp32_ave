@@ -11,7 +11,7 @@
 0 4 50 >0 32 96 255 6 1 180     # outer blue: antiphase
 A 0 100 0 >0 0 1 101.5 7  # ch1 delta 100[1.5]: vol 0->20
 A 0 200 ~-100:100:6000 >0 0 11 0 5   # ch11 phased PINK bed; pan L<->R 6 s; vol 0->8
-S 3000 default 65 "Settle in, let the body go loose and heavy, and let your breathing slow all on its own."
+S 3000 default 52 "Settle in, let the body go loose and heavy, and let your breathing slow all on its own."
 15000 4 50 22 90 0 200 9 1 0    # inner: 22% reached
 15000 4 50 22 32 96 255 6 1 180 # outer
 30000 4 50 ~16:24:12000 90 0 200 9 1 0   # inner: breathing 16<->24%
@@ -25,7 +25,7 @@ A 180000 204 0 >0 0 9 208 7  # septon b 204->208
 A 180000 208 0 >0 0 10 212 7  # septon c 208->212
 A 180000 250 0 >0 0 3 254 7  # ch3 theta 250[4.0]; vol 0->30
 A 180000 300 0 >0 0 4 304 7  # ch4 theta 300[4.0]
-S 180000 default 65 "Entering Focus Ten now — mind awake, body asleep. Rest at the threshold, calm and clear."
+S 180000 default 52 "Entering Focus Ten now — mind awake, body asleep. Rest at the threshold, calm and clear."
 A 240000 200 0 44 0 8 204 7  # septon a holds 22
 A 240000 204 0 44 0 9 208 7  # septon b holds 22
 A 240000 208 0 44 0 10 212 7  # septon c holds 22
@@ -36,20 +36,20 @@ A 240000 300 0 60 0 4 304 7  # ch4 holds 30
 A 480000 500 0 >0 0 5 507.05 7  # ch5 500[7.05]; vol 0->18
 A 480000 630 0 >0 0 6 637.1 7  # ch6 630[7.1]
 A 480000 750 0 >0 0 7 757 7  # ch7 750[7.0]
-S 480000 default 65 "Expanding gently into Focus Fifteen. The edges of the clock begin to soften."
+S 480000 default 52 "Expanding gently into Focus Fifteen. The edges of the clock begin to soften."
 A 540000 500 0 36 0 5 507.05 7  # ch5 holds 18
 A 540000 630 0 36 0 6 637.1 7  # ch6 holds 18
 A 540000 750 0 36 0 7 757 7  # ch7 holds 18
 
 # --- No-Time hold: full stack, VERY steady ---
-S 720000 default 65 "Time is dissolving. There is no before and no after — only this. Rest here in the timeless."
-S 1200000 default 65 "Nowhere to go, nothing to do. Let the stillness hold you completely."
+S 720000 default 52 "Time is dissolving. There is no before and no after — only this. Rest here in the timeless."
+S 1200000 default 52 "Nowhere to go, nothing to do. Let the stillness hold you completely."
 
 # --- Return: fade the 7 Hz layers out, then a soft fade toward silence ---
 A 1800000 500 0 >36 0 5 507.05 7  # ch5 7 Hz fades 18->0
 A 1800000 630 0 >36 0 6 637.1 7  # ch6 fades out
 A 1800000 750 0 >36 0 7 757 7  # ch7 fades out
-S 1800000 default 65 "Slowly, gently, time returns. Begin to drift back toward the surface."
+S 1800000 default 52 "Slowly, gently, time returns. Begin to drift back toward the surface."
 A 1890000 500 0 0 0 5 507.05 7  # ch5 silent
 A 1890000 630 0 0 0 6 637.1 7  # ch6 silent
 A 1890000 750 0 0 0 7 757 7  # ch7 silent
@@ -62,7 +62,7 @@ A 1920000 208 0 >44 0 10 212 7  # septon c fades out
 A 1920000 250 0 >60 0 3 254 7  # ch3 theta fades out
 A 1920000 300 0 >60 0 4 304 7  # ch4 theta fades out
 A 1920000 200 ~-100:100:6000 >16 0 11 0 5   # ch11 pink bed fades out
-S 2010000 default 65 "Let it all fade softly to quiet. You may rest, or open your eyes when you are ready."
+S 2010000 default 52 "Let it all fade softly to quiet. You may rest, or open your eyes when you are ready."
 A 2040000 100 0 0 0 1 101.5 7  # end: all volumes 0
 A 2040000 200 0 0 0 8 204 7  # septon a silent
 A 2040000 204 0 0 0 9 208 7  # septon b silent

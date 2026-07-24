@@ -34,7 +34,7 @@ A 540000 250 0 >30 40 2                # Soft Off gamma -> 0
 A 720000 250 0 0 40 2                  # silent
 
 # ---- Speech markers ----
-S 3000 default 65 "Back to bed. Let the waking mind settle, and sink quickly toward theta."
-S 240000 default 65 "Theta now, the dream gateway. Hold your intention: I will know when I am dreaming."
-S 360000 default 65 "Let the body sleep while a thread of awareness stays. Watch the images come."
-S 540000 default 65 "Let go now, and dream aware."
+S 3000 default 52 "Back to bed. Let the waking mind settle, and sink quickly toward theta."
+S 240000 default 52 "Theta now, the dream gateway. Hold your intention: I will know when I am dreaming."
+S 360000 default 52 "Let the body sleep while a thread of awareness stays. Watch the images come."
+S 540000 default 52 "Let go now, and dream aware."

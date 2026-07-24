@@ -24,19 +24,19 @@
 0 0 100 >0 255 90 0 10                  # LED steady dim amber; brightness fade-in from 0
 A 0 200 0 >0 0.85 1 0 5 40 3 0 50        # ch1 pink noise, 0.85 Hz trapezoid gate (40% duty, 50 ms attack); vol fade-in
 A 0 100 0 >0 0 2 0 6                     # ch2 brown noise, steady warm bed; vol fade-in
-S 3000 default 65 "Settling in. Let the slow waves of sound rock you toward sleep."
+S 3000 default 52 "Settling in. Let the slow waves of sound rock you toward sleep."
 15000 0 100 12 255 90 0 10              # brightness reaches 12% (dim; >=10 s ramp-in)
 A 60000 200 0 90 0.85 1 0 5 40 3 0 50    # ch1 pink vol settled 45 (trapezoid held)
 A 60000 100 0 60 0 2 0 6                 # ch2 brown vol settled 30
 
 # --- Hold (01:00-28:00 = 27 min): steady dim light + pulsed pink bed + brown warmth ---
-S 600000 default 65 "Each soft pulse a little deeper. Nothing to hold. Just drift."
+S 600000 default 52 "Each soft pulse a little deeper. Nothing to hold. Just drift."
 
 # --- Soft Off (28:00-30:00): brightness + both noise beds fade to 0 (no wake-up) ---
 1680000 0 100 >12 255 90 0 10           # LED brightness ramp-out START 12 ...
 A 1680000 200 0 *90 0.85 1 0 5 40 3 0 50 # ch1 pink quad fade 45->0 (trapezoid held)
 A 1680000 100 0 *60 0 2 0 6              # ch2 brown quad fade 30->0
-S 1680000 default 65 "The pulses are fading now. Let go completely. Sleep."
+S 1680000 default 52 "The pulses are fading now. Let go completely. Sleep."
 1800000 0 100 0 255 90 0 10             # end: brightness 0 (dark)
 A 1800000 200 0 0 0.85 1 0 5 40 3 0 50   # end: pink vol 0
 A 1800000 100 0 0 0 2 0 6                # end: brown vol 0 (silent)
