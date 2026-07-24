@@ -6,7 +6,8 @@ import { loadExample, playConfig, stopConfig, clearConfig, bindFileInput } from 
 import { refreshConfigList, loadSelected, saveCurrent, saveAsDialog } from './configstore.js';
 import { ctrlInit } from './livecontrol.js';
 import { settingsInit } from './settings.js';
-import { refreshReportList, viewReport, deleteReport } from './reportstore.js';
+import { refreshReportList, viewReport, deleteReport, saveReportEdits,
+         toggleDeviceLog, downloadDeviceLog, toggleBrowserLog, downloadBrowserLog } from './reportstore.js';
 import { initTabs } from './nav.js';
 import { generatorInit } from './gen/generator.js';
 import { firmwareInit } from './firmware.js';
@@ -32,11 +33,19 @@ async function boot() {
     bind('btnStop', stopConfig);
     bind('btnClear', clearConfig);
     bind('btnRefreshLedc', refreshConfigList);
-    bind('btnLoadGen', loadSelected);
+    // Load a config as soon as it's picked in the dropdown (no separate Load
+    // button — mirrors the Reports dropdown's select-to-view behaviour).
+    const ledcDd = document.getElementById('ledcDropdown');
+    if (ledcDd) ledcDd.addEventListener('change', loadSelected);
     bind('btnSaveGen', saveCurrent);
     bind('btnSaveAsGen', saveAsDialog);
     bind('btnReportDelete', deleteReport);
     bind('btnReportRefresh', refreshReportList);
+    bind('btnReportSave', saveReportEdits);
+    bind('btnReportLogView', toggleDeviceLog);
+    bind('btnReportLogDownload', downloadDeviceLog);
+    bind('btnReportBLogView', toggleBrowserLog);
+    bind('btnReportBLogDownload', downloadBrowserLog);
     // View a report by selecting it in the dropdown (no separate View button).
     const reportDd = document.getElementById('reportDropdown');
     if (reportDd) reportDd.addEventListener('change', viewReport);

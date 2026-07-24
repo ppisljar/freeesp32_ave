@@ -37,13 +37,15 @@
                     <button id="btnUpload">📂 Upload File…</button>
                     <input type="file" id="configFile" accept=".led,.ledc,.txt" style="display:none">
                     <button id="btnPlay" style="background: #28a745;">▶ PLAY Config</button>
+                    <label style="font-size:13px;color:#555;" title="Countdown before playback starts, so you can put on the glasses & headphones">
+                        Delay <input type="number" id="playDelay" value="60" min="0" max="600" step="5" style="width:56px;padding:4px;"> s
+                    </label>
                     <button id="btnClear">Clear</button>
                 </div>
                 <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
                     <strong style="font-size:13px;">Configs:</strong>
                     <select id="ledcDropdown" style="min-width:240px;padding:4px;"></select>
                     <button id="btnRefreshLedc" title="Reload list from all sources">⟳</button>
-                    <button id="btnLoadGen">Load</button>
                     <button id="btnSaveGen">Save</button>
                     <button id="btnSaveAsGen">Save As…</button>
                     <span id="loadedFilename" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
@@ -143,6 +145,31 @@
                     <button id="btnReportRefresh" title="Reload report list">⟳</button>
                 </div>
                 <div style="font-size:12px;color:#888;margin-top:6px;">Reports are generated after a config session. Where they're stored is configured in Settings; they're always uploaded to the generator when its URL is set.</div>
+                <div id="reportEditor" style="display:none;margin-top:15px;padding:12px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <label style="font-size:13px;">Title
+                            <input type="text" id="reportTitle" placeholder="Report title" style="min-width:260px;padding:4px;margin-left:4px;">
+                        </label>
+                        <button id="btnReportSave" style="background:#28a745;">💾 Save</button>
+                        <span id="reportSavedName" style="color:#666;font-style:italic;font-size:12px;"></span>
+                    </div>
+                    <label style="font-size:13px;display:block;margin-top:8px;">Comments</label>
+                    <textarea id="reportComments" placeholder="Notes about this session (how you felt, effects observed, tweaks to try…)" style="width:100%;min-height:72px;margin-top:4px;padding:6px;box-sizing:border-box;"></textarea>
+                    <div id="reportLogRow" style="display:none;margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <strong style="font-size:13px;">Device log:</strong>
+                        <span id="reportLogInfo" style="font-size:12px;color:#666;">—</span>
+                        <button id="btnReportLogView" title="Show/hide the full ESP32 device log captured during this session">👁 View</button>
+                        <button id="btnReportLogDownload" title="Download the full device log as a .log file">⬇ Download</button>
+                    </div>
+                    <pre id="reportLogBox" style="display:none;margin-top:8px;max-height:340px;overflow:auto;background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:12px;white-space:pre-wrap;"></pre>
+                    <div id="reportBLogRow" style="display:none;margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <strong style="font-size:13px;">Browser log:</strong>
+                        <span id="reportBLogInfo" style="font-size:12px;color:#666;">—</span>
+                        <button id="btnReportBLogView" title="Show/hide the browser-side session log (compile, HTTP, WebSocket, errors)">👁 View</button>
+                        <button id="btnReportBLogDownload" title="Download the browser session log as a .log file">⬇ Download</button>
+                    </div>
+                    <pre id="reportBLogBox" style="display:none;margin-top:8px;max-height:340px;overflow:auto;background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:12px;white-space:pre-wrap;"></pre>
+                </div>
                 <div id="reportBox" style="margin-top:15px;display:none;background:#f0f4f8;border:1px solid #c3d0e0;border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;"></div>
             </div>
         </div>

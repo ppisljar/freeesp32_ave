@@ -12,6 +12,7 @@ import {
 import { encodeWav16, wavBlob, decodeFile } from './bgaudio.js';
 import { pushBg } from './transport.js';
 import { SAMPLE_RATE } from './model.js';
+import { clogI, clogW, clogE } from '../clientlog.js';
 
 // Render the session to one WAV.
 //   scope: 'all'      → A entrainment mix + speech + BG clip
@@ -23,6 +24,7 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
     const log = onProgress || (() => {});
     const rows = (doc && doc.rows) || [];
     const speechRows = rows.filter(r => r.kind === 'speech' && r.text && r.text.trim());
+    clogI('bounce', 'start scope=' + scope + ' engine=' + engine + ' rows=' + rows.length + ' speech=' + speechRows.length + (doc.bg && doc.bg.url ? ' bg=' + doc.bg.url : ''));
 
     // 1. Synthesize each speech line (sequential = ordered). This is the slow
     //    part (one network TTS call per line), so it drives most of the progress
@@ -31,7 +33,13 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
     if (speechRows.length) log('Synthesizing ' + speechRows.length + ' speech line(s) via ' + engine + '…', 0.02);
     for (let si = 0; si < speechRows.length; si++) {
         const s = speechRows[si];
-        const buf = await synthSpeech(s.text, { voice: s.voice, engine });
+        let buf;
+        try {
+            buf = await synthSpeech(s.text, { voice: s.voice, engine });
+        } catch (e) {
+            clogE('bounce', 'TTS failed for speech ' + (si + 1) + '/' + speechRows.length + ' @' + s.time + 'ms:', e);
+            throw e;
+        }
         speeches.push({
             offset: Math.floor((s.time / 1000) * SAMPLE_RATE),
             buf,
@@ -55,8 +63,11 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
         if (url.indexOf('push://') === 0) {
             const name = url.slice('push://'.length);
             const rec = await store.get(name);
-            if (rec) { try { bgBuf = await decodeFile(rec.wavBlob); } catch (e) { bgBuf = null; } }
-            else bgNote = 'BG clip "' + name + '" not in library — not baked';
+            if (rec) {
+                try { bgBuf = await decodeFile(rec.wavBlob); clogI('bounce', 'BG push://' + name + ' decoded'); }
+                catch (e) { bgBuf = null; clogW('bounce', 'BG push://' + name + ' decode failed:', e); }
+            }
+            else { bgNote = 'BG clip "' + name + '" not in library — not baked'; clogW('bounce', bgNote); }
         } else if (url.indexOf('http://') === 0 || url.indexOf('https://') === 0) {
             log('Fetching BG ' + url + '…', 0.82);
             let ab;
@@ -65,10 +76,12 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 ab = await r.arrayBuffer();
             } catch (e) {
+                clogE('bounce', 'BG fetch failed (CORS?) ' + url + ':', e);
                 throw new Error('Could not fetch BG "' + url + '" from the browser (likely CORS). '
                     + 'Download the file and upload it via the BG row 📁 button, then retry.');
             }
             bgBuf = await decodeFile(ab);
+            clogI('bounce', 'BG fetched + decoded (' + ab.byteLength + ' bytes) ' + url);
         } else {
             // sdcard:// or anything else the browser can't retrieve.
             throw new Error('BG "' + url + '" can’t be read by the browser to bake. '
@@ -116,6 +129,7 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
     clampBuffers(left, right);
     const wav = encodeWav16([left, right], SAMPLE_RATE);
     const name = 'session-' + scope + '-' + Math.round(totalMs / 1000) + 's';
+    clogI('bounce', 'done: ' + Math.round(totalMs / 1000) + 's WAV, ' + wav.length + ' bytes' + (bgNote ? ' (' + bgNote + ')' : ''));
     return { wav, blob: wavBlob(wav), durationMs: totalMs, name, note: bgNote };
 }
 

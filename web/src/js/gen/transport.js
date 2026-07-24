@@ -3,6 +3,7 @@
 
 import { serializeForDevice } from './serialize.js';
 import { NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS } from './model.js';
+import { clogI, clogW, clogE } from '../clientlog.js';
 
 // Serialize the model and POST it to /api/play-config (text/plain). Stops any
 // running timeline on the device and starts this one. Speech (`S`) rows are
@@ -10,11 +11,16 @@ import { NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS } from './model.js';
 // browser-only, mixed into the bounced WAV).
 export function playDoc(doc) {
     const body = serializeForDevice(doc);
+    clogI('http', 'POST /api/play-config (' + body.length + ' bytes)');
     return fetch('/api/play-config', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body,
-    }).then(r => r.text());
+    }).then(r => {
+        if (!r.ok) clogE('http', '/api/play-config → HTTP ' + r.status);
+        else clogI('http', '/api/play-config → ' + r.status);
+        return r.text();
+    }).catch(err => { clogE('http', '/api/play-config failed:', err); throw err; });
 }
 
 // POST raw .ledc text to /api/play-config (caller has already filtered it, e.g.
@@ -29,7 +35,9 @@ export function playConfigText(text) {
 
 // Stop all audio + LED (drops the running timeline).
 export function stop() {
-    return fetch('/api/stop', { method: 'POST' }).then(r => r.text());
+    clogI('http', 'POST /api/stop');
+    return fetch('/api/stop', { method: 'POST' }).then(r => r.text())
+        .catch(err => { clogE('http', '/api/stop failed:', err); throw err; });
 }
 
 // Apply a single live-patch line (additive; does not restart the timeline).
@@ -92,6 +100,7 @@ export function pushBg(wavBlob, { pan = 0, loudness = 50 } = {}) {
     if (s_pushAbort) { try { s_pushAbort.abort(); } catch (e) { /* ignore */ } }
     const ctl = new AbortController();
     s_pushAbort = ctl;
+    clogI('bg-http', 'POST /api/bg-stream (' + (wavBlob.size || '?') + ' bytes, pan=' + pan + ' loudness=' + loudness + ')');
     return fetch('/api/bg-stream' + q, {
         method: 'POST',
         headers: { 'Content-Type': 'audio/wav' },
@@ -99,10 +108,12 @@ export function pushBg(wavBlob, { pan = 0, loudness = 50 } = {}) {
         signal: ctl.signal,
     }).then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
+        clogI('bg-http', '/api/bg-stream done → ' + r.status);
         return r.json();
     }).catch(err => {
         // A deliberate stopBg()/supersede abort is not an error to surface.
-        if (err && err.name === 'AbortError') return { ok: true, aborted: true };
+        if (err && err.name === 'AbortError') { clogI('bg-http', '/api/bg-stream aborted (stop/supersede)'); return { ok: true, aborted: true }; }
+        clogE('bg-http', '/api/bg-stream failed:', err);
         throw err;
     }).finally(() => { if (s_pushAbort === ctl) s_pushAbort = null; });
 }
@@ -137,8 +148,10 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
     return new Promise((resolve, reject) => {
         if (s_bgWs) { try { s_bgWs.close(1000, 'supersede'); } catch (e) { /* ignore */ } s_bgWs = null; }
         let ws;
-        try { ws = new WebSocket(wsUrl()); }
-        catch (e) { reject(e); return; }
+        const url = wsUrl();
+        clogI('ws', 'connecting ' + url + ' (' + pcmBytes.length + ' PCM bytes, pan=' + pan + ' loudness=' + loudness + ')');
+        try { ws = new WebSocket(url); }
+        catch (e) { clogE('ws', 'construct failed:', e); reject(e); return; }
         ws.binaryType = 'arraybuffer';
         s_bgWs = ws;
 
@@ -162,6 +175,7 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
             }
             sending = false;
             sentAll = true;
+            clogI('ws', 'all PCM queued (' + off + ' bytes) — closing on drain');
             // All PCM queued — close once the socket has flushed so the device
             // sees a clean end-of-stream and drains its ring (natural completion).
             (function closeWhenDrained() {
@@ -171,21 +185,23 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
             })();
         }
 
-        ws.onopen = () => { ws.send(wsHandshakeMsg(pan, loudness)); pump(); };
+        ws.onopen = () => { clogI('ws', 'open — sending handshake'); ws.send(wsHandshakeMsg(pan, loudness)); pump(); };
         ws.onmessage = (ev) => {
             // Back-channel {consumed, ring_ms} — pacing/stall hints (advisory in v1).
             try {
                 const m = JSON.parse(ev.data);
+                if (m && typeof m.ring_ms === 'number' && m.ring_ms < 200) clogW('ws', 'device ring low: ' + m.ring_ms + ' ms (underrun risk)');
                 if (onProgress && m && typeof m.ring_ms === 'number') { /* hook for UI */ }
             } catch (e) { /* ignore non-JSON */ }
         };
-        ws.onclose = () => {
+        ws.onclose = (ev) => {
             if (s_bgWs === ws) s_bgWs = null;
-            if (sentAll) resolve({ ok: true });
-            else reject(new Error('bg-ws closed before the clip finished sending'));
+            if (sentAll) { clogI('ws', 'closed cleanly after EOS (code=' + ev.code + ')'); resolve({ ok: true }); }
+            else { clogE('ws', 'closed BEFORE clip finished (code=' + ev.code + ' reason="' + (ev.reason || '') + '" clean=' + ev.wasClean + ', sent ' + off + '/' + pcmBytes.length + ' bytes)'); reject(new Error('bg-ws closed before the clip finished sending')); }
         };
         ws.onerror = () => {
             if (s_bgWs === ws) s_bgWs = null;
+            clogE('ws', 'connection error (sent ' + off + '/' + pcmBytes.length + ' bytes)');
             reject(new Error('bg-ws connection error'));
         };
     });
@@ -201,7 +217,7 @@ export function stopBgWs() {
 // Leaves any running timeline/audio untouched. Best-effort — never rejects.
 export function stopBg() {
     if (s_pushAbort) { try { s_pushAbort.abort(); } catch (e) { /* ignore */ } s_pushAbort = null; }
-    if (s_bgWs) { try { s_bgWs.close(1000, 'stop'); } catch (e) { /* ignore */ } s_bgWs = null; }
+    if (s_bgWs) { try { s_bgWs.close(1000, 'stop'); clogI('ws', 'closed by stopBg'); } catch (e) { /* ignore */ } s_bgWs = null; }
     return fetch('/api/bg-stream?stop=1', { method: 'POST' })
         .then(r => r.json())
         .catch(() => ({ ok: false }));

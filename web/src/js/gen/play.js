@@ -18,6 +18,7 @@ import { getEngine } from './tts.js';
 import { serialize } from './serialize.js';
 import { showMessage } from '../util.js';
 import { ensureSafetyAccepted } from '../safety.js';
+import { clogI, clogW, clogE } from '../clientlog.js';
 
 // In-memory cache of the last bounce, keyed by session content + engine, so
 // play/stop/play doesn't re-run the (slow, ~seconds) TTS bounce each time. It
@@ -31,6 +32,48 @@ let s_bounceCache = { key: null, pcm: null };
 const SESSION_BG_NAME = 'session';
 
 function $(id) { return document.getElementById(id); }
+
+// --- Pre-roll countdown -----------------------------------------------------
+// The Home Play button can request a delay before playback actually starts, so
+// the user has time to put on the glasses + headphones. We run a live 1 Hz
+// countdown (status message) that can be cancelled by STOP via
+// cancelPendingPlay(). The countdown Promise resolves at 0 and rejects with
+// Error('cancelled') if aborted.
+let s_countdownTimer = null;
+let s_countdownReject = null;
+
+export function cancelPendingPlay() {
+    if (s_countdownTimer) { clearInterval(s_countdownTimer); s_countdownTimer = null; }
+    if (s_countdownReject) {
+        const rej = s_countdownReject;
+        s_countdownReject = null;
+        rej(new Error('cancelled'));
+    }
+}
+
+function countdownMsg(sec) {
+    showMessage('Starting in ' + sec + 's — put on your glasses & headphones…', 'info');
+}
+
+// Wait `sec` seconds with a live status countdown. 0 (or negative) resolves
+// immediately, preserving the original no-delay behaviour for the Generator.
+function preRoll(sec) {
+    if (!sec || sec <= 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        let remaining = Math.round(sec);
+        s_countdownReject = reject;
+        countdownMsg(remaining);
+        s_countdownTimer = setInterval(() => {
+            remaining -= 1;
+            if (remaining <= 0) {
+                clearInterval(s_countdownTimer); s_countdownTimer = null; s_countdownReject = null;
+                resolve();
+            } else {
+                countdownMsg(remaining);
+            }
+        }, 1000);
+    });
+}
 
 function progShow() { const w = $('bounceProg'); if (w) w.style.display = 'block'; progSet(0, 'Preparing…'); }
 function progSet(frac, msg) {
@@ -63,7 +106,7 @@ async function ensureBounce(doc, engine) {
     }
 }
 
-export async function playSession(doc) {
+export async function playSession(doc, delaySec = 0) {
     if (!doc || !doc.rows || !doc.rows.length) {
         showMessage('Nothing to play', 'error');
         return;
@@ -79,14 +122,20 @@ export async function playSession(doc) {
     }
 
     const hasSpeech = doc.rows.some(r => r.kind === 'speech');
+    clogI('play', 'playSession: rows=' + doc.rows.length + ' speech=' + hasSpeech + ' delay=' + delaySec + 's' + (doc.bg && doc.bg.url ? ' bg=' + doc.bg.url : ''));
 
     if (!hasSpeech) {
         try {
+            if (delaySec > 0) clogI('play', 'pre-roll ' + delaySec + 's');
+            await preRoll(delaySec);                   // give the user time to gear up
             const res = await playDoc(doc);            // A + LED on the device
             showMessage(res || 'Playing', 'success');
             const p = pushSessionBg(doc);              // null unless BG is push://
-            if (p) p.catch(err => showMessage('Session BG: ' + err.message, 'error'));
+            if (p) { clogI('play', 'pushing session BG (push://)'); p.catch(err => { clogE('play', 'session BG push failed:', err); showMessage('Session BG: ' + err.message, 'error'); }); }
+            clogI('play', 'no-speech playback started');
         } catch (err) {
+            if (err && err.message === 'cancelled') { clogI('play', 'cancelled during pre-roll'); showMessage('Playback cancelled', 'info'); return; }
+            clogE('play', 'play error (no-speech path):', err);
             showMessage('Play error: ' + err, 'error');
         }
         return;
@@ -100,17 +149,28 @@ export async function playSession(doc) {
     // ring starves → clicks. Started here inside the Play gesture so autoplay
     // permits it; released when the push finishes or fails.
     startKeepAlive();
+    clogI('play', 'speech path: bounce → pre-roll → device + WS push');
     try {
+        // Bounce BEFORE the pre-roll so the (possibly seconds-long) TTS render
+        // happens during "Preparing…", not after the countdown — playback then
+        // starts promptly when the countdown reaches 0.
         const pcm = await ensureBounce(doc, getEngine());
+        clogI('play', 'bounce ready: ' + pcm.length + ' PCM bytes');
+        if (delaySec > 0) clogI('play', 'pre-roll ' + delaySec + 's');
+        await preRoll(delaySec);                        // give the user time to gear up
         const docForDevice = {
             ...doc,
             bg: { url: 'push://' + SESSION_BG_NAME, pan: 0, loudness: 100 },
         };
         await playDoc(docForDevice);                   // device: A+LED, armed to wait for the push
+        clogI('play', 'device armed; starting WS PCM push');
         await pushBgWs(pcm, { pan: 0, loudness: 100 }); // raw PCM over WebSocket → no on-device decode
+        clogI('play', 'WS push complete');
         showMessage('Playing (speech merged into background)', 'success');
     } catch (err) {
         progHide();
+        if (err && err.message === 'cancelled') { clogI('play', 'cancelled during pre-roll'); showMessage('Playback cancelled', 'info'); return; }
+        clogE('play', 'play error (speech path):', err);
         showMessage('Play error: ' + (err.message || err), 'error');
     } finally {
         stopKeepAlive();

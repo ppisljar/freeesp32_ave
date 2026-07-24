@@ -2,7 +2,9 @@
 // resolve per-press parameter snapshots, and display the session report.
 import { appConfig, showMessage } from './util.js';
 import { getCurrentConfigName } from './configstore.js';
-import { saveReport } from './reportstore.js';
+import { presentGeneratedReport, getReportMeta, getCurrentReportName, refreshLogSection } from './reportstore.js';
+import { startLogCapture, finalizeLogCapture, cancelLogCapture } from './logcapture.js';
+import { clogI } from './clientlog.js';
 // Interpolation evaluators are shared with the Generator (gen/interp.js) so the
 // report path and the Generator agree on the math. Behavior is identical to the
 // previous in-file definitions.
@@ -12,7 +14,7 @@ import {
 // Play through the SAME path as the Generator (parse → playSession) so the Home
 // Play button handles speech (S) rows and push:// BG, not just a raw device POST.
 import { parse } from './gen/parse.js';
-import { playSession } from './gen/play.js';
+import { playSession, cancelPendingPlay } from './gen/play.js';
 import { stopBg } from './gen/transport.js';
 
 // Report-on-session-end. Rather than guessing when a session finishes, we
@@ -26,7 +28,11 @@ function armReport(fallbackMs) {
     awaitingReport = true;
     if (reportFallbackTimer) clearTimeout(reportFallbackTimer);
     reportFallbackTimer = setTimeout(triggerReport, fallbackMs);
+    // Hide the previous report + its editor until the new one is generated, so
+    // stale title/comments don't linger over a fresh session.
     document.getElementById('reportBox').style.display = 'none';
+    const ed = document.getElementById('reportEditor');
+    if (ed) ed.style.display = 'none';
 }
 
 function triggerReport() {
@@ -52,6 +58,10 @@ export function loadExample() {
 }
 
 export function stopConfig() {
+    clogI('session', 'STOP pressed');
+    // Cancel a pending pre-roll countdown so STOP works even before playback
+    // has actually begun.
+    cancelPendingPlay();
     // Abort any in-flight browser BG push FIRST, else it keeps uploading and the
     // device keeps playing the background track after the timeline is stopped.
     stopBg();
@@ -185,18 +195,28 @@ function fetchReport() {
             }
             out += '\n--- Last loaded config ---\n';
             out += cfg || '(no config in memory)';
-            const box = document.getElementById('reportBox');
-            box.textContent = out;
-            box.style.display = 'block';
 
-            // Persist to the configured local destination (spiffs/local/none);
-            // independent of the generator upload below.
-            saveReport(out);
+            // Hand the machine body to the report editor: it shows the Title +
+            // Comments editor (title defaulted to the session name), renders the
+            // composed report in the box, and auto-saves under a
+            // session-name+timestamp filename per the Settings destination.
+            const box = document.getElementById('reportBox');
+            presentGeneratedReport(out, getCurrentConfigName());
+            const meta = getReportMeta();
+
+            // Stop the background log capture and store the accumulated device
+            // log under this report's filename, then refresh the editor's log
+            // row so the View/Download buttons light up.
+            finalizeLogCapture(getCurrentReportName())
+                .then(() => refreshLogSection())
+                .catch(() => {});
 
             // Best-effort upload to the generator. Failure is
             // non-fatal — the local display always succeeds first.
             const upload = {
                 config_name: getCurrentConfigName(),
+                title: meta.title,
+                comments: meta.comments,
                 session_origin_us: rep.session_origin_us,
                 session_length_s: rep.session_origin_us > 0
                     ? (rep.now_us - rep.session_origin_us) / 1e6 : null,
@@ -218,7 +238,13 @@ function fetchReport() {
                 box.textContent += '\n\n[generator upload failed: ' + err + ']';
             });
         })
-        .catch(err => showMessage('Report fetch failed: ' + err, 'error'));
+        .catch(err => {
+            // The session ended but we couldn't fetch the report — stop the
+            // background log poller so it doesn't run forever (no report name to
+            // link the captured log to in this failure path).
+            cancelLogCapture();
+            showMessage('Report fetch failed: ' + err, 'error');
+        });
 }
 
 export function playConfig() {
@@ -228,17 +254,29 @@ export function playConfig() {
         return;
     }
 
+    // Optional pre-roll countdown (seconds) so the user can put on the glasses
+    // and headphones before playback starts. Defaults to 60 s via the input.
+    const delayEl = document.getElementById('playDelay');
+    const delaySec = Math.max(0, parseInt(delayEl && delayEl.value, 10) || 0);
+
     // Parse to the shared model and play via the same code path as the Generator
     // (device timeline + speech merge + push:// BG). playSession handles its own
-    // success/error messaging.
+    // success/error messaging (including the live countdown).
     const { doc } = parse(config);
-    playSession(doc);
+    // Begin capturing the device log in the background (runs on any tab) so the
+    // full session log — not just the last 32 KB the device ring holds — is
+    // preserved and linked to the report generated at session end.
+    startLogCapture();
+    clogI('session', 'Home Play: config="' + (getCurrentConfigName() || '(unsaved)') + '" ' + config.length + ' bytes, delay=' + delaySec + 's');
+    playSession(doc, delaySec);
 
     // Report-on-session-end stays a Home feature: the report fires when the poll
     // detects the timeline stop; the fallback (parsed duration + 10 s) only
-    // covers a session too short for the 1 s poll to catch the edge.
+    // covers a session too short for the 1 s poll to catch the edge. Add the
+    // pre-roll so the fallback timer doesn't fire mid-countdown.
     const durMs = parseConfigDurationMs(config);
-    armReport(durMs + 10000);
+    armReport(delaySec * 1000 + durMs + 10000);
+    if (delaySec > 0) return;                 // playSession shows the live countdown message
     showMessage('Playing — report when the session ends', 'info');
 }
 
