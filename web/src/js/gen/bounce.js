@@ -89,11 +89,16 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
         }
     }
 
-    // 3. Total duration = max(A window, speech ends).
+    // 3. Total duration = max(A window, speech ends) + a trailing pad. Without
+    //    the pad the buffer ends the instant the LAST speech line finishes, so
+    //    the real-time WS push (and any audio/timeline drift) clips its tail —
+    //    the last "S" line gets cut and reads as "never spoken". 2 s of trailing
+    //    silence guarantees the final line plays in full with margin.
+    const SPEECH_TAIL_MS = 2000;
     const { channels, maxTimeMs } = extractAudioChannels(doc);
     let totalMs = (scope === 'all') ? maxTimeMs + 2000 : 0;
     for (const sp of speeches) {
-        const endMs = ((sp.offset + sp.buf.length) / SAMPLE_RATE) * 1000;
+        const endMs = ((sp.offset + sp.buf.length) / SAMPLE_RATE) * 1000 + SPEECH_TAIL_MS;
         if (endMs > totalMs) totalMs = endMs;
     }
     if (totalMs < 1000) totalMs = 1000;
