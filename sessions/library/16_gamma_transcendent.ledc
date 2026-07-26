@@ -32,7 +32,7 @@
 # --- Settle / alpha induction (00:00-06:00, beat 10 Hz): vol + light fade in ---
 0 10 50 >0 90 0 200 5           # LED 10 Hz violet flicker; brightness ramps 0->20% over 15 s
 A 0 200 0 >0 0 1 210 0           # ch1 binaural: carrier 200 / freq_r 210 => 10 Hz beat; vol fades 0->50 over 60 s
-S 3000 default 52 "Settle, and let the breath find its own rhythm. Beginning at ten hertz."
+S 3000 default 47 "Settle, and let the breath find its own rhythm. Beginning at ten hertz."
 15000 10 50 20 90 0 200 5       # brightness reaches 20% (ramp-in >=15 s done)
 30000 10 50 ~10:28:10000 90 0 200 5   # breathing LFO: brightness sine 10<->28% over 10 s
 A 60000 200 0 100 0 1 210 0       # alpha induction holds: carrier 200, vol steady 50 to 06:00
@@ -40,26 +40,26 @@ A 60000 200 0 100 0 1 210 0       # alpha induction holds: carrier 200, vol stea
 # --- Deepening: glide alpha -> theta (06:00-12:00, beat 10->6 Hz) ---
 A 360000 >200 0 >100 0 1 210 0    # carrier ramps 200->204 (beat 10->6); vol eases 50->40 over 6 min
 360000 >10 50 ~10:28:10000 90 0 200 5  # LED flicker tracks beat 10->6, breathing LFO continues
-S 360000 default 52 "Drifting down toward theta. Let attention grow soft and wide."
+S 360000 default 47 "Drifting down toward theta. Let attention grow soft and wide."
 
 # --- GAMMA HOLD (12:00-24:00 = 12 min): theta 6 Hz binaural + 40 Hz audio gamma ---
 A 720000 204 0 80 0 1 210 0      # ch1 theta layer: carrier 204 => 6 Hz beat, held flat (the envelope carrier)
 720000 6 50 ~8:25:10000 90 0 200 5     # LED: DIM SLOW 6 Hz violet flicker (theta rate) — NOT 40 Hz
 A 720000 200 0 >0 40 2 0 0       # ch2 GAMMA: 200 Hz tone, isochronic mod=40; vol fades in 0->34 over 45 s
 A 765000 200 0 ~34:4:167 40 2 0 0  # ch2 40 Hz nested in ~6 Hz volume envelope (167 ms) => theta-gamma coupling
-S 720000 default 52 "Rest in open awareness — nothing to do, nothing to hold. The forty-hertz layer is sound only."
-S 1080000 default 52 "Let awareness be vast and still, holding everything and grasping nothing."
+S 720000 default 47 "Rest in open awareness — nothing to do, nothing to hold. The forty-hertz layer is sound only."
+S 1080000 default 47 "Let awareness be vast and still, holding everything and grasping nothing."
 
 # --- Gentle return (24:00-30:00, gamma fades, beat 6->10 Hz) ---
 A 1440000 200 0 >68 40 2 0 0     # ch2 gamma fades out: vol 34->0 over 60 s, then silent
 A 1500000 200 0 0 40 2 0 0       # ch2 gamma off
 A 1440000 >204 0 80 0 1 210 0    # ch1 carrier ramps 204->200 (beat 6->10) over 6 min
 1440000 >6 50 ~8:25:10000 90 0 200 5   # LED 6->10 lockstep with ch1 beat
-S 1440000 default 52 "Gently returning, carrying this stillness with you."
+S 1440000 default 47 "Gently returning, carrying this stillness with you."
 
 # --- Soft close (30:00-32:00): vol + brightness fade to 0 ---
 A 1800000 200 0 >80 0 1 210 0    # beat back at alpha 10; vol ramps 40->0 over final 2 min
 1800000 10 50 >20 90 0 200 5    # brightness fades 20->0 (>=10 s), preempts LFO
-S 1800000 default 52 "Back at ten hertz. Gently return to the room, calm and clear."
+S 1800000 default 47 "Back at ten hertz. Gently return to the room, calm and clear."
 A 1920000 200 0 0 0 1 210 0      # end: ch1 volume 0
 1920000 10 50 0 90 0 200 5      # end: brightness 0

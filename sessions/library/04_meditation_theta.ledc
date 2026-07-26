@@ -25,7 +25,7 @@
 0 10 50 >0 90 0 200 5            # LED 10 Hz violet flicker, brightness ramps 0->20% over 15 s
 A 0 250 -30 >0 0 1 260 0          # ch1 (left)  carrier 250 / R260 = 10 Hz beat; vol fades 0->50
 A 0 250 30 >0 0 2 260 0           # ch2 (right) carrier 250 / R260 = 10 Hz beat; vol fades 0->50
-S 3000 default 52 "Beginning at ten hertz. Let the alpha rhythm settle you into a calm, easy stillness."
+S 3000 default 47 "Beginning at ten hertz. Let the alpha rhythm settle you into a calm, easy stillness."
 15000 10 50 20 90 0 200 5        # brightness reaches 20% (ramp-in >=10 s done)
 30000 10 50 ~10:30:10000 90 0 200 5   # breathing LFO engages: brightness sine 10<->30% over 10 s
 A 45000 250 -30 100 0 1 260 0      # ch1 vol settled 50
@@ -35,25 +35,25 @@ A 45000 250 30 100 0 2 260 0       # ch2 vol settled 50
 60000 >10 50 ~10:30:10000 90 0 200 5  # LED flicker tracks beat 10->6, breathing LFO continues
 A 60000 >250 -30 100 0 1 260 0     # ch1 carrier 250->254 => beat 10->6.0 over 8 min (0.5 Hz/min)
 A 60000 >250 30 100 0 2 260 0      # ch2 carrier 250->253.7 => beat 10->6.3 over 8 min
-S 60000 default 52 "Drifting down now, descending gently toward theta."
+S 60000 default 47 "Drifting down now, descending gently toward theta."
 
 # --- Theta hold: flat 6-min dwell (09:00-15:00, L6.0 / R6.3) ---
 540000 6 50 ~10:30:10000 60 0 180 5   # deep violet-blue, LED 6 Hz, breathing LFO
 A 540000 254 -30 100 0 1 260 0     # ch1 carrier 254 => beat 6.0 Hz held flat
 A 540000 253.7 30 100 0 2 260 0    # ch2 carrier 253.7 => beat 6.3 Hz held flat (0.3 Hz deepening offset)
-S 540000 default 52 "You have reached theta, six hertz. Rest here, quiet, open and aware."
+S 540000 default 47 "You have reached theta, six hertz. Rest here, quiet, open and aware."
 
 # --- Return to alpha (15:00-19:00, beat 6->10 Hz): emerge calm-alert ---
 900000 >6 50 ~10:30:10000 60 0 180 5  # LED 6->10 lockstep
 A 900000 >254 -30 100 0 1 260 0    # ch1 carrier 254->250 => beat 6.0->10 over 4 min
 A 900000 >253.7 30 100 0 2 260 0   # ch2 carrier 253.7->250 => beat 6.3->10 over 4 min
-S 900000 default 52 "Slowly rising now, returning toward alpha, clear and refreshed."
+S 900000 default 47 "Slowly rising now, returning toward alpha, clear and refreshed."
 
 # --- Soft close (19:00-20:00): vol + brightness fade to 0 over 60 s ---
 1140000 10 50 >20 90 0 200 5     # back to violet; brightness fades 20->0 (>=10 s), preempts LFO
 A 1140000 250 -30 >100 0 1 260 0   # ch1 beat back at alpha 10 Hz; vol 50->0
 A 1140000 250 30 >100 0 2 260 0    # ch2 beat back at alpha 10 Hz; vol 50->0
-S 1140000 default 52 "Back at ten hertz. Gently return to the room, calm and alert."
+S 1140000 default 47 "Back at ten hertz. Gently return to the room, calm and alert."
 1200000 10 50 0 90 0 200 5       # end: brightness 0
 A 1200000 250 -30 0 0 1 260 0     # end: ch1 volume 0
 A 1200000 250 30 0 0 2 260 0      # end: ch2 volume 0

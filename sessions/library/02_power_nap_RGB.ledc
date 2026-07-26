@@ -15,13 +15,13 @@
 10000  >10 50 >25 255 80 0 6  1 180      # outer
 A 0     >245   0 >0  0 1 255 0             # ch1 binaural: carrier 245 / R255 = 10 Hz; vol fade-in 0->50
 A 30000 >245.5 0 50  0 1 255 0             # 00:30 vol fade-in done; carrier glides toward 251 (beat 4)
-S 3000 default 52 "Starting at ten hertz, in alpha. Settle in for a short, restful nap."
+S 3000 default 47 "Starting at ten hertz, in alpha. Settle in for a short, restful nap."
 
 # --- Delta glide: beat 10->4, fade light off ---
 240000 >4 50 >25 255 160 32 9  1 0         # inner: 4->3.9; bright 25->0 (2-min fade)
 240000 >4 50 >25 255 80 0 6  1 180       # outer
 A 240000 >251 0 >50 0 1 255 0              # beat=4; carrier 251->251.1; vol 50->30
-S 240000 default 52 "Dropping into delta now, around four hertz. Let yourself sink and rest."
+S 240000 default 47 "Dropping into delta now, around four hertz. Let yourself sink and rest."
 
 # --- Delta rest -> floor: dark, beat glides to 3.4 ---
 360000 >3.9 50 0 255 160 32 9  1 0         # inner: 3.9->3.4; light off
@@ -30,21 +30,21 @@ A 360000 >251.1 0 30 0 1 255 0             # beat~3.9; carrier 251.1->251.6; vol
 960000 3.4 50 0 255 160 32 9  1 0          # inner: 3.4 floor, dark
 960000 3.4 50 0 255 80 0 6  1 180        # outer
 A 960000 251.6 0 30 0 1 255 0              # beat=3.4 floor/hold; vol 30
-S 960000 default 52 "Resting at the floor, three point four hertz. Deep and quiet."
+S 960000 default 47 "Resting at the floor, three point four hertz. Deep and quiet."
 
 # --- Re-ascent: WAKE — freq/brightness rise; inner warms to warm-white ---
 1020000 >3.4 50 >0 255 160 32 9  1 0       # inner: 3.4->7; bright 0->25
 1020000 >3.4 50 >0 255 80 0 6  1 180     # outer
 A 1020000 >251.6 0 >30 0 1 255 0           # beat 3.4->7 (carrier 251.6->248); vol 30->45
-S 1020000 default 52 "Beginning to rise now, coming up through theta toward waking."
+S 1020000 default 47 "Beginning to rise now, coming up through theta toward waking."
 1140000 >7 50 >25 255 160 32 9  1 0        # inner: 7->12; bright 25->50
 1140000 >7 50 >25 255 80 0 6  1 180      # outer
 A 1140000 >248 0 >45 0 1 255 0             # beat 7->12 (carrier 248->243); vol 45->60
-S 1140000 default 52 "Rising through alpha toward twelve hertz. Let the light and clarity return."
+S 1140000 default 47 "Rising through alpha toward twelve hertz. Let the light and clarity return."
 1260000 12 50 50 255 200 120 9 1 0         # inner: 12 Hz cap, warm-white (alert)
 1260000 12 50 50 255 160 32  6 1 180       # outer: amber
 A 1260000 >243 0 >60 0 1 255 0             # beat=12; audio ramps 12->14 above the LED cap; vol 60->65
 1350000 12 50 50 255 200 120 9 1 0         # inner: awake, warm-white, no fade
 1350000 12 50 50 255 160 32  6 1 180       # outer: amber
 A 1350000 241 0 65 0 1 255 0               # audio beat 14 Hz (carrier 241); ends bright/awake
-S 1350000 default 52 "Fully awake now, refreshed and alert. Open your eyes."
+S 1350000 default 47 "Fully awake now, refreshed and alert. Open your eyes."

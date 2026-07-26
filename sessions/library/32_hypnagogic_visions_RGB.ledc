@@ -12,7 +12,7 @@
 0 10 50 >0 255 80 0 6 1 180 3 0.6:30000     # outer deep-amber: antiphase
 A 0 246 0 >0 0 1 256 0                       # ch1 binaural: carrier 246 / R256 => 10 Hz beat; vol fade-in
 A 0 200 0 >0 0 2 0 5                         # ch2 soft pink-noise bed; vol fade-in
-S 3000 default 52 "Eyes closed. Let the amber field fill your vision, and simply watch what arises."
+S 3000 default 47 "Eyes closed. Let the amber field fill your vision, and simply watch what arises."
 15000 10 50 28 255 160 32 9 1 0 3 0.6:30000  # inner: 28% reached
 15000 10 50 28 255 80 0 6 1 180 3 0.6:30000  # outer
 A 60000 246 0 90 0 1 256 0                   # ch1 vol settled
@@ -22,27 +22,27 @@ A 60000 200 0 40 0 2 0 5                     # ch2 pink settled
 A 120000 >246 0 90 0 1 256 0                 # carrier 246->250 (beat 10->6)
 120000 >10 50 28 255 160 32 9 1 0 3 0.6:30000   # inner: flicker 10->6, jitter continues
 120000 >10 50 28 255 80 0 6 1 180 3 0.6:30000   # outer
-S 120000 default 52 "Drifting down into the twilight. Images may drift and shift; let them come and go."
+S 120000 default 47 "Drifting down into the twilight. Images may drift and shift; let them come and go."
 
 # --- Imagery hold (6 Hz, breathing brightness, jitter on) ---
 A 480000 250 0 90 0 1 256 0                  # beat settled 6 Hz
 480000 6 50 ~20:32:10000 255 160 32 9 1 0 3 0.6:30000   # inner: 6 Hz, 0.1 Hz brightness breath
 480000 6 50 ~20:32:10000 255 80 0 6 1 180 3 0.6:30000   # outer
-S 480000 default 52 "Rest here at the threshold. Faces, patterns, landscapes — witness them without grasping."
-S 900000 default 52 "Let the slow breath of the light carry you. The images renew themselves; stay soft and curious."
+S 480000 default 47 "Rest here at the threshold. Faces, patterns, landscapes — witness them without grasping."
+S 900000 default 47 "Let the slow breath of the light carry you. The images renew themselves; stay soft and curious."
 
 # --- Gentle rise (beat 6->9) ---
 A 1320000 >250 0 90 0 1 256 0               # carrier 250->247 (beat 6->9)
 1320000 >6 50 28 255 160 32 9 1 0 3 0.6:30000   # inner: 6->9, steady dim
 1320000 >6 50 28 255 80 0 6 1 180 3 0.6:30000   # outer
-S 1320000 default 52 "Gently rising now, carrying the imagery with you toward waking clarity."
+S 1320000 default 47 "Gently rising now, carrying the imagery with you toward waking clarity."
 
 # --- Soft fade ---
 A 1500000 247 0 >90 0 1 256 0               # beat alpha 9; vol fade
 1500000 9 50 >28 255 160 32 9 1 0 3 0        # inner: brightness fade, jitter released
 1500000 9 50 >28 255 80 0 6 1 180 3 0        # outer
 A 1500000 200 0 >40 0 2 0 5                  # pink bed fade
-S 1500000 default 52 "The field fades. Open your eyes when you are ready, calm and rested."
+S 1500000 default 47 "The field fades. Open your eyes when you are ready, calm and rested."
 A 1620000 247 0 0 0 1 256 0                  # ch1 vol 0
 1620000 9 50 0 255 160 32 9 1 0 3 0          # inner off
 1620000 9 50 0 255 80 0 6 1 180 3 0          # outer off

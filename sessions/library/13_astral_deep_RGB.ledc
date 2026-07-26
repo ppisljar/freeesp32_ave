@@ -11,7 +11,7 @@
 0 0 50 >0 255 160 32 9      # inner amber ember: steady, bright fade-in
 0 0 50 >0 255 24  16 6      # outer deep-red ember: steady
 A 0 210 0 >0 0 1 220 0       # ch1 binaural: carrier 210 / R220 => 10 Hz beat; vol fade-in
-S 3000 default 52 "Relax completely. Let every muscle soften, and let the body grow still."
+S 3000 default 47 "Relax completely. Let every muscle soften, and let the body grow still."
 15000 0 50 12 255 160 32 9  # inner: 12% reached
 15000 0 50 12 255 24  16 6  # outer
 30000 0 50 ~4:10:12000 255 160 32 9   # inner: breathing 4<->10%
@@ -22,27 +22,27 @@ A 60000 210 0 80 0 1 220 0   # vol 40; carrier held 210 => alpha 10 Hz
 A 360000 >210 0 80 0 1 220 0  # carrier 210->213 => beat 10->7
 360000 0 50 ~3:8:12000 255 160 32 9   # inner: dimmer breathing 3<->8%
 360000 0 50 ~3:8:12000 255 24  16 6   # outer
-S 360000 default 52 "Let go now, drifting downward, sinking deeper with every slow breath."
+S 360000 default 47 "Let go now, drifting downward, sinking deeper with every slow breath."
 A 660000 >213 0 80 0 1 220 0  # carrier 213->216.5 => beat 7->3.5
 
 # --- Vibrational plateau: long flat hold (beat ~3.5 Hz) ---
 A 960000 216.5 0 80 0 1 220 0 # carrier 216.5 => beat 3.5 Hz held flat (the "vibrational" threshold)
 960000 0 50 3 255 160 32 9    # inner: near-dark ember ~3%
 960000 0 50 3 255 24  16 6    # outer
-S 960000 default 52 "Mind awake, body asleep. Rest at the threshold, still and aware."
-S 1600000 default 52 "Feel the vibrations rise. Let them move through you, and simply allow it."
+S 960000 default 47 "Mind awake, body asleep. Rest at the threshold, still and aware."
+S 1600000 default 47 "Feel the vibrations rise. Let them move through you, and simply allow it."
 
 # --- Gentle return to alpha (beat 3.5->10) ---
 A 2520000 >216.5 0 80 0 1 220 0  # carrier 216.5->210 => beat 3.5->10; resurface
 2520000 0 50 >3 255 160 32 9  # inner: bright 3->12
 2520000 0 50 >3 255 24  16 6  # outer
-S 2520000 default 52 "Gently now. Beginning the slow return, rising back toward the body."
+S 2520000 default 47 "Gently now. Beginning the slow return, rising back toward the body."
 
 # --- Soft close: vol + brightness fade out ---
 A 2880000 210 0 >80 0 1 220 0 # beat alpha 10; vol 40->0 over final 120 s
 2880000 0 50 >12 255 160 32 9 # inner: bright 12->0
 2880000 0 50 >12 255 24  16 6 # outer
-S 2880000 default 52 "Coming back to the room now, calm, clear, and whole."
+S 2880000 default 47 "Coming back to the room now, calm, clear, and whole."
 A 3000000 210 0 0 0 1 220 0   # volume 0
 3000000 0 50 0 255 160 32 9   # inner off
 3000000 0 50 0 255 24  16 6   # outer off

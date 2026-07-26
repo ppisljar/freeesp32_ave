@@ -48,13 +48,13 @@ A 90000 220 ~-100:100:6000 30 0 6 0 5         # ch6 pink settled 15 (~-20 dB bed
 # --- Induction / alpha 10 Hz (00:00-02:00): primary binaural + amber light fade in ---
 0 10 50 >0 220 120 0 10 1 0 3                 # amber 10 Hz sine flicker (mask 15); bright fade-in
 A 0 265 0 >0 0 1 275 0 50 4 0 3 0.3:53000     # ch1 PRIMARY binaural: carrier 265 / freqR 275 => 10 Hz; beat jitter 0.3 Hz/53 s
-S 3000 default 52 "Lie back, body heavy and still. We begin at ten hertz, letting the body settle toward sleep while the mind stays awake."
+S 3000 default 47 "Lie back, body heavy and still. We begin at ten hertz, letting the body settle toward sleep while the mind stays awake."
 15000 10 50 22 220 120 0 10 1 0 3             # brightness reaches 22% (>=10 s ramp-in)
 A 120000 >265 0 90 0 1 275 0 50 4 0 3 0.3:53000  # vol settled 45; carrier begins the descent ramp 265->271 (beat 10->4)
 
 # --- Deepen (02:00-12:00): glide alpha 10 -> theta 4 Hz (Focus 10, ~0.6 Hz/min) ---
 120000 >10 50 22 220 120 0 10 1 0 3           # LED flicker tracks the beat 10->4
-S 120000 default 52 "Down and inward. The body sleeps; you remain aware. Approaching the threshold."
+S 120000 default 47 "Down and inward. The body sleeps; you remain aware. Approaching the threshold."
 
 # --- FOCUS-10 HOLD (12:00-28:00 = 16 min): septon stack + EEG-contour + trapezoid drum ---
 A 720000 271 0 100 0 1 275 0 50 4 0 3 0.3:53000   # ch1 primary at 4 Hz beat, fuller vol; jitter on
@@ -67,8 +67,8 @@ A 720000 250 0 >0 0 4 254 7                   # ch4 EEG-CONTOUR carrier (wave 7)
 A 780000 250 0 40 0 4 254 7                   # ch4 settled 20 (contour-shaped layer)
 A 720000 137 0 >0 4 5 0 0 40 3 0 5            # ch5 TRAPEZOID iso drum: 137 Hz, 4 Hz gate, 40% duty, 5 ms edge; fade in
 A 780000 137 0 60 4 5 0 0 40 3 0 5            # ch5 drum settled 30
-S 720000 default 52 "You are at the threshold now. Rest in the hum, poised and clear. Let a smooth intention to lift and float form gently."
-S 1200000 default 52 "Steady here. If sensations of movement or floating arise, stay calm and simply observe them."
+S 720000 default 47 "You are at the threshold now. Rest in the hum, poised and clear. Let a smooth intention to lift and float form gently."
+S 1200000 default 47 "Steady here. If sensations of movement or floating arise, stay calm and simply observe them."
 
 # --- Return (28:00-31:00): septon/EEG/drum fade, beat 4 -> alpha 10 ---
 A 1680000 200 0 >50 0 2 204 0                 # ch2 fade
@@ -81,7 +81,7 @@ A 1680000 137 0 >60 4 5 0 0 40 3 0 5          # ch5 trapezoid drum fade
 A 1860000 137 0 0 4 5 0 0 40 3 0 5
 A 1680000 >271 0 100 0 1 275 0 50 4 0 3 0.3:53000  # ch1 carrier ramps 271->265 (beat 4->10)
 1680000 >4 50 22 220 120 0 10 1 0 3           # LED 4->10 lockstep (drop breath LFO)
-S 1680000 default 52 "Gently returning. Let the body wake with you, carrying the stillness of the threshold home."
+S 1680000 default 47 "Gently returning. Let the body wake with you, carrying the stillness of the threshold home."
 
 # --- Soft close (31:00-32:00): primary + pink + light fade to 0 ---
 A 1860000 265 0 >100 0 1 275 0 50 4 0 3 0.3:53000  # beat back at alpha 10; vol fade 50->0

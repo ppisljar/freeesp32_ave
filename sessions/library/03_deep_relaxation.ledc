@@ -11,7 +11,7 @@
 # --- t=0:00  Induction start: beat 14 Hz (audio only); LED steady and dark; cool blue ---
 0 0 50 >0 0 80 180 15          # LED steady (freq 0); brightness ramps 0->30 over 15 s; cool blue; all 4 zones
 A 0 200 0 >0 14 1 0 0          # ch1 carrier 200 Hz, isochronic mod 14 Hz; volume ramps 0->55 over 45 s; sine
-S 3000 default 52 "Beginning at fourteen hertz. Let the tension of the day begin to loosen."
+S 3000 default 47 "Beginning at fourteen hertz. Let the tension of the day begin to loosen."
 
 # --- t=0:15  brightness ramp-in complete; light holds dim, still steady (no flicker) ---
 15000 0 50 30 0 80 180 15      # LED brightness 30% (hold); freq still 0 — no flicker during the 14 Hz portion
@@ -22,22 +22,22 @@ A 45000 200 0 55 >14 1 0 0     # volume 55 (held); isochronic mod ramps 14->10 a
 # --- t=5:00  Alpha reached: beat now <=10 Hz, so LED flicker safely begins at 10 Hz ---
 300000 >10 50 30 0 80 180 15   # LED flicker starts at 10 Hz and ramps 10->6 lockstep with the beat (-> t=12:00); dim blue
 A 300000 200 0 55 >10 1 0 0    # isochronic mod ramps 10->6 Hz (deepening toward theta) over 5:00-12:00
-S 300000 default 52 "You have reached alpha, ten hertz. Descending gently now toward theta."
+S 300000 default 47 "You have reached alpha, ten hertz. Descending gently now toward theta."
 
 # --- t=12:00  Theta core reached: hold beat 6 Hz; slow cool-blue -> warm-amber color shift begins ---
 720000 6 50 30 >0 >80 >180 15  # LED flicker 6 Hz (hold); RGB ramps blue(0,80,180)->amber(255,140,30) across the hold
 A 720000 200 0 55 6 1 0 0      # isochronic mod 6 Hz — theta hold begins (12:00-24:00 = 12 min dwell)
-S 720000 default 52 "Resting in theta now, six hertz. Let everything melt away."
+S 720000 default 47 "Resting in theta now, six hertz. Let everything melt away."
 
 # --- t=24:00  Hold-end anchor (amber reached); begin the gentle exit beat 6 -> 10 Hz ---
 1440000 >6 50 30 255 140 30 15 # LED flicker ramps 6->10 Hz (exit to calm-alert alpha); amber held
 A 1440000 200 0 55 >6 1 0 0    # isochronic mod ramps 6->10 Hz over 24:00-27:00 (exit to alpha, NOT beta)
-S 1440000 default 52 "Slowly rising now, coming back up toward calm, alert alpha."
+S 1440000 default 47 "Slowly rising now, coming back up toward calm, alert alpha."
 
 # --- t=27:00  Alpha exit reached: hold 10 Hz; slightly dimmer, warm amber ---
 1620000 10 50 28 255 160 60 15 # LED flicker 10 Hz (hold); brightness 28%; warm amber
 A 1620000 200 0 55 10 1 0 0    # isochronic mod 10 Hz (calm-alert alpha, held)
-S 1620000 default 52 "Back at ten hertz, relaxed and clear. Gently return to the room."
+S 1620000 default 47 "Back at ten hertz, relaxed and clear. Gently return to the room."
 
 # --- t=29:30  Settle anchor: begin the gentle close (volume + brightness fade to 0 over the final 30 s) ---
 1770000 10 50 >28 255 160 60 15 # brightness ramps 28->0 over the final 30 s; flicker stays 10 Hz (never stopped abruptly)

@@ -25,7 +25,7 @@
 # --- Induction (00:00-04:00, 10 Hz): vol + light fade in ---
 0 10 50 >0 200 220 255 5 1        # LED 10 Hz cool white, gentle sine gate; brightness ramps 0->30% over 15 s
 A 0 200 0 >0 10 1                  # isochronic: 200 Hz carrier pulsed at 10 Hz; vol fades 0->50 over 60 s
-S 3000 default 52 "Let your eyes rest closed and soften your gaze."
+S 3000 default 47 "Let your eyes rest closed and soften your gaze."
 15000 10 50 30 200 220 255 5 1    # brightness reaches 30% cap (ramp-in >=15 s done)
 30000 10 50 ~25:30:10000 200 220 255 5 1   # breathing brightness LFO 25<->30% over 10 s
 A 60000 200 0 100 10 1              # vol settled 50, beat holds 10 Hz
@@ -33,13 +33,13 @@ A 60000 200 0 100 10 1              # vol settled 50, beat holds 10 Hz
 # --- Imagery hold (04:00-16:00, ~10 Hz with +/-0.5 Hz floating drift) ---
 240000 ~9.5:10.5:8000 50 ~25:30:10000 200 220 255 5 1   # LED freq floats 9.5<->10.5 Hz (8 s/cycle), sine gate
 A 240000 200 0 100 ~9.5:10.5:8000 1   # isochronic beat floats 9.5<->10.5 Hz, locked 1:1 with the light
-S 240000 default 52 "Watch the geometric shapes and colors begin to form."
-S 480000 default 52 "Let the patterns move and shift — just observe, without holding on."
-S 720000 default 52 "Colors and forms arise on their own. Stay with them, at ease."
+S 240000 default 47 "Watch the geometric shapes and colors begin to form."
+S 480000 default 47 "Let the patterns move and shift — just observe, without holding on."
+S 720000 default 47 "Colors and forms arise on their own. Stay with them, at ease."
 
 # --- Soft fade (16:00-20:00): flicker settles to 10 Hz, brightness + vol fade to 0 over 4 min ---
 960000 10 50 >30 200 220 255 5 1  # float ends, steady 10 Hz; brightness fades 30->0 over 240 s
 A 960000 200 0 >100 10 1            # beat settles to 10 Hz; vol fades 50->0 over 240 s
-S 960000 default 52 "Gently returning now. Let the images fade."
+S 960000 default 47 "Gently returning now. Let the images fade."
 1200000 10 50 0 200 220 255 5 1   # end: brightness 0
 A 1200000 200 0 0 10 1             # end: volume 0

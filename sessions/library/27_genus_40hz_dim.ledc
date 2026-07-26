@@ -33,11 +33,11 @@
 0 40 50 >0 255 140 0 10 0 0         # AMBER bank (WARM bits, mask 10 = L-warm+R-warm): 40 Hz square, phase 0; bright fade-in
 0 40 50 >0 0 120 255 5 0 180       # BLUE  bank (COOL bits, mask 5 = L-cool+R-cool): 40 Hz square, phase 180 (antiphase)
 A 0 10000 0 >0 40 1 0 0 4 0        # ch1 GENUS click: 10 kHz carrier, 40 Hz gate, 4% duty; vol fade-in
-S 3000 default 52 "Beginning a gentle forty hertz session. The light is dim and steady to the eye — just relax."
+S 3000 default 47 "Beginning a gentle forty hertz session. The light is dim and steady to the eye — just relax."
 15000 40 50 20 255 140 0 10 0 0     # amber reaches 20% dim cap
 15000 40 50 20 0 120 255 5 0 180   # blue reaches 20% dim cap (matched -> luminance ~flat)
 A 30000 10000 0 80 40 1 0 0 4 0    # ch1 vol settled 40 (dim), 40 Hz / 4% click held
-S 30000 default 52 "Holding steady at forty hertz. Let it work in the background."
+S 30000 default 47 "Holding steady at forty hertz. Let it work in the background."
 
 # --- Hold (00:15 -> 29:30 = ~29 min): steady antiphase 40 Hz, dim ---
 #   Both banks hold 40 Hz / 50% / 20% (amber phase 0, blue phase 180); audio holds 40 Hz / 4% click.
@@ -46,7 +46,7 @@ S 30000 default 52 "Holding steady at forty hertz. Let it work in the background
 1770000 40 50 >20 255 140 0 10 0 0  # amber brightness ramp-out START 20 ...
 1770000 40 50 >20 0 120 255 5 0 180 # blue brightness ramp-out START 20 ...
 A 1770000 10000 0 >80 40 1 0 0 4 0 # ch1 volume ramp-out START 40 ...
-S 1770000 default 52 "The session is closing now. The light and tone gently fade. Well done."
+S 1770000 default 47 "The session is closing now. The light and tone gently fade. Well done."
 1800000 40 50 0 255 140 0 10 0 0    # amber -> 0
 1800000 40 50 0 0 120 255 5 0 180  # blue -> 0
 A 1800000 10000 0 0 40 1 0 0 4 0   # ch1 volume -> 0

@@ -1,0 +1,92 @@
+# test2b.ledc — feature-coverage test, part B of 3 (audio pulse/env/sweeps; LED carrier envs).
+# Self-contained: at t=0 all 8 audio channels (ch1..ch8) and the initial LED masks are set up.
+# Channels PERSIST once set, so each 10 s step only re-issues what changes. Strict 10 s steps,
+# then a ~5 s fade of all 8 audio channels + LED masks. EXACTLY 8 audio channels live at once.
+# Audio vols moderate (~40..60, noise ~30). S speech lines are browser-only (don't count to cap).
+# Play via the web app.
+#
+# NOTE: to set an audio env you must also supply the earlier optional fields (ch freqR waveType
+# duty) because env sits at token position 10 of the audio line (A <t> <freq> <pan> <vol> <mod>
+# <ch> <freqR> <waveType> <duty> <env> <phase> <attack> <jitter>).
+#
+# Coverage in this file:
+#   Audio: isochronic env 0/1/2/3(+attack)/4; pulse duty + phase + attack + jitter; frequency
+#          sweep > (linear) and * (quadratic); volume ramp (>).
+#   LED:   carrier env 0/1/2/3(+attack); LED flicker jitter; multiple simultaneous masks;
+#          flicker rate variety across masks.
+#
+#   env: 0 square 1 sine 2 triangle 3 trapezoid(+attack) 4 sine-tremolo(audio legacy)
+#   glyphs: >lin *quad ~sine ^tri /sawup \sawdn _square ; '-' = keep current
+
+# ===== 0 s — STEP one — 8-channel tone bed (setup). LED: 2 masks, 2 flicker rates (multi-mask)
+S 0 default 54 "this is a test"
+S 2000 default 54 "one"
+0 6  50 30 255 0 0 1            # mask1: 6 Hz theta (red)
+0 10 50 30 0 0 255 2            # mask2: 10 Hz alpha (blue)
+A 0 220 -40 50 0 1 0 0          # ch1 sine bed, mid-left
+A 0 247 -20 50 0 2 0 0          # ch2 sine bed
+A 0 262  0  50 0 3 0 0          # ch3 sine bed
+A 0 294  20 50 0 4 0 0          # ch4 sine bed
+A 0 330  40 50 0 5 0 0          # ch5 sine bed, mid-right
+A 0 349  0  50 0 6 0 2          # ch6 triangle bed
+A 0 392  0  40 0 7 0 4          # ch7 white noise (waveType 4), lower vol
+A 0 440  0  50 0 8 0 0          # ch8 sine bed
+
+# ===== 10 s — STEP two — isochronic gates: audio env 0/1/2/3(+attack)/4 across channels
+#            LED: carrier env 0 (square) vs env 1 (sine) on the two masks, steady (freq 0)
+S 10000 default 54 "this is a test"
+S 12000 default 54 "two"
+10000 0 50 40 255 0 0 1 0       # mask1: env 0 square carrier (red), steady
+10000 0 50 40 0 255 0 2 1       # mask2: env 1 sine carrier (green), steady
+A 10000 220 0 50 8 1 0 0 50 0   # ch1 env 0 square gate (duty 50)
+A 10000 247 0 50 8 2 0 0 50 1   # ch2 env 1 sine gate
+A 10000 262 0 50 8 3 0 0 50 2   # ch3 env 2 triangle gate
+A 10000 294 0 50 8 4 0 0 50 3 - 8   # ch4 env 3 trapezoid gate (attack 8 ms)
+A 10000 330 0 50 8 5 0 0 50 4   # ch5 env 4 sine tremolo (legacy bipolar)
+
+# ===== 20 s — STEP three — pulse duty + phase + attack + jitter on audio (env gates)
+#            LED: carrier env 2 (triangle) vs env 3 (trapezoid, attack) on the two masks
+S 20000 default 54 "this is a test"
+S 22000 default 54 "three"
+20000 6 50 30 0 0 255 1 2       # mask1: 6 Hz, env 2 triangle carrier (blue)
+20000 6 50 30 255 255 0 2 3 0 10    # mask2: 6 Hz, env 3 trapezoid carrier (attack 10, yellow)
+A 20000 220 0 50 8 1 0 0 20 0   # ch1 pulse duty 20% (narrow square gate)
+A 20000 247 0 50 8 2 0 0 80 0   # ch2 pulse duty 80% (wide gate)
+A 20000 262 0 50 8 3 0 0 50 0 90    # ch3 pulse phase 90 deg
+A 20000 294 0 50 8 4 0 0 50 0 180   # ch4 pulse phase 180 deg (antiphase vs ch3)
+A 20000 330 0 50 8 5 0 0 50 3 0 20 0.5  # ch5 trapezoid gate, attack 20 ms + mod jitter 0.5 Hz
+
+# ===== 30 s — STEP four — frequency sweeps: linear (>) and quadratic (*) + volume ramp (>)
+#            LED: flicker jitter on mask1 (8 Hz, anti-habituation) + steady cyan mask2
+S 30000 default 54 "this is a test"
+S 32000 default 54 "four"
+30000 8 50 30 255 0 255 1 0 0 3 1.5  # mask1: 8 Hz + flicker jitter 1.5 Hz (magenta)
+30000 0 50 45 0 255 255 2 0     # mask2: steady cyan (freq 0)
+A 30000 >200 0 50 0 1           # ch1 linear freq sweep 200 -> 500 (clears gate)
+A 30000 *200 0 50 0 2           # ch2 quadratic freq sweep 200 -> 600
+A 30000 300 0 >20 0 3           # ch3 volume ramp 20 -> 60
+
+# ===== 40 s — STEP five — closing: ~5 s linear fade-out of all 8 audio channels + LED masks
+#            (ch1/ch2 sweep + ch3 vol-ramp targets are folded into these fade-start entries)
+S 40000 default 54 "this is a test"
+S 42000 default 54 "five"
+40000 0 50 >30 255 0 255 1     # mask1 brightness ramp -> 0 (magenta)
+40000 0 50 >45 0 255 255 2     # mask2 brightness ramp -> 0 (cyan)
+A 40000 500 - >50 0 1          # ch1 sweep target 500 Hz, then vol ramp to 0 (targets at 45 s)
+A 40000 600 - >50 0 2          # ch2 sweep target 600 Hz, then vol ramp to 0
+A 40000 300 - >50 0 3          # ch3 vol-ramp settled, then fade to 0
+A 40000 - - >50 - 4
+A 40000 - - >50 - 5
+A 40000 - - >50 - 6
+A 40000 - - >40 - 7
+A 40000 - - >50 - 8
+A 45000 - - 0 - 1             # fade-out targets (~5 s): all 8 channels to zero
+A 45000 - - 0 - 2
+A 45000 - - 0 - 3
+A 45000 - - 0 - 4
+A 45000 - - 0 - 5
+A 45000 - - 0 - 6
+A 45000 - - 0 - 7
+A 45000 - - 0 - 8
+45000 0 50 0 255 0 255 1       # mask1 brightness reaches 0
+45000 0 50 0 0 255 255 2       # mask2 brightness reaches 0

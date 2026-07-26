@@ -41,13 +41,13 @@
 # ---- ch1: isochronic theta driver (carrier 220 Hz, beat via modulation) ------
 A 0       220 0 >0 10 1                  # t=0:00  vol fade-in from 0; beat (mod) 10 Hz
 A 60000   220 0 80 10 1                  # t=1:00  vol fade-in complete; beat 10 Hz
-S 3000 default 52 "Beginning at ten hertz, in alpha. Let your body grow still as your mind stays softly awake."
+S 3000 default 47 "Beginning at ten hertz, in alpha. Let your body grow still as your mind stays softly awake."
 A 120000  220 0 80 >10 1                 # t=2:00  beat descend START 10 Hz ...
-S 120000 default 52 "Drifting down toward theta now, into the hypnagogic threshold between waking and dreaming."
+S 120000 default 47 "Drifting down toward theta now, into the hypnagogic threshold between waking and dreaming."
 A 480000  220 0 76 6 1                   # t=8:00  ... TARGET 6 Hz (theta plateau)
-S 480000 default 52 "Resting in theta, six hertz. Let images drift and float, watching without holding on."
+S 480000 default 47 "Resting in theta, six hertz. Let images drift and float, watching without holding on."
 A 3300000 220 0 >76 6 1                  # t=55:00 Soft Off START: vol -> 0, beat held 6 Hz
-S 3300000 default 52 "The sound and light are fading now. Let yourself drift on into sleep."
+S 3300000 default 47 "The sound and light are fading now. Let yourself drift on into sleep."
 A 3600000 220 0 0 6 1                    # t=60:00 silent
 
 # ---- ch2: binaural theta layer (FIXED 6 Hz beat), joins at plateau -----------
