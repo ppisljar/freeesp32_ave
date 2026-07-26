@@ -2442,33 +2442,43 @@ static esp_err_t report_handler(httpd_req_t *req)
     // Build JSON response. Allocate a generous buffer — config can be up to
     // a few KB, plus JSON overhead. Stack allocation avoids fragmenting
     // heap for short-lived requests.
-    const size_t resp_cap = 8192;
-    char *resp = malloc(resp_cap);
-    if (!resp) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
-        return ESP_FAIL;
-    }
-    size_t off = 0;
-
-    off += snprintf(resp + off, resp_cap - off,
-                    "{\"session_origin_us\":%llu,\"now_us\":%llu,\"config\":\"",
-                    (unsigned long long)origin_us, (unsigned long long)now_us);
-
-    if (source) {
-        for (const char *p = source; *p && off < resp_cap - 8; p++) {
-            off += json_escape_char(*p, resp + off, resp_cap - off);
-        }
-    }
-
-    off += snprintf(resp + off, resp_cap - off, "\",\"button_presses_ms\":[");
-    for (size_t i = 0; i < n_in_session && off < resp_cap - 16; i++) {
-        off += snprintf(resp + off, resp_cap - off, "%s%u",
-                        i == 0 ? "" : ",", (unsigned)rel_ms[i]);
-    }
-    off += snprintf(resp + off, resp_cap - off, "]}");
-
+    // Stream the JSON as HTTP chunks so the (potentially multi-KB) config text is
+    // not bounded by a fixed buffer. The previous 8 KB buffer both TRUNCATED a
+    // large config AND, because `off += snprintf()` accumulates the would-have-
+    // written length, pushed the send length PAST the allocation — leaking
+    // uninitialised heap (raw 0x00/0x06 control bytes) that made the browser's
+    // JSON.parse fail. Chunked output has no total-size limit and no overshoot.
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, resp, off);
-    free(resp);
+
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf),
+                     "{\"session_origin_us\":%llu,\"now_us\":%llu,\"config\":\"",
+                     (unsigned long long)origin_us, (unsigned long long)now_us);
+    if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) return ESP_FAIL;
+
+    // Config text, JSON-escaped, flushed in blocks. Keep ≥8 bytes free before
+    // each append so json_escape_char always has room for its 6-byte \uXXXX
+    // worst case (never returns 0 → never silently drops a char).
+    if (source) {
+        char ebuf[512];
+        size_t eoff = 0;
+        for (const char *p = source; *p; p++) {
+            if (eoff > sizeof(ebuf) - 8) {
+                if (httpd_resp_send_chunk(req, ebuf, eoff) != ESP_OK) return ESP_FAIL;
+                eoff = 0;
+            }
+            eoff += json_escape_char(*p, ebuf + eoff, sizeof(ebuf) - eoff);
+        }
+        if (eoff && httpd_resp_send_chunk(req, ebuf, eoff) != ESP_OK) return ESP_FAIL;
+    }
+
+    n = snprintf(buf, sizeof(buf), "\",\"button_presses_ms\":[");
+    if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) return ESP_FAIL;
+    for (size_t i = 0; i < n_in_session; i++) {
+        n = snprintf(buf, sizeof(buf), "%s%u", i == 0 ? "" : ",", (unsigned)rel_ms[i]);
+        if (httpd_resp_send_chunk(req, buf, n) != ESP_OK) return ESP_FAIL;
+    }
+    httpd_resp_send_chunk(req, "]}", 2);
+    httpd_resp_send_chunk(req, NULL, 0);   // terminate the chunked response
     return ESP_OK;
 }

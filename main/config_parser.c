@@ -1965,6 +1965,13 @@ static void timeline_execution_task(void *pvParameters)
         } else {
             ESP_LOGI(TAG, "Timeline execution completed (no more entries)");
             timeline_running = false;
+            // Session ended: stop any LED flicker still running on masks the
+            // timeline didn't explicitly zero, so the device returns to idle
+            // instead of flickering forever. Real sessions fade brightness to 0
+            // at the end, so this is a no-op for them; it fixes sessions/tests
+            // that leave a mask active (audio is left as-is — it's already faded
+            // to silence and abrupt teardown here would risk a click).
+            led_matrix_stop_flicker_masked(0xFF);
             // Lock-free operation - no mutex needed
         }
 

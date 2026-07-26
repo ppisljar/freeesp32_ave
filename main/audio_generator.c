@@ -706,6 +706,14 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     // stay phase-coherent.
     uint64_t mod_now_us = (uint64_t)esp_timer_get_time();
 
+    // A3: the anti-habituation beat jitter is a slow (~45 s) GLOBAL wander that
+    // barely changes across a 23 ms buffer, so compute it ONCE here and reuse it
+    // for every binaural channel/sample. Computing it per-sample (as before) ran
+    // TWO software 64-bit divisions (esp_timer/1000 + t%period) 44100×/s per
+    // binaural channel — with jitter on and several binaural channels that blew
+    // the fill_buffer real-time budget and hung audio_output (task watchdog).
+    const float buffer_beat_jitter = beat_jitter_offset();
+
     // Mix all active channels
     for (int ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
         audio_gen_channel_t* channel = &audio_channels[ch];
@@ -902,7 +910,7 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             // A3: add a slow anti-habituation jitter to the beat (default off = no-op).
             if (channel->params.frequency_r > 0.0f) {
                 float freq_diff = channel->params.frequency_r - channel->params.frequency;
-                channel->current_freq_r = channel->current_freq + freq_diff + beat_jitter_offset();
+                channel->current_freq_r = channel->current_freq + freq_diff + buffer_beat_jitter;
             }
 
             // --- Implicit amplitude ramp (de-click) ---
