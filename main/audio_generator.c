@@ -97,12 +97,14 @@ static float sine_lut[SINE_LUT_SIZE];
 #define EEG_LUT_INDEX_SHIFT     22
 #define EEG_LUT_FRAC_MASK       ((1u << EEG_LUT_INDEX_SHIFT) - 1u)
 #define EEG_LUT_FRAC_SCALE      (1.0f / (float)(1u << EEG_LUT_INDEX_SHIFT))
-// PSRAM .bss (EXT_RAM_BSS_ATTR): the ESP32 has chronic internal-DRAM pressure
-// (only a few KB free at runtime once all tasks/buffers are up — a 4 KB internal
-// table can starve later xTaskCreate() calls like led_flicker_task). Filled once
-// at init and read from task context (fill_buffer), so PSRAM latency is fine; the
-// phase accumulator advances monotonically → near-sequential, cache-friendly reads.
-static EXT_RAM_BSS_ATTR float eeg_lut[EEG_LUT_SIZE];
+// Internal DRAM (NOT PSRAM): the per-sample lookups in fill_buffer() must be
+// single-cycle. Previously placed in PSRAM via EXT_RAM_BSS_ATTR to save internal
+// DRAM, but at high concurrent binaural-EEG carrier counts (each = 4 external-RAM
+// reads/sample) the PSRAM read latency ate the audio task's ~23 ms real-time
+// budget and contributed to underrun "clicking" (esp. at 160 MHz). Measured
+// runtime headroom (GET /api/state: free_heap − free_psram) is ~52 KB internal,
+// so this 4 KB table sits comfortably in DRAM without starving xTaskCreate().
+static float eeg_lut[EEG_LUT_SIZE];
 
 // Fourier coefficients for the EEG-contour cycle.  Amplitudes taper ~1/n (rich
 // but band-limited to 6 partials — at the therapeutic ≤275 Hz carrier the 6th
