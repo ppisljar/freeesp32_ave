@@ -20,9 +20,16 @@
 
 import { decodeFile, audioBufferToWav16, wavBlob, DEVICE_SAMPLE_RATE, DEVICE_CHANNELS } from './bgaudio.js';
 import { cacheGet, cachePut } from './bgstore.js';
+import { timeStretch } from './timestretch.js';
 
 const CHUNK_CHARS = 180;      // Google Translate ~200-char per-request cap
 const PUTER_CHUNK_CHARS = 2500; // Polly txt2speech ~3000-char cap
+
+// Global speech tempo. <1 = slower (pitch preserved via WSOLA in timestretch.js).
+// The narration reads noticeably calmer at 0.85 without dropping in pitch. Change
+// here to retune; it is folded into the TTS cache key so old cache entries don't
+// leak the previous rate.
+export const SPEECH_RATE = 0.85;
 
 // Selected TTS engine, persisted so the Background-audio tab owns the setting
 // but any caller (bounce, Play) can read it. 'puter' | 'google'.
@@ -140,16 +147,19 @@ export async function synthSpeech(text, opts = {}) {
     const voice = (!rawVoice || rawVoice === 'default')
         ? (engine === 'google' ? 'en' : 'en-US')
         : rawVoice;
-    const key = engine + '|' + voice + '|' + text;
+    // Rate is part of the key so retuning SPEECH_RATE invalidates stale audio.
+    const key = engine + '|' + voice + '|r' + SPEECH_RATE + '|' + text;
 
-    // Cache hit → decode the stored WAV.
+    // Cache hit → decode the stored WAV (already stretched when it was written).
     try {
         const cached = await cacheGet(key);
         if (cached) return decodeFile(cached);
     } catch (e) { /* cache is best-effort */ }
 
-    const buf = (engine === 'google') ? await synthViaGoogle(text, voice)
-                                      : await synthViaPuter(text, voice);
+    let buf = (engine === 'google') ? await synthViaGoogle(text, voice)
+                                    : await synthViaPuter(text, voice);
+    // Slow the speech down (pitch-preserving) before it is cached/mixed.
+    buf = timeStretch(buf, SPEECH_RATE);
     // Store for reuse (best-effort; don't fail synth on cache write errors).
     try { await cachePut(key, wavBlob(audioBufferToWav16(buf)), Math.round(buf.duration * 1000)); }
     catch (e) { /* ignore */ }
@@ -163,6 +173,7 @@ export function previewSpeech(text, voice) {
     if (typeof speechSynthesis === 'undefined') return false;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(String(text || ''));
+    u.rate = SPEECH_RATE;   // native rate for the local audition (matches the mix)
     if (voice && voice !== 'default') {
         u.lang = voice;
         const match = speechSynthesis.getVoices().find(v => v.lang && v.lang.toLowerCase().indexOf(voice.toLowerCase()) === 0);

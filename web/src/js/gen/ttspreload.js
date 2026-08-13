@@ -7,7 +7,7 @@
 // Requires network + the currently-selected engine while preloading. Phrases
 // already cached are skipped without a network call (synthSpeech cache-hit).
 
-import { getEngine, synthSpeech } from './tts.js';
+import { getEngine, synthSpeech, SPEECH_RATE } from './tts.js';
 import { parse } from './parse.js';
 import { cacheGet } from './bgstore.js';
 import { allConfigTexts } from '../configstore.js';
@@ -33,7 +33,7 @@ export function extractPhrases(engine, texts) {
             const t = r.text && String(r.text).trim();
             if (!t) continue;
             const v = effVoice(engine, r.voice);
-            const key = engine + '|' + v + '|' + r.text;
+            const key = engine + '|' + v + '|r' + SPEECH_RATE + '|' + r.text;
             if (!seen.has(key)) seen.set(key, { key, voice: r.voice || 'default', text: r.text });
         }
     }
