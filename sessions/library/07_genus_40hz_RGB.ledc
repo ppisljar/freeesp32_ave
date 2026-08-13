@@ -14,11 +14,11 @@
 0       40 50 >0 255 160 32 9 0 0      # inner amber: 40 Hz, phase 0, bright ramp-in from 0
 0       40 50 >0 32 96 255 6 0 180     # outer blue:  40 Hz, phase 180 (antiphase = invisible flicker)
 A 0     10000 0 >0 40 1 0 0 4 0        # ch1 GENUS click: 10 kHz carrier, 40 Hz gate, 4% duty; vol fade-in
-S 3000 default 47 "Beginning the forty hertz gamma protocol. Relax your gaze and let the light and tone carry you."
+S 3000 default 20 "Beginning the forty hertz gamma protocol. Relax your gaze and let the light and tone carry you."
 15000   40 50 45 255 160 32 9 0 0      # inner: brightness reaches 45% cap (15 s ramp-in)
 15000   40 50 45 32 96 255 6 0 180     # outer
 A 30000 10000 0 60 40 1 0 0 4 0        # ch1 vol settled 60; 40 Hz / 4% click held
-S 30000 default 47 "Now holding steady at forty hertz, in gamma. Just rest here and let it work."
+S 30000 default 20 "Now holding steady at forty hertz, in gamma. Just rest here and let it work."
 
 # --- Hold (00:30 -> 59:30): steady synchronous 40 Hz. Fixed — no drift. ---
 
@@ -26,7 +26,12 @@ S 30000 default 47 "Now holding steady at forty hertz, in gamma. Just rest here 
 3570000 40 50 >45 255 160 32 9 0 0     # inner: brightness ramp-out START 45 ...
 3570000 40 50 >45 32 96 255 6 0 180    # outer
 A 3570000 10000 0 >60 40 1 0 0 4 0     # ch1 volume ramp-out START 60 ...
-S 3570000 default 47 "The session is closing now. The light and tone gently fade. Well done."
+S 3570000 default 20 "The session is closing now. The light and tone gently fade. Well done."
 3600000 40 50 0 255 160 32 9 0 0       # inner: light off
 3600000 40 50 0 32 96 255 6 0 180      # outer
 A 3600000 10000 0 0 40 1 0 0 4 0       # ch1 volume 0
+
+S 3600000 default 20 "WAKE UP!"
+S 3610000 default 40 "WAKE UP!"
+S 3620000 default 50 "WAKE UP!"
+S 3630000 default 60 "WAKE UP!"

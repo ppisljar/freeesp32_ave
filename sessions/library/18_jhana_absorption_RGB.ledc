@@ -10,7 +10,7 @@
 0 10 50 >0 60 0 180 9 1 0        # inner deep-violet: 10 Hz sine, fade-in
 0 10 50 >0 32 96 255 6 1 180     # outer blue: antiphase
 A 0 250 0 >0 0 1 260 0            # ch1 binaural: carrier 250 / R260 => 10 Hz beat; vol fade-in
-S 5000 default 47 "Settle. Let the body grow heavy and still, the breath slow and easy."
+S 5000 default 20 "Settle. Let the body grow heavy and still, the breath slow and easy."
 20000 10 50 20 60 0 180 9 1 0    # inner: 20% reached
 20000 10 50 20 32 96 255 6 1 180 # outer
 45000 10 50 ~10:30:12000 60 0 180 9 1 0   # inner: breathing 10<->30%
@@ -21,26 +21,31 @@ A 45000 250 0 90 0 1 260 0        # vol settled 45; beat steady 10 Hz
 A 360000 >250 0 90 0 1 260 0      # carrier 250->254 => beat 10->6
 360000 >10 50 ~10:30:12000 60 0 180 9 1 0   # inner: flicker 10->6, breathing
 360000 >10 50 ~10:30:12000 32 96 255 6 1 180 # outer
-S 360000 default 47 "Rest your attention on the breath. Let it grow still and bright."
+S 360000 default 20 "Rest your attention on the breath. Let it grow still and bright."
 
 # --- Theta absorption hold (beat 6 Hz, isochronic layered): the core ---
 A 840000 254 0 90 6 1 260 0       # carrier 254 => binaural 6 Hz + 6 Hz isochronic pulse 1:1
 840000 6 50 ~10:30:12000 55 0 170 9 1 0    # inner: deep violet, 6 Hz, breathing
 840000 6 50 ~10:30:12000 32 96 255 6 1 180 # outer
-S 840000 default 47 "Six hertz. Let attention merge with the stillness. Nothing to do, nowhere to go."
-S 1320000 default 47 "Abide here, quiet and luminous. Let each breath deepen the absorption."
+S 840000 default 20 "Six hertz. Let attention merge with the stillness. Nothing to do, nowhere to go."
+S 1320000 default 20 "Abide here, quiet and luminous. Let each breath deepen the absorption."
 
 # --- Gentle return theta -> alpha (beat 6->10) ---
 A 1800000 >254 0 90 >6 1 260 0    # carrier 254->250 (beat 6->10); isochronic pulse 6->0
 1800000 >6 50 ~10:30:12000 55 0 170 9 1 0   # inner: 6->10 lockstep
 1800000 >6 50 ~10:30:12000 32 96 255 6 1 180 # outer
-S 1800000 default 47 "Slowly rising now, letting the light and breath carry you toward waking calm."
+S 1800000 default 20 "Slowly rising now, letting the light and breath carry you toward waking calm."
 
 # --- Soft close: vol + brightness fade to 0 ---
 A 2040000 250 0 >90 0 1 260 0     # beat alpha 10; vol 45->0 over final 60 s
 2040000 10 50 >20 60 0 180 9 1 0     # inner: bright 20->0
 2040000 10 50 >20 32 96 255 6 1 180  # outer
-S 2040000 default 47 "Back at ten hertz. Gently return to the room, calm, clear, and refreshed."
+S 2040000 default 20 "Back at ten hertz. Gently return to the room, calm, clear, and refreshed."
 A 2100000 250 0 0 0 1 260 0       # volume 0
 2100000 10 50 0 60 0 180 9 1 0       # inner off
 2100000 10 50 0 32 96 255 6 1 180    # outer off
+
+S 2100000 default 20 "WAKE UP!"
+S 2110000 default 40 "WAKE UP!"
+S 2120000 default 50 "WAKE UP!"
+S 2130000 default 60 "WAKE UP!"

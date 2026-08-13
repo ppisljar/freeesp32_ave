@@ -10,7 +10,7 @@
 0 10 50 >0 0 150 160 9 1 0       # inner teal: 10 Hz sine, fade-in
 0 10 50 >0 32 220 255 6 1 180    # outer cyan: antiphase
 A 0 240 0 >0 0 1 250 0            # ch1 binaural carrier 240 / R250 = 10 Hz beat; vol fade-in
-S 3000 default 47 "Beginning at ten hertz, in alpha. Let your breath find a slow, easy rhythm."
+S 3000 default 20 "Beginning at ten hertz, in alpha. Let your breath find a slow, easy rhythm."
 15000 10 50 25 0 150 160 9 1 0   # inner: 25% reached
 15000 10 50 25 32 220 255 6 1 180 # outer
 
@@ -18,14 +18,14 @@ S 3000 default 47 "Beginning at ten hertz, in alpha. Let your breath find a slow
 30000 10 50 ~15:35:10000 0 150 160 9 1 0   # inner: breathing (6 breaths/min coherence)
 30000 10 50 ~15:35:10000 32 220 255 6 1 180 # outer
 A 45000 240 0 100 0 1 250 0         # ch1 vol settled, beat 10 Hz
-S 300000 default 47 "Ride the light as it breathes. In as it brightens, out as it softens."
-S 660000 default 47 "Calm and open, resting in the alpha rhythm."
+S 300000 default 20 "Ride the light as it breathes. In as it brightens, out as it softens."
+S 660000 default 20 "Calm and open, resting in the alpha rhythm."
 
 # --- Alert lift: ramp 10->12 Hz and brighten ---
 780000 >10 50 >20 0 150 160 9 1 0    # inner: freq 10->12; bright ramp (preempts LFO)
 780000 >10 50 >20 32 220 255 6 1 180 # outer
 A 780000 >240 0 100 0 1 250 0       # carrier 240->238 => beat 10->12
-S 780000 default 47 "Gently rising now, brightening, becoming alert and clear."
+S 780000 default 20 "Gently rising now, brightening, becoming alert and clear."
 900000 12 50 >40 60 190 210 9 1 0    # inner: 12 Hz, brighter cool; bright 40 then fades
 900000 12 50 >40 60 190 210 6 1 180  # outer
 
@@ -34,3 +34,8 @@ A 900000 238 0 >100 0 1 250 0       # beat 12 Hz held; vol 50->0
 930000 12 50 0 60 190 210 9 1 0      # inner off
 930000 12 50 0 60 190 210 6 1 180    # outer off
 A 930000 238 0 0 0 1 250 0          # volume 0
+
+S 930000 default 20 "WAKE UP!"
+S 940000 default 40 "WAKE UP!"
+S 950000 default 50 "WAKE UP!"
+S 960000 default 60 "WAKE UP!"

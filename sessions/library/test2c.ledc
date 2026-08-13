@@ -18,8 +18,8 @@
 
 # ===== 0 s — STEP one — setup: 8-channel calm sine/triangle audio bed
 #            LED: steady white (freq 0), mask 1 — baseline before the mod showcase
-S 0 default 54 "this is a test"
-S 2000 default 54 "one"
+S 0 default 20 "this is a test"
+S 2000 default 20 "one"
 0 0 50 45 255 255 255 1
 A 0 196 -50 50 0 1 0 0          # ch1 sine, panned left
 A 0 220 -30 50 0 2 0 0          # ch2 sine
@@ -32,30 +32,30 @@ A 0 392  0  45 0 8 0 0          # ch8 sine
 
 # ===== 10 s — STEP two — LED brightness ramps: > (linear) and * (quadratic) on two masks
 #            (audio bed unchanged)
-S 10000 default 54 "this is a test"
-S 12000 default 54 "two"
+S 10000 default 20 "this is a test"
+S 12000 default 20 "two"
 10000 0 50 >10 0 128 255 1      # mask1: brightness linear ramp 10 -> 60 (blue)
 10000 0 50 *10 255 128 0 2      # mask2: brightness quadratic ramp 10 -> 70 (orange)
 20000 0 50 60 0 128 255 1       # mask1 brightness-ramp target
 20000 0 50 70 255 128 0 2       # mask2 brightness-ramp target
 
 # ===== 20 s — STEP three — LED colour ramp (RGB linear >) + brightness periodic mod (^ triangle)
-S 20000 default 54 "this is a test"
-S 22000 default 54 "three"
+S 20000 default 20 "this is a test"
+S 22000 default 20 "three"
 20000 4 50 40 >0 >255 >0 4      # mask4: 4 Hz, colour linear ramp green -> orange (RGB ramps)
 20000 0 50 ^10:60:2000 128 0 255 8  # mask8: brightness triangle mod 10<->60 / 2 s (purple)
 30000 4 50 40 255 120 0 4       # mask4 colour-ramp target (green -> orange completes)
 
 # ===== 30 s — STEP four — LED colour periodic mod (~ sine) incl. freq-0 DC chromatic swap
-S 30000 default 54 "this is a test"
-S 32000 default 54 "four"
+S 30000 default 20 "this is a test"
+S 32000 default 20 "four"
 30000 0 50 45 ~255:0:25 ~0:255:25 0 1   # mask1: freq-0 DC red<->green chromatic swap @ ~40 Hz
 30000 0 50 45 ~255:0:2000 0 ~0:255:2000 2   # mask2: slow red<->blue sine colour mod (2 s)
 
 # ===== 40 s — STEP five — LED antiphase invisible-flicker pair (phase 0 vs 180, two masks)
 #            + DIM 20 Hz strobe-safe band (bright <=20%) + remaining glyphs on brightness
-S 40000 default 54 "this is a test"
-S 42000 default 54 "five"
+S 40000 default 20 "this is a test"
+S 42000 default 20 "five"
 40000 8 50 40 255 160 0 4 1 0      # mask4: 8 Hz, sine env, phase 0   (amber)  — antiphase pair A
 40000 8 50 40 0 100 255 8 1 180    # mask8: 8 Hz, sine env, phase 180 (blue)   — antiphase pair B
 40000 20 50 18 0 255 255 1 0       # mask1: 20 Hz DIM (bright 18 <=20% strobe-safe, cyan)
@@ -63,14 +63,14 @@ S 42000 default 54 "five"
 
 # ===== 50 s — STEP six — remaining glyphs: \ sawdn + _ square on brightness (two masks)
 #            (antiphase pair on mask4/mask8 + audio bed persist from earlier steps)
-S 50000 default 54 "this is a test"
-S 52000 default 54 "six"
+S 50000 default 20 "this is a test"
+S 52000 default 20 "six"
 50000 0 50 \10:60:2000 0 255 0 1   # mask1: brightness sawdn mod (\ glyph, green)
 50000 0 50 _10:60:1000 255 0 0 2   # mask2: brightness square mod (_ glyph, red)
 
 # ===== 60 s — STEP seven — closing: ~5 s linear fade-out of all 8 audio channels + LED masks
-S 60000 default 54 "this is a test"
-S 62000 default 54 "seven"
+S 60000 default 20 "this is a test"
+S 62000 default 20 "seven"
 60000 0 50 >40 0 255 0 1        # mask1 brightness ramp -> 0
 60000 0 50 >40 255 0 0 2        # mask2 brightness ramp -> 0
 60000 0 50 >40 255 120 0 4      # mask4 brightness ramp -> 0

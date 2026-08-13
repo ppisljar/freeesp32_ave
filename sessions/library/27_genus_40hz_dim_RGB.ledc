@@ -14,11 +14,11 @@
 0 40 50 >0 255 160 32 9 0 0        # inner amber ring: 40 Hz square, phase 0; bright fade-in
 0 40 50 >0 32 96 255 6 0 180       # outer blue ring: 40 Hz, phase 180 (antiphase)
 A 0 10000 0 >0 40 1 0 0 4 0        # ch1 GENUS click: 10 kHz carrier, 40 Hz gate, 4% duty; vol fade-in
-S 3000 default 47 "Beginning a gentle forty hertz session. The light is dim and steady to the eye — just relax."
+S 3000 default 20 "Beginning a gentle forty hertz session. The light is dim and steady to the eye — just relax."
 15000 40 50 20 255 160 32 9 0 0    # inner: 20% dim cap
 15000 40 50 20 32 96 255 6 0 180   # outer: 20% dim cap (matched -> luminance ~flat)
 A 30000 10000 0 80 40 1 0 0 4 0    # ch1 vol settled 40 (dim), 40 Hz / 4% click held
-S 30000 default 47 "Holding steady at forty hertz. Let it work in the background."
+S 30000 default 20 "Holding steady at forty hertz. Let it work in the background."
 
 # --- Hold: steady antiphase 40 Hz, dim ---
 
@@ -26,7 +26,12 @@ S 30000 default 47 "Holding steady at forty hertz. Let it work in the background
 1770000 40 50 >20 255 160 32 9 0 0  # inner: ramp-out START 20 ...
 1770000 40 50 >20 32 96 255 6 0 180 # outer: ramp-out START 20 ...
 A 1770000 10000 0 >80 40 1 0 0 4 0 # ch1 volume ramp-out START 40 ...
-S 1770000 default 47 "The session is closing now. The light and tone gently fade. Well done."
+S 1770000 default 20 "The session is closing now. The light and tone gently fade. Well done."
 1800000 40 50 0 255 160 32 9 0 0    # inner -> 0
 1800000 40 50 0 32 96 255 6 0 180   # outer -> 0
 A 1800000 10000 0 0 40 1 0 0 4 0   # ch1 volume -> 0
+
+S 1800000 default 20 "WAKE UP!"
+S 1810000 default 40 "WAKE UP!"
+S 1820000 default 50 "WAKE UP!"
+S 1830000 default 60 "WAKE UP!"

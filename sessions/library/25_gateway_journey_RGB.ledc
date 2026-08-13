@@ -12,7 +12,7 @@
 0 4 50 >0 32 96 255 6 1 180     # outer blue: antiphase
 A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta: vol 0->60; sine
 A 0 200 ~-100:100:6000 >0 0 14 0 5   # pink bed ch14: 6 s L<->R pan, vol 0->8 (wave 5)
-S 3000 default 47 "Relax and let the body settle. We will travel inward, one gentle threshold at a time."
+S 3000 default 20 "Relax and let the body settle. We will travel inward, one gentle threshold at a time."
 15000 4 50 18 120 60 200 9 1 0  # inner: 18% reached
 15000 4 50 18 32 96 255 6 1 180 # outer
 30000 4 50 ~10:22:12000 120 60 200 9 1 0   # inner: breathing 10<->22%
@@ -27,7 +27,7 @@ A 180000 250 0 >0 0 3 254 7  # ch3 fades in
 A 240000 250 0 60 0 3 254 7
 A 180000 300 0 >0 0 4 304 7  # ch4 fades in
 A 240000 300 0 60 0 4 304 7
-S 180000 default 47 "Entering Focus 10. The body is asleep, the mind awake, still, and clear."
+S 180000 default 20 "Entering Focus 10. The body is asleep, the mind awake, still, and clear."
 
 # --- Focus 12 (alpha signature, audio-only) ---
 A 600000 400 0 >0 0 5 410 7  # ch5 alpha fades in 0->35
@@ -36,7 +36,7 @@ A 600000 500 0 >0 0 6 510.1 7  # ch6 alpha fades in
 A 660000 500 0 35 0 6 510.1 7
 A 600000 600 0 >0 0 7 604.8 7  # ch7 4.8 Hz fades in
 A 660000 600 0 45 0 7 604.8 7
-S 600000 default 47 "Expanding now into Focus 12 — awareness opening wide, beyond the body."
+S 600000 default 20 "Expanding now into Focus 12 — awareness opening wide, beyond the body."
 
 # --- Focus 15 (alpha out, 7 Hz in) ---
 A 1080000 400 0 >35 0 5 410 7  # ch5 alpha fades out
@@ -51,7 +51,7 @@ A 1080000 630 0 >0 0 9 637.1 7  # ch9 7.1 Hz fades in
 A 1140000 630 0 40 0 9 637.1 7
 A 1080000 750 0 >0 0 10 757 7  # ch10 7.0 Hz fades in
 A 1140000 750 0 40 0 10 757 7
-S 1080000 default 47 "Into Focus 15, where time falls away. No past, no future, only this open stillness."
+S 1080000 default 20 "Into Focus 15, where time falls away. No past, no future, only this open stillness."
 
 # --- Focus 21 (7 Hz out, 16.2 Hz beta in — AUDIO ONLY) ---
 A 1560000 100 0 >60 0 1 101.5 7  # ch1 delta fades out
@@ -68,8 +68,8 @@ A 1560000 750 0 >0 0 12 766.2 7  # ch12 BETA 16.2 fades in
 A 1620000 750 0 35 0 12 766.2 7
 A 1560000 900 0 >0 0 13 916.2 7  # ch13 BETA 16.2 fades in
 A 1620000 900 0 35 0 13 916.2 7
-S 1560000 default 47 "Focus 21 — the bridge, the far edge of the known. The 200, 250, and 300 theta layers hold you steady."
-S 1800000 default 47 "Rest at the bridge. Reach out gently, then let yourself begin to return."
+S 1560000 default 20 "Focus 21 — the bridge, the far edge of the known. The 200, 250, and 300 theta layers hold you steady."
+S 1800000 default 20 "Rest at the bridge. Reach out gently, then let yourself begin to return."
 
 # --- Return: beta out, descend through the levels ---
 A 2040000 200 ~-100:100:6000 >8 0 14 0 5 # pink bed begins slow fade
@@ -81,7 +81,7 @@ A 2040000 900 0 >35 0 13 916.2 7  # ch13 beta fades out
 A 2160000 900 0 0 0 13 916.2 7
 A 2040000 100 0 >0 0 1 101.5 7  # ch1 delta anchor fades back in 0->60
 A 2160000 100 0 60 0 1 101.5 7
-S 2040000 default 47 "Descending now, step by step, back through the levels toward the familiar."
+S 2040000 default 20 "Descending now, step by step, back through the levels toward the familiar."
 
 # --- Soft close ---
 A 2280000 100 0 >60 0 1 101.5 7  # ch1 fades out
@@ -94,7 +94,12 @@ A 2280000 300 0 >60 0 4 304 7  # ch4 fades out
 A 2400000 300 0 0 0 4 304 7
 2280000 4 50 >18 120 60 200 9 1 0    # inner: brightness 18->0
 2280000 4 50 >18 32 96 255 6 1 180   # outer
-S 2280000 default 47 "Coming all the way back to the room now, calm, whole, and refreshed."
+S 2280000 default 20 "Coming all the way back to the room now, calm, whole, and refreshed."
 A 2400000 200 ~-100:100:6000 0 0 14 0 5 # pink bed reaches 0
 2400000 4 50 0 120 60 200 9 1 0      # inner off
 2400000 4 50 0 32 96 255 6 1 180     # outer off
+
+S 2400000 default 20 "WAKE UP!"
+S 2410000 default 40 "WAKE UP!"
+S 2420000 default 50 "WAKE UP!"
+S 2430000 default 60 "WAKE UP!"

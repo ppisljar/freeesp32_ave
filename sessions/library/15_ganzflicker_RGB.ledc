@@ -12,7 +12,7 @@
 0 10 50 >0 200 220 255 9 1 0     # inner cool-white: 10 Hz sine, fade-in
 0 10 50 >0 200 220 255 6 1 180   # outer: antiphase (radial)
 A 0 200 0 >0 10 1                 # isochronic 200 Hz pulsed at 10 Hz; vol fade-in
-S 3000 default 47 "Let your eyes rest closed and soften your gaze."
+S 3000 default 20 "Let your eyes rest closed and soften your gaze."
 15000 10 50 30 200 220 255 9 1 0  # inner: 30% cap reached
 15000 10 50 30 200 220 255 6 1 180 # outer
 30000 10 50 ~25:30:10000 200 220 255 9 1 0   # inner: breathing 25<->30%
@@ -23,15 +23,20 @@ A 60000 200 0 100 10 1             # vol settled, beat 10 Hz
 240000 ~9.5:10.5:8000 50 ~25:30:10000 200 220 255 9 1 0   # inner: freq floats, sine gate
 240000 ~9.5:10.5:8000 50 ~25:30:10000 200 220 255 6 1 180 # outer: antiphase (radial form-constants)
 A 240000 200 0 100 ~9.5:10.5:8000 1   # isochronic beat floats, locked 1:1
-S 240000 default 47 "Watch the geometric shapes and colors begin to form."
-S 480000 default 47 "Let the patterns move and shift — just observe, without holding on."
-S 720000 default 47 "Colors and forms arise on their own. Stay with them, at ease."
+S 240000 default 20 "Watch the geometric shapes and colors begin to form."
+S 480000 default 20 "Let the patterns move and shift — just observe, without holding on."
+S 720000 default 20 "Colors and forms arise on their own. Stay with them, at ease."
 
 # --- Soft fade: settle to 10 Hz, brightness + vol fade to 0 over 4 min ---
 960000 10 50 >30 200 220 255 9 1 0   # inner: steady 10 Hz; bright 30->0
 960000 10 50 >30 200 220 255 6 1 180 # outer
 A 960000 200 0 >100 10 1           # beat settles to 10 Hz; vol 50->0
-S 960000 default 47 "Gently returning now. Let the images fade."
+S 960000 default 20 "Gently returning now. Let the images fade."
 1200000 10 50 0 200 220 255 9 1 0    # inner off
 1200000 10 50 0 200 220 255 6 1 180  # outer off
 A 1200000 200 0 0 10 1             # volume 0
+
+S 1200000 default 20 "WAKE UP!"
+S 1210000 default 40 "WAKE UP!"
+S 1220000 default 50 "WAKE UP!"
+S 1230000 default 60 "WAKE UP!"

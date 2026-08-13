@@ -23,22 +23,27 @@
 # --- Induction (00:00-00:30): 10 Hz alpha, vol + light fade in ---
 0 10 50 >0 0 150 160 5           # LED 10 Hz teal, brightness ramps 0->25% over 15 s
 A 0 240 0 >0 0 1 250 0             # ch1 binaural carrier 240 / R250 = 10 Hz beat; vol fades 0->50
-S 3000 default 47 "Beginning at ten hertz, in alpha. Let your breath find a slow, easy rhythm."
+S 3000 default 20 "Beginning at ten hertz, in alpha. Let your breath find a slow, easy rhythm."
 15000 10 50 25 0 150 160 5       # brightness reaches 25% (ramp-in >=10 s done)
 
 # --- Alpha hold with 0.1 Hz breath (00:30-13:00): brightness swells 15<->35% every 10 s ---
 30000 10 50 ~15:35:10000 0 150 160 5   # breathing brightness LFO (6 breaths/min coherence)
 A 45000 240 0 100 0 1 250 0         # ch1 vol settled 50, beat holds 10 Hz
-S 300000 default 47 "Ride the light as it breathes. In as it brightens, out as it softens."
-S 660000 default 47 "Calm and open, resting in the alpha rhythm."
+S 300000 default 20 "Ride the light as it breathes. In as it brightens, out as it softens."
+S 660000 default 20 "Calm and open, resting in the alpha rhythm."
 
 # --- Alert lift (13:00-15:00): ramp 10->12 Hz and brighten to 40% ---
 780000 >10 50 >20 0 150 160 5    # LED freq 10->12; brightness ramp START 20 -> (preempts LFO)
 A 780000 >240 0 100 0 1 250 0       # carrier 240->238 => beat 10->12 over 2 min
-S 780000 default 47 "Gently rising now, brightening, becoming alert and clear."
+S 780000 default 20 "Gently rising now, brightening, becoming alert and clear."
 900000 12 50 >40 60 190 210 5    # 12 Hz, brighter cool color; brightness reached 40 then fades ->0
 
 # --- Gentle close (15:00-15:30): flicker brightness + volume fade to 0 over 30 s ---
 A 900000 238 0 >100 0 1 250 0       # beat 12 Hz held; vol 50->0 over 30 s
 930000 12 50 0 60 190 210 5      # end: brightness 0
 A 930000 238 0 0 0 1 250 0         # end: volume 0
+
+S 930000 default 20 "WAKE UP!"
+S 940000 default 40 "WAKE UP!"
+S 950000 default 50 "WAKE UP!"
+S 960000 default 60 "WAKE UP!"

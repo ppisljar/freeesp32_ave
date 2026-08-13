@@ -30,21 +30,21 @@
 # --- Induction (00:00-02:00): BOTH eyes 10 Hz alpha, dim, fade in ---
 0 10 50 >0 180 200 255 15           # both eyes (mask 15) 10 Hz, brightness fade-in from 0
 A 0 200 0 >0 6 1                   # isochronic 6 Hz theta dream bed; vol fade-in
-S 3000 default 47 "Eyes closed, body still. Let a calm alpha rhythm settle you."
+S 3000 default 20 "Eyes closed, body still. Let a calm alpha rhythm settle you."
 15000 10 50 18 180 200 255 15       # brightness reaches 18% (dim; >=10 s ramp-in)
 A 60000 200 0 90 6 1               # audio bed settled 45
 
 # --- Split field (02:00-12:00): LEFT 16 Hz / RIGHT 6 Hz ---
 120000 16 50 18 180 200 255 3      # LEFT eye (mask 3): 16 Hz alertness cue — DIM (danger-band; lint warn expected)
 120000 6 50 18 180 200 255 12       # RIGHT eye (mask 12): 6 Hz theta / dream
-S 120000 default 47 "One eye quickens, one eye slows. Stay aware as you drift into the dream."
-S 420000 default 47 "If you notice you are dreaming, stay calm and steady. You are lucid."
+S 120000 default 20 "One eye quickens, one eye slows. Stay aware as you drift into the dream."
+S 420000 default 20 "If you notice you are dreaming, stay calm and steady. You are lucid."
 
 # --- Soft Off (12:00-15:00): both eyes + audio fade to dark (no wake-up) ---
 720000 16 50 >18 180 200 255 3     # LEFT brightness ramp-out START 18 ...
 720000 6 50 >18 180 200 255 12      # RIGHT brightness ramp-out START 18 ...
 A 720000 200 0 >90 6 1             # audio bed fade START 45 ...
-S 720000 default 47 "Letting the light fade now. Rest, or dream on."
+S 720000 default 20 "Letting the light fade now. Rest, or dream on."
 900000 16 50 0 180 200 255 3       # LEFT -> 0
 900000 6 50 0 180 200 255 12        # RIGHT -> 0
 A 900000 200 0 0 6 1               # audio -> 0

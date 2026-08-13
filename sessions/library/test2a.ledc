@@ -19,8 +19,8 @@
 
 # ===== 0 s — STEP one — all 7 waveTypes across ch1..ch8 (2nd sine on ch8)
 #            LED: steady amber (freq 0, no flicker), colour amber, mask 1
-S 0 default 54 "this is a test"
-S 2000 default 54 "one"
+S 0 default 20 "this is a test"
+S 2000 default 20 "one"
 0 0 50 45 255 160 0 1
 A 0 220 -60 50 0 1 0 0          # ch1 sine (waveType 0), panned left
 A 0 247 -20 50 0 2 0 1          # ch2 square (waveType 1)
@@ -33,8 +33,8 @@ A 0 330  0  50 0 8 0 0          # ch8 sine (waveType 0)
 
 # ===== 10 s — STEP two — binaural beats (4/10/40/5 Hz) + mono collapse (freqR=0)
 #            LED: 10 Hz blue flicker (alpha), colour blue, mask 1
-S 10000 default 54 "this is a test"
-S 12000 default 54 "two"
+S 10000 default 20 "this is a test"
+S 12000 default 20 "two"
 10000 10 50 40 0 128 255 1
 A 10000 120 0 50 0 1 124        # ch1 binaural 4 Hz beat (freqR-freq = 4)
 A 10000 200 0 50 0 2 210        # ch2 binaural 10 Hz beat
@@ -44,8 +44,8 @@ A 10000 220 0 50 0 7 0          # ch7 mono collapse (freqR=0) (was brown noise)
 
 # ===== 20 s — STEP three — amplitude modulation (mod>0) at several rates + a mod sweep (>)
 #            LED: 4 Hz red flicker (theta), colour red, mask 1
-S 20000 default 54 "this is a test"
-S 22000 default 54 "three"
+S 20000 default 20 "this is a test"
+S 22000 default 20 "three"
 20000 4 50 40 255 0 0 1
 A 20000 220 0 50 3  1           # ch1 AM 3 Hz
 A 20000 247 0 50 6  2           # ch2 AM 6 Hz
@@ -55,8 +55,8 @@ A 30000 - - - 12 4             # ch4 mod-sweep target (mod 4 -> 12); freq/pan/vo
 
 # ===== 30 s — STEP four — panning: hard L / center / hard R + a hard-panned L/R stereo pair
 #            LED: steady green (freq 0), colour green, mask 1
-S 30000 default 54 "this is a test"
-S 32000 default 54 "four"
+S 30000 default 20 "this is a test"
+S 32000 default 20 "four"
 30000 0 50 45 0 255 0 1
 A 30000 220 -100 50 0 1         # ch1 hard left (also clears AM: mod back to 0)
 A 30000 247  0   50 0 2         # ch2 center
@@ -66,16 +66,16 @@ A 30000 440  100 45 0 8         # ch8 stereo pair R (same 440 Hz, hard L/R)
 
 # ===== 40 s — STEP five — LED brightness periodic mod (^ triangle glyph, breathing) + white
 #            audio: keep the 8-ch bed; ch5/6/7 revert to tones (noise/mono off)
-S 40000 default 54 "this is a test"
-S 42000 default 54 "five"
+S 40000 default 20 "this is a test"
+S 42000 default 20 "five"
 40000 8 50 ^10:60:2000 255 255 255 1   # mask1: white, brightness triangle mod 10<->60 / 2 s, 8 Hz
 A 40000 247 0 50 0 5 0 0        # ch5 sine (white noise off)
 A 40000 262 0 50 0 6 0 2        # ch6 triangle (binaural off)
 # ch7 keeps its step-2 mono tone (220 Hz, freqR=0); ch8 keeps step-4 stereo-R tone
 
 # ===== 50 s — STEP six — closing: ~5 s linear fade-out of all 8 audio channels + LED
-S 50000 default 54 "this is a test"
-S 52000 default 54 "six"
+S 50000 default 20 "this is a test"
+S 52000 default 20 "six"
 50000 0 50 >40 128 0 255 1      # LED brightness ramp -> 0 at fade end (purple)
 A 50000 - - >50 - 1            # hold vol then ramp to 0 (target at 55 s)
 A 50000 - - >50 - 2

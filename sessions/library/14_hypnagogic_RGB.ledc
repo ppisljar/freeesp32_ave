@@ -11,7 +11,7 @@
 0 10 50 >0 200 220 255 9 1 0     # inner cool-white: 10 Hz sine, fade-in
 0 10 50 >0 200 220 255 6 1 180   # outer: antiphase radial
 A 0 200 0 >0 10 1                 # isochronic 200 Hz pulsed at 10 Hz; vol fade-in
-S 3000 default 47 "Let your eyes rest closed and soften your gaze."
+S 3000 default 20 "Let your eyes rest closed and soften your gaze."
 15000 10 50 25 200 220 255 9 1 0  # inner: 25% reached
 15000 10 50 25 200 220 255 6 1 180 # outer
 30000 10 50 ~20:30:10000 200 220 255 9 1 0   # inner: breathing 20<->30%
@@ -22,7 +22,7 @@ A 60000 200 0 100 10 1             # vol settled, beat 10 Hz
 300000 >10 50 ~20:30:10000 90 40 200 9 1 0   # inner: freq 10->6.5; violet-blue mood
 300000 >10 50 ~20:30:10000 90 40 200 6 1 180 # outer
 A 300000 200 0 100 >10 1           # isochronic beat 10->6.5 lockstep
-S 305000 default 47 "Drifting down now, toward the twilight edge between waking and sleep."
+S 305000 default 20 "Drifting down now, toward the twilight edge between waking and sleep."
 660000 6.5 50 ~20:30:10000 90 40 200 9 1 0   # inner: twilight bottom 6.5 Hz
 660000 6.5 50 ~20:30:10000 90 40 200 6 1 180 # outer
 
@@ -30,14 +30,19 @@ S 305000 default 47 "Drifting down now, toward the twilight edge between waking 
 720000 ~8:12:75000 50 ~20:30:10000 200 220 255 9 1 0   # inner: freq floats 8<->12 Hz
 720000 ~8:12:75000 50 ~20:30:10000 200 220 255 6 1 180 # outer: antiphase (radial imagery)
 A 720000 200 0 100 ~8:12:75000 1   # isochronic beat floats 8<->12 Hz, locked 1:1
-S 725000 default 47 "Let images and colors arise — watch them, without holding on."
-S 1080000 default 47 "Rest at the border. Notice the shapes drift and change."
+S 725000 default 20 "Let images and colors arise — watch them, without holding on."
+S 1080000 default 20 "Rest at the border. Notice the shapes drift and change."
 
 # --- Soft fade: settle to 10 Hz, brightness + vol fade to 0 over 4 min ---
 1440000 10 50 >30 200 220 255 9 1 0   # inner: steady 10 Hz; bright 30->0
 1440000 10 50 >30 200 220 255 6 1 180 # outer
 A 1440000 200 0 >100 10 1          # beat settles to 10 Hz; vol 50->0
-S 1440000 default 47 "Gently returning now."
+S 1440000 default 20 "Gently returning now."
 1680000 10 50 0 200 220 255 9 1 0     # inner off
 1680000 10 50 0 200 220 255 6 1 180   # outer off
 A 1680000 200 0 0 10 1             # volume 0
+
+S 1680000 default 20 "WAKE UP!"
+S 1690000 default 40 "WAKE UP!"
+S 1700000 default 50 "WAKE UP!"
+S 1710000 default 60 "WAKE UP!"

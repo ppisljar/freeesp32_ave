@@ -14,7 +14,7 @@ A 0 200 0 >0 0 7 204 7  # septon a 200->204 (4 Hz); vol 0->22
 A 0 204 0 >0 0 8 208 7  # septon b 204->208
 A 0 208 0 >0 0 9 212 7  # septon c 208->212
 A 0 200 ~-100:100:6000 >0 0 10 0 5   # ch10 phased PINK bed; pan L<->R 6 s; vol 0->8
-S 3000 default 47 "Settle in and let the body grow still. Breathe slowly, easily, and let yourself relax."
+S 3000 default 20 "Settle in and let the body grow still. Breathe slowly, easily, and let yourself relax."
 15000 4 50 22 90 0 200 9 1 0    # inner: 22% reached
 15000 4 50 22 32 96 255 6 1 180 # outer
 30000 4 50 ~16:24:12000 90 0 200 9 1 0   # inner: breathing 16<->24%
@@ -27,7 +27,7 @@ A 60000 200 ~-100:100:6000 16 0 10 0 5   # ch10 pink bed holds 8
 # --- Theta base: bring in 250/300[4.0] ---
 A 180000 250 0 >0 0 2 254 7  # ch2 theta 250[4.0]; vol 0->30
 A 180000 300 0 >0 0 3 304 7  # ch3 theta 300[4.0]
-S 180000 default 47 "Sinking into a calm, steady theta — mind awake, body asleep. Rest at the threshold."
+S 180000 default 20 "Sinking into a calm, steady theta — mind awake, body asleep. Rest at the threshold."
 A 240000 250 0 60 0 2 254 7  # ch2 holds 30
 A 240000 300 0 60 0 3 304 7  # ch3 holds 30
 
@@ -35,20 +35,20 @@ A 240000 300 0 60 0 3 304 7  # ch3 holds 30
 A 480000 600 0 >0 0 4 616.2 7  # ch4 600[16.2] beta; vol 0->18
 A 480000 750 0 >0 0 5 766.2 7  # ch5 750[16.2] beta
 A 480000 900 0 >0 0 6 916.2 7  # ch6 900[16.2] beta
-S 480000 default 47 "Moving now toward Focus Twenty-One. A brighter, clearer edge begins to open."
+S 480000 default 20 "Moving now toward Focus Twenty-One. A brighter, clearer edge begins to open."
 A 600000 600 0 36 0 4 616.2 7  # ch4 holds 18
 A 600000 750 0 36 0 5 766.2 7  # ch5 holds 18
 A 600000 900 0 36 0 6 916.2 7  # ch6 holds 18
 
 # --- Hold at the Bridge: full stack, steady ---
-S 720000 default 47 "You are at the Bridge — the edge of the physical. Open, aware, and unafraid. Simply notice what is here."
-S 1200000 default 47 "Steady and clear. Rest at the boundary and let whatever comes, come."
+S 720000 default 20 "You are at the Bridge — the edge of the physical. Open, aware, and unafraid. Simply notice what is here."
+S 1200000 default 20 "Steady and clear. Rest at the boundary and let whatever comes, come."
 
 # --- Return: fade the 16 Hz beta out ---
 A 1680000 600 0 >36 0 4 616.2 7  # ch4 beta fades 18->0
 A 1680000 750 0 >36 0 5 766.2 7  # ch5 beta fades out
 A 1680000 900 0 >36 0 6 916.2 7  # ch6 beta fades out
-S 1680000 default 47 "Gently now, stepping back from the edge, returning toward the calm theta."
+S 1680000 default 20 "Gently now, stepping back from the edge, returning toward the calm theta."
 A 1800000 600 0 0 0 4 616.2 7  # ch4 silent
 A 1800000 750 0 0 0 5 766.2 7  # ch5 silent
 A 1800000 900 0 0 0 6 916.2 7  # ch6 silent
@@ -62,7 +62,7 @@ A 1860000 208 0 >44 0 9 212 7  # septon c fades out
 A 1860000 250 0 >60 0 2 254 7  # ch2 theta fades out
 A 1860000 300 0 >60 0 3 304 7  # ch3 theta fades out
 A 1860000 200 ~-100:100:6000 >16 0 10 0 5   # ch10 pink bed fades out
-S 1920000 default 47 "Coming all the way back to the room now, calm, clear, and whole."
+S 1920000 default 20 "Coming all the way back to the room now, calm, clear, and whole."
 A 1980000 200 0 0 0 7 204 7  # end: septon a silent
 A 1980000 204 0 0 0 8 208 7  # septon b silent
 A 1980000 208 0 0 0 9 212 7  # septon c silent
@@ -71,3 +71,8 @@ A 1980000 300 0 0 0 3 304 7
 A 1980000 200 ~-100:100:6000 0 0 10 0 5   # ch10 pink bed silent
 1980000 4 50 0 90 0 200 9 1 0       # inner off
 1980000 4 50 0 32 96 255 6 1 180    # outer off
+
+S 1980000 default 20 "WAKE UP!"
+S 1990000 default 40 "WAKE UP!"
+S 2000000 default 50 "WAKE UP!"
+S 2010000 default 60 "WAKE UP!"

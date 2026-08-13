@@ -17,7 +17,7 @@
 # --- Induction: BOTH eyes 10 Hz alpha, dim cool-blue, fade in ---
 0 10 50 >0 60 120 255 15 1 0        # both eyes (mask 15) 10 Hz sine; bright fade-in
 A 0 200 0 >0 5 1 0 0 30 1           # ch1 theta dream bed: 5 Hz iso (sine gate, 30% duty); vol fade-in
-S 3000 default 47 "Rest back and let a calm alpha rhythm settle you toward the dream. You will stay just aware enough to notice."
+S 3000 default 20 "Rest back and let a calm alpha rhythm settle you toward the dream. You will stay just aware enough to notice."
 15000 10 50 20 60 120 255 15 1 0    # brightness 20% (>=10 s ramp-in)
 A 60000 200 0 80 5 1 0 0 30 1       # theta bed settled
 
@@ -32,8 +32,8 @@ A 90000 340 60 >0 40 3 0 0 10 0 180 3   # ch3 gamma CLICK right: 40 Hz, phase 18
 105000 40 50 16 32 96 255 8 0 180   # inner-R gamma 16% (matched -> ~invisible shimmer)
 A 150000 340 -60 60 40 2 0 0 10 0 0 3   # left click settled
 A 150000 340 60 60 40 3 0 0 10 0 180 3  # right click settled
-S 90000 default 47 "One eye quickens, one eye slows. A soft forty-hertz shimmer whispers: notice. If you see a dream, you are dreaming."
-S 600000 default 47 "Whenever you realise you are dreaming, stay calm and steady. You are lucid. Look at your hands, and stay."
+S 90000 default 20 "One eye quickens, one eye slows. A soft forty-hertz shimmer whispers: notice. If you see a dream, you are dreaming."
+S 600000 default 20 "Whenever you realise you are dreaming, stay calm and steady. You are lucid. Look at your hands, and stay."
 
 # --- Soft off (no wake-up) ---
 1200000 40 50 >16 255 160 32 1 0 0  # inner-L gamma fade
@@ -43,7 +43,7 @@ S 600000 default 47 "Whenever you realise you are dreaming, stay calm and steady
 A 1200000 200 0 >80 5 1 0 0 30 1    # theta bed fade
 A 1200000 340 -60 >60 40 2 0 0 10 0 0 3   # left click fade
 A 1200000 340 60 >60 40 3 0 0 10 0 180 3  # right click fade
-S 1200000 default 47 "Letting every light and tone fade now. Sink fully into sleep, or dream on, aware."
+S 1200000 default 20 "Letting every light and tone fade now. Sink fully into sleep, or dream on, aware."
 1500000 40 50 0 255 160 32 1 0 0    # inner-L off
 1500000 40 50 0 32 96 255 8 0 180   # inner-R off
 1500000 6.5 50 0 32 96 255 2 1 0    # outer-L off

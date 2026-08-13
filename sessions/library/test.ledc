@@ -10,107 +10,107 @@
 #           value cells accept: >lin-ramp  *quad-ramp  ~v:e:p sine-mod  ^tri /sawup \sawdn _square ;  '-' = keep current
 
 # ===== 0 s — ch1: 220 Hz sine  |  LED: steady amber =====
-S 0 default 54 "this is a test"
-S 2000 default 54 "one"
+S 0 default 20 "this is a test"
+S 2000 default 20 "one"
 0 0 50 40 255 160 0 1
 A 0 220 0 100 0 1
 
 # ===== 15 s — +ch2: 200/210 binaural (10 Hz beat)  |  LED: 10 Hz blue flicker =====
-S 15000 default 54 "this is a test"
-S 17000 default 54 "two"
+S 15000 default 20 "this is a test"
+S 17000 default 20 "two"
 15000 10 50 40 0 128 255 1 0
 A 15000 200 0 100 0 2 210
 
 # ===== 30 s — +ch3: 300 Hz + 5 Hz AM  |  LED: brightness breathing =====
-S 30000 default 54 "this is a test"
-S 32000 default 54 "three"
+S 30000 default 20 "this is a test"
+S 32000 default 20 "three"
 30000 0 50 ~10:60:4000 0 200 255 1
 A 30000 300 0 100 5 3
 
 # ===== 45 s — +ch4: pink noise  |  LED: green<->blue chromatic swap @40 Hz =====
-S 45000 default 54 "this is a test"
-S 47000 default 54 "four"
+S 45000 default 20 "this is a test"
+S 47000 default 20 "four"
 45000 0 50 45 0 ~255:0:25 ~0:255:25 1
 A 45000 0 0 100 0 4 0 5
 
 # ===== 60 s — +ch5: 200->500 Hz sweep  |  LED: colour ramp green->orange =====
-S 60000 default 54 "this is a test"
-S 62000 default 54 "five"
+S 60000 default 20 "this is a test"
+S 62000 default 20 "five"
 60000 0 50 45 >0 >255 >0 1
 A 60000 >200 0 100 0 5
 74000 0 50 45 255 120 0 1
 A 74000 500 0 100 0 5
 
 # ===== 75 s — +ch6: 250 Hz triangle, 10 Hz isochronic  |  LED: antiphase invisible-flicker pair =====
-S 75000 default 54 "this is a test"
-S 77000 default 54 "six"
+S 75000 default 20 "this is a test"
+S 77000 default 20 "six"
 75000 40 50 30 255 160 0 1 1 0
 75000 40 50 30 0 100 255 2 1 180
 A 75000 250 0 100 10 6 0 2 50 1
 
 # ===== 90 s — +ch7: 180 Hz square wave  |  LED: 6 Hz theta flicker (purple), ch2 pair off =====
-S 90000 default 54 "this is a test"
-S 92000 default 54 "seven"
+S 90000 default 20 "this is a test"
+S 92000 default 20 "seven"
 90000 6 50 40 180 0 255 1 0
 90000 40 50 0 0 100 255 2 1 180
 A 90000 180 0 100 0 7 0 1
 
 # ===== 105 s — +ch8: 260 Hz saw wave  |  LED: steady green =====
-S 105000 default 54 "this is a test"
-S 107000 default 54 "eight"
+S 105000 default 20 "this is a test"
+S 107000 default 20 "eight"
 105000 0 50 40 0 255 0 1
 A 105000 260 0 100 0 8 0 3
 
 # ===== 120 s — +ch9: white noise  |  LED: 40 Hz flicker (red) =====
-S 120000 default 54 "this is a test"
-S 122000 default 54 "nine"
+S 120000 default 20 "this is a test"
+S 122000 default 20 "nine"
 120000 40 50 40 255 0 0 1 0
 A 120000 0 0 100 0 9 0 4
 
 # ===== 135 s — +ch10: brown noise  |  LED: brightness breathing (white) =====
-S 135000 default 54 "this is a test"
-S 137000 default 54 "ten"
+S 135000 default 20 "this is a test"
+S 137000 default 20 "ten"
 135000 0 50 ~10:60:4000 255 255 255 1
 A 135000 0 0 100 0 10 0 6
 
 # ===== 150 s — +ch11: 120/124 binaural (4 Hz delta)  |  LED: 15 Hz SMR flicker (cyan, dim) =====
-S 150000 default 54 "this is a test"
-S 152000 default 54 "eleven"
+S 150000 default 20 "this is a test"
+S 152000 default 20 "eleven"
 150000 15 50 20 0 255 255 1 0
 A 150000 120 0 100 0 11 124
 
 # ===== 165 s — +ch12: 340 Hz + 8 Hz AM  |  LED: colour sine-mod red<->blue =====
-S 165000 default 54 "this is a test"
-S 167000 default 54 "twelve"
+S 165000 default 20 "this is a test"
+S 167000 default 20 "twelve"
 165000 0 50 45 ~255:0:2000 0 ~0:255:2000 1
 A 165000 340 0 100 8 12
 
 # ===== 180 s — +ch13: 440 Hz sine, panned LEFT  |  LED: 8 Hz flicker (amber) =====
-S 180000 default 54 "this is a test"
-S 182000 default 54 "thirteen"
+S 180000 default 20 "this is a test"
+S 182000 default 20 "thirteen"
 180000 8 50 40 255 160 0 1 0
 A 180000 440 -80 100 0 13
 
 # ===== 195 s — +ch14: 440 Hz sine, panned RIGHT (stereo pair with ch13)  |  LED: green<->blue swap =====
-S 195000 default 54 "this is a test"
-S 197000 default 54 "fourteen"
+S 195000 default 20 "this is a test"
+S 197000 default 20 "fourteen"
 195000 0 50 45 0 ~255:0:25 ~0:255:25 1
 A 195000 440 80 100 0 14
 
 # ===== 210 s — +ch15: 90 Hz low sine  |  LED: 4 Hz delta flicker (dim blue) =====
-S 210000 default 54 "this is a test"
-S 212000 default 54 "fifteen"
+S 210000 default 20 "this is a test"
+S 212000 default 20 "fifteen"
 210000 4 50 25 0 0 255 1 0
 A 210000 90 0 100 0 15
 
 # ===== 225 s — +ch16: 528 Hz sine (all 16 now mixing)  |  LED: steady warm white =====
-S 225000 default 54 "this is a test"
-S 227000 default 54 "sixteen"
+S 225000 default 20 "this is a test"
+S 227000 default 20 "sixteen"
 225000 0 50 40 255 200 150 1
 A 225000 528 0 100 0 16
 
 # ===== 240 s — closing announce + 5 s fade-out of all 16 channels + LED =====
-S 240000 default 54 "this is a test"
+S 240000 default 20 "this is a test"
 A 240000 - - >100 - 1
 A 240000 - - >100 - 2
 A 240000 - - >100 - 3

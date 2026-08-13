@@ -12,7 +12,7 @@
 0 4 50 >0 32 96 255 6 1 180     # outer blue: antiphase
 A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta bed; vol 0->30; sine
 A 0 200 ~-100:100:6000 >0 0 10 0 5   # ch10 phased pink bed; pan L<->R 6 s LFO; vol 0->8; wave 5
-S 2000 default 47 "Settle in. Let the breath slow and the body grow heavy, releasing with every exhale."
+S 2000 default 20 "Settle in. Let the breath slow and the body grow heavy, releasing with every exhale."
 20000 4 50 20 90 0 200 9 1 0    # inner: 20% reached
 20000 4 50 20 32 96 255 6 1 180 # outer
 30000 4 50 ~12:22:10000 90 0 200 9 1 0   # inner: breathing 12<->22%
@@ -21,7 +21,7 @@ A 60000 100 0 60 0 1 101.5 7  # ch1 delta holds vol 30
 A 60000 200 ~-100:100:6000 16 0 10 0 5   # ch10 pink bed holds vol 8
 
 # --- Focus-10 base: bring in the septon theta stack ---
-S 180000 default 47 "Entering Focus Ten. Body asleep, mind awake — clear and quietly alert."
+S 180000 default 20 "Entering Focus Ten. Body asleep, mind awake — clear and quietly alert."
 A 180000 200 0 >0 0 2 204 7  # ch2 septon 200->204; vol 0->22
 A 180000 204 0 >0 0 8 208 7  # ch8 septon 204->208; vol 0->22
 A 180000 208 0 >0 0 9 212 7  # ch9 septon 208->212; vol 0->22
@@ -34,7 +34,7 @@ A 225000 250 0 60 0 3 254 7  # ch3 theta holds 30
 A 225000 300 0 60 0 4 304 7  # ch4 theta holds 30
 
 # --- Extend to Focus 12: fade IN the alpha-10 signature (AUDIO-ONLY) ---
-S 480000 default 47 "Expanding now into Focus Twelve. Awareness reaches out, opening beyond the edges of the body."
+S 480000 default 20 "Expanding now into Focus Twelve. Awareness reaches out, opening beyond the edges of the body."
 A 480000 400 0 >0 0 5 410 7  # ch5 400[10.0] alpha; vol 0->18 (audio-only)
 A 480000 500 0 >0 0 6 510.1 7  # ch6 500[10.1] alpha; vol 0->18 (audio-only)
 A 480000 600 0 >0 0 7 604.8 7  # ch7 600[4.8] theta; vol 0->18
@@ -43,11 +43,11 @@ A 540000 500 0 36 0 6 510.1 7  # ch6 alpha holds 18
 A 540000 600 0 36 0 7 604.8 7  # ch7 holds 18
 
 # --- Hold full F12 stack: steady, no changes ---
-S 720000 default 47 "Rest here in expanded awareness. Spacious, open, without boundary — simply present."
-S 1140000 default 47 "Nothing to reach for. Let awareness drift and explore, wide and effortless."
+S 720000 default 20 "Rest here in expanded awareness. Spacious, open, without boundary — simply present."
+S 1140000 default 20 "Nothing to reach for. Let awareness drift and explore, wide and effortless."
 
 # --- Return: fade the alpha signature back to Focus 10 ---
-S 1680000 default 47 "Beginning to return. The field gently narrows as you settle back toward Focus Ten."
+S 1680000 default 20 "Beginning to return. The field gently narrows as you settle back toward Focus Ten."
 A 1680000 400 0 >36 0 5 410 7  # ch5 alpha vol 18->0
 A 1680000 500 0 >36 0 6 510.1 7  # ch6 alpha vol 18->0
 A 1680000 600 0 >36 0 7 604.8 7  # ch7 vol 18->0
@@ -56,7 +56,7 @@ A 1860000 500 0 0 0 6 510.1 7  # ch6 alpha off
 A 1860000 600 0 0 0 7 604.8 7  # ch7 off
 
 # --- Soft close: fade the F10 septon base, bed, and light to zero ---
-S 1860000 default 47 "Back in Focus Ten. Now let the body draw you gently the rest of the way home."
+S 1860000 default 20 "Back in Focus Ten. Now let the body draw you gently the rest of the way home."
 A 1860000 100 0 >60 0 1 101.5 7  # ch1 delta vol 30->0
 A 1860000 200 0 >44 0 2 204 7  # ch2 septon vol 22->0
 A 1860000 204 0 >44 0 8 208 7  # ch8 septon vol 22->0
@@ -66,7 +66,7 @@ A 1860000 300 0 >60 0 4 304 7  # ch4 theta vol 30->0
 A 1860000 200 ~-100:100:6000 >16 0 10 0 5   # ch10 pink bed vol 8->0
 1860000 4 50 >20 90 0 200 9 1 0     # inner: brightness 20->0
 1860000 4 50 >20 32 96 255 6 1 180  # outer
-S 1950000 default 47 "Coming fully back to the room, calm, clear, and refreshed."
+S 1950000 default 20 "Coming fully back to the room, calm, clear, and refreshed."
 A 1980000 100 0 0 0 1 101.5 7  # end: ch1 volume 0
 A 1980000 200 0 0 0 2 204 7  # end: ch2 volume 0
 A 1980000 204 0 0 0 8 208 7  # end: ch8 volume 0
@@ -76,3 +76,8 @@ A 1980000 300 0 0 0 4 304 7  # end: ch4 volume 0
 A 1980000 200 ~-100:100:6000 0 0 10 0 5   # end: ch10 pink bed volume 0
 1980000 4 50 0 90 0 200 9 1 0       # inner off
 1980000 4 50 0 32 96 255 6 1 180    # outer off
+
+S 1980000 default 20 "WAKE UP!"
+S 1990000 default 40 "WAKE UP!"
+S 2000000 default 50 "WAKE UP!"
+S 2010000 default 60 "WAKE UP!"

@@ -11,7 +11,7 @@
 0 8 50 >0 255 160 32 9 0 0       # inner amber: 8 Hz square, fade-in
 0 8 50 >0 255 80 0 6 0 180       # outer deep-amber: antiphase (radial drum)
 A 0 160 0 >0 8 1                 # ch1 isochronic drum: 160 Hz pulsed at 8 Hz; vol fade-in
-S 5000 default 47 "Find a comfortable place to lie down. Let the drum find its rhythm around you."
+S 5000 default 20 "Find a comfortable place to lie down. Let the drum find its rhythm around you."
 20000 8 50 22 255 160 32 9 0 0   # inner: 22% reached
 20000 8 50 22 255 80 0 6 0 180   # outer
 45000 8 50 ~12:30:12000 255 160 32 9 0 0   # inner: breathing 12<->30%
@@ -22,26 +22,31 @@ A 45000 160 0 50 8 1             # vol settled 50; drum 8 Hz
 A 180000 160 0 50 >8 1           # isochronic pulse 8 -> 4.5
 180000 >8 50 ~12:30:12000 255 160 32 9 0 0   # inner: flicker 8->4.5, breathing
 180000 >8 50 ~12:30:12000 255 80 0 6 0 180   # outer
-S 180000 default 47 "Let the drum carry you downward, into the journey."
+S 180000 default 20 "Let the drum carry you downward, into the journey."
 
 # --- Journey hold (pulse 4.5 Hz): the monotonous shamanic drum ---
 A 480000 160 0 55 4.5 1          # steady 4.5 Hz isochronic drum; fuller vol
 480000 4.5 50 ~12:30:12000 255 160 32 9 0 0   # inner: 4.5 Hz square, breathing
 480000 4.5 50 ~12:30:12000 255 80 0 6 0 180   # outer
-S 480000 default 47 "You are in the between-place now. Let the steady drum hold you. Explore."
-S 960000 default 47 "Wander freely. The drum is your thread home; it will not let you lose your way."
+S 480000 default 20 "You are in the between-place now. Let the steady drum hold you. Explore."
+S 960000 default 20 "Wander freely. The drum is your thread home; it will not let you lose your way."
 
 # --- Callback: faster recall (pulse 4.5->9) ---
 A 1320000 160 0 55 >4.5 1        # CALLBACK: isochronic pulse 4.5 -> 9, the recall
 1320000 >4.5 50 22 255 160 32 9 0 0   # inner: 4.5->9; steady 22% for the alerting callback
 1320000 >4.5 50 22 255 80 0 6 0 180   # outer
-S 1320000 default 47 "The drum is calling you back. Begin to return, following the quickening beat."
+S 1320000 default 20 "The drum is calling you back. Begin to return, following the quickening beat."
 
 # --- Gentle wake (pulse 9->10) + soft fade ---
 A 1560000 160 0 >55 >9 1         # pulse 9->10; vol eases 55->0 over the wake
 1560000 >9 50 >22 255 160 32 9 0 0   # inner: 9->10; bright 22->0
 1560000 >9 50 >22 255 80 0 6 0 180   # outer
-S 1560000 default 47 "Come fully back to the room. Feel the ground beneath you, and open your eyes when ready."
+S 1560000 default 20 "Come fully back to the room. Feel the ground beneath you, and open your eyes when ready."
 A 1800000 160 0 0 10 1           # volume 0, pulse settled 10 Hz
 1800000 10 50 0 255 160 32 9 0 0     # inner off
 1800000 10 50 0 255 80 0 6 0 180     # outer off
+
+S 1800000 default 20 "WAKE UP!"
+S 1810000 default 40 "WAKE UP!"
+S 1820000 default 50 "WAKE UP!"
+S 1830000 default 60 "WAKE UP!"

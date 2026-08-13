@@ -12,7 +12,7 @@
 0 40 50 >0 255 160 32 9 0 0        # inner amber ring: 40 Hz, phase 0; bright fade-in
 0 40 50 >0 32 96 255 6 0 180       # outer blue ring: 40 Hz, phase 180 (antiphase)
 A 0 340 0 >0 0 1 350 0             # ch1 alpha binaural: carrier 340 / R350 => 10 Hz beat; vol fade-in
-S 3000 default 47 "Settle, and let the breath grow slow. We begin softly at ten hertz."
+S 3000 default 20 "Settle, and let the breath grow slow. We begin softly at ten hertz."
 15000 40 50 18 255 160 32 9 0 0    # inner: 18% dim cap
 15000 40 50 18 32 96 255 6 0 180   # outer: 18% (matched -> mean luminance ~steady)
 A 60000 340 0 90 0 1 350 0         # ch1 alpha vol settled
@@ -24,11 +24,11 @@ A 120000 340 0 >0 0 2 380 0 50 4 0 3 1.5:60000   # ch2 GAMMA binaural: 340 / R38
 A 300000 340 0 80 0 2 380 0 50 4 0 3 1.5:60000   # ch2 gamma vol settled
 A 120000 170 0 >0 0 3 210 0        # ch3 HARMONIC octave-down 170/210 => same 40 Hz; fade in
 A 300000 170 0 44 0 3 210 0        # ch3 harmonic settled
-S 120000 default 47 "Now the field steadies to a gentle forty-hertz shimmer. Let self and surroundings blur at the edges."
+S 120000 default 20 "Now the field steadies to a gentle forty-hertz shimmer. Let self and surroundings blur at the edges."
 
 # --- GAMMA HOLD: antiphase 40 Hz light + binaural + harmonic, jitter on ---
-S 300000 default 47 "Rest in open, boundaryless awareness. Nothing to hold, nowhere to stand. Just this."
-S 900000 default 47 "Let the sense of a separate centre soften. Vast, still, undivided — and the light asks nothing of your eyes."
+S 300000 default 20 "Rest in open, boundaryless awareness. Nothing to hold, nowhere to stand. Just this."
+S 900000 default 20 "Let the sense of a separate centre soften. Vast, still, undivided — and the light asks nothing of your eyes."
 
 # --- Return: gamma + harmonic fade, alpha returns ---
 A 1500000 340 0 >80 0 2 380 0 50 4 0 3 1.5:60000  # gamma vol fades out
@@ -37,13 +37,18 @@ A 1500000 170 0 >44 0 3 210 0      # harmonic fades out
 A 1620000 170 0 0 0 3 210 0        # harmonic off
 A 1500000 340 0 >0 0 1 350 0       # ch1 alpha returns: fade in
 A 1620000 340 0 70 0 1 350 0       # alpha back at 10 Hz
-S 1500000 default 47 "Gently gathering back toward a centre now, carrying the spaciousness with you."
+S 1500000 default 20 "Gently gathering back toward a centre now, carrying the spaciousness with you."
 
 # --- Soft close: alpha + antiphase pair fade to 0 ---
 A 1680000 340 0 >70 0 1 350 0      # alpha vol fade
 1680000 40 50 >18 255 160 32 9 0 0 # inner: brightness fade
 1680000 40 50 >18 32 96 255 6 0 180 # outer
-S 1680000 default 47 "Let the shimmer fade. Rest a moment, then open your eyes, whole and clear."
+S 1680000 default 20 "Let the shimmer fade. Rest a moment, then open your eyes, whole and clear."
 A 1800000 340 0 0 0 1 350 0        # ch1 vol 0
 1800000 40 50 0 255 160 32 9 0 0   # inner off
 1800000 40 50 0 32 96 255 6 0 180  # outer off
+
+S 1800000 default 20 "WAKE UP!"
+S 1810000 default 40 "WAKE UP!"
+S 1820000 default 50 "WAKE UP!"
+S 1830000 default 60 "WAKE UP!"
