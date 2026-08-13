@@ -1,0 +1,125 @@
+# 21_gateway_focus12_SINE.ledc
+# VARIANT SINE -- dual-white (inner/outer ring) ANTIPHASE build for esp32-ave (direct backend).
+#   LED = two ring banks: warm/OUTER mask 10 (ch1+ch3) @ phase 0  vs  cool/INNER mask 5 (ch0+ch2) @ phase 180.
+#   Channel grouping matches 33_ego_dissolution_gamma / 27_genus_40hz_dim (NOT the {9,6} inner/outer used by
+#   the _RGB variants, whose eye-2 channels are crossed for a direct-backend device).
+#   env=1 SINE gate - the gentlest gate: a smooth brightness swell, no hard edges or harmonics. Best for calm eyes-closed comfort.
+#   As one bank dims the other brightens -> luminance ~flat while the inner(cold)/outer(warm) balance
+#   shimmers at the beat (invisible flicker: comfortable, no strobe). Rate stays 1:1 with the audio beat.
+#   EQUAL brightness on both banks (rings assumed equal light output; if not, bias one bank by eye).
+#   R/G/B = '-' (no colour): the direct backend ignores RGB; ring colour is physical/per-channel.
+#   Audio / speech / timing identical to the base session.
+# Gateway Focus 12 — "Expanded Awareness" — ~33 min — F10 stack + alpha signature, then return to F10
+# Goal: Monroe-style Focus-12 state — the Focus-10 base ("mind awake, body asleep") EXTENDED
+#       with an alpha-10 signature that opens a state of expanded, boundary-less awareness.
+#       Built by adding fixed binaural layers on top of the F10 stack, holding, then peeling
+#       the alpha layers back off to return through Focus 10.
+# Method: BINAURAL — HEADPHONES REQUIRED (each layer is a true L/R carrier pair; pan 0).
+#
+# Patent upgrade (Monroe US 5,213,562 / 5,356,368 — see reports/session_research/monroe_patents_guide.md
+#   §4a phased pink bed, §4b septon stack, §3 mix staging): the dominant 200[4.0] theta base layer is now
+#   a 3-carrier SEPTON stack (L 200/204/208, R 204/208/212 -> 4 Hz binaural AND monaural beat, speaker-
+#   robust), and a phased pink-noise bed (wave 5, pan L<->R on a 6 s sine LFO) rides ~-18 dB under the
+#   beats (+30% claimed FFR). Layer vols restaged to the patent mix: dominant ~65 combined, secondary
+#   -10..-15 dB, alpha/theta signature -15..-20 dB, bed -18 dB. The 10 Hz alpha signature stays AUDIO-
+#   ONLY (never on the LED). Carriers/beats otherwise UNCHANGED from the measured tape map.
+#
+# Measured layer table (from reports/session_research/gateway_focus_construction_guide.md §1):
+#   Layer        carrier[beat Hz]      channel    band     vol   phase
+#   100[1.5]     100 -> 101.5           ch1        delta    30    base F10 (secondary)
+#   200[4.0]     septon 200/204/208     ch2/8/9    theta    22 x3 base F10 (dominant)
+#   250[4.0]     250 -> 254.0           ch3        theta    30    base F10 (secondary)
+#   300[4.0]     300 -> 304.0           ch4        theta    30    base F10 (secondary)
+#   400[10.0]    400 -> 410.0           ch5        alpha    18    F12 signature (audio-only)
+#   500[10.1]    500 -> 510.1           ch6        alpha    18    F12 signature (audio-only)
+#   600[4.8]     600 -> 604.8           ch7        theta    18    F12 signature
+#   pink bed     200 (noise, wave 5)    ch10       ~200     8     -18 dB, phased L<->R 6 s
+#   (binaural beat = freq_r - carrier; all carriers < 1000 Hz, offsets < 35 Hz. Alpha
+#    signature layers are QUIETER than the septon/theta base, as in the tapes.)
+#
+# LED: dim violet flicker locked to the SAFE 4 Hz theta rate for the WHOLE session.
+#      The 10 Hz alpha signature is AUDIO-ONLY — it is NEVER placed on the LED. Brightness
+#      capped <=25%, ramp-in 20 s, breathing LFO, faded to 0 on the soft close. Mask 15.
+# SAFETY (guidelines §4 + guide §3): LED flicker fixed at 4 Hz (far below the 15-25 Hz
+#   photosensitive band); the alpha-10 beat rides the audio only. Brightness <=25% with a
+#   floor, ramp-in >=15 s, ramp-out over minutes (never abrupt); dim violet only (no
+#   saturated red, no red<->blue). Binaural carriers 100-600 Hz (<1000), offsets 1.5-10.1
+#   Hz (<35). Audio base <=~65, signature <=~35.
+#
+# Ramp convention = animate-on-start (guidelines 5a): the > prefix sits on the row where a
+# segment BEGINS; its value is the start; the target is the next same-channel/field row.
+
+# --- Prep / fade-in (00:00-03:00): delta bed + phased pink bed + LED fade in ---
+0 4 50 >0 - - - 10 1 0   # warm/OUTER bank (mask 10 = ch1+ch3) @ phase 0
+0 4 50 >0 - - - 5 1 180   # cool/INNER bank (mask 5 = ch0+ch2) @ phase 180 -> antiphase, luminance ~flat
+A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta bed; vol fades 0->30 over 60 s; sine
+A 0 200 ~-100:100:6000 >0 0 10 0 5   # ch10 phased pink bed; pan L<->R 6 s LFO; vol fades 0->8; wave 5 pink
+S 2000 default 20 "Settle in. Let the breath slow and the body grow heavy, releasing with every exhale."
+20000 4 50 20 - - - 10 1 0
+20000 4 50 20 - - - 5 1 180
+30000 4 50 ~12:22:10000 - - - 10 1 0
+30000 4 50 ~12:22:10000 - - - 5 1 180
+A 60000 100 0 60 0 1 101.5 7  # ch1 delta holds vol 30 through the session
+A 60000 200 ~-100:100:6000 16 0 10 0 5   # ch10 pink bed holds vol 8; pan LFO continues
+
+# --- Focus-10 base (03:00-08:00): bring in the septon theta stack ---
+S 180000 default 20 "Entering Focus Ten. Body asleep, mind awake — clear and quietly alert."
+A 180000 200 0 >0 0 2 204 7  # ch2 septon 200->204; vol fades 0->22 over 45 s
+A 180000 204 0 >0 0 8 208 7  # ch8 septon 204->208; vol fades 0->22 over 45 s
+A 180000 208 0 >0 0 9 212 7  # ch9 septon 208->212; vol fades 0->22 over 45 s
+A 180000 250 0 >0 0 3 254 7  # ch3 250[4.0] theta; vol fades 0->30 over 45 s
+A 180000 300 0 >0 0 4 304 7  # ch4 300[4.0] theta; vol fades 0->30 over 45 s
+A 225000 200 0 44 0 2 204 7  # ch2 septon holds 22
+A 225000 204 0 44 0 8 208 7  # ch8 septon holds 22
+A 225000 208 0 44 0 9 212 7  # ch9 septon holds 22
+A 225000 250 0 60 0 3 254 7  # ch3 theta holds 30
+A 225000 300 0 60 0 4 304 7  # ch4 theta holds 30
+
+# --- Extend to Focus 12 (08:00-09:00): fade IN the alpha-10 signature over ~60 s ---
+S 480000 default 20 "Expanding now into Focus Twelve. Awareness reaches out, opening beyond the edges of the body."
+A 480000 400 0 >0 0 5 410 7  # ch5 400[10.0] alpha; vol fades 0->18 over 60 s (audio-only)
+A 480000 500 0 >0 0 6 510.1 7  # ch6 500[10.1] alpha; vol fades 0->18 over 60 s (audio-only)
+A 480000 600 0 >0 0 7 604.8 7  # ch7 600[4.8] theta; vol fades 0->18 over 60 s
+A 540000 400 0 36 0 5 410 7  # ch5 alpha holds 18 (signature, quieter than the base)
+A 540000 500 0 36 0 6 510.1 7  # ch6 alpha holds 18
+A 540000 600 0 36 0 7 604.8 7  # ch7 holds 18
+
+# --- Hold full F12 stack (12:00-28:00 = 16 min): steady, no changes ---
+S 720000 default 20 "Rest here in expanded awareness. Spacious, open, without boundary — simply present."
+S 1140000 default 20 "Nothing to reach for. Let awareness drift and explore, wide and effortless."
+
+# --- Return: fade the alpha signature back to Focus 10 (28:00-31:00) ---
+S 1680000 default 20 "Beginning to return. The field gently narrows as you settle back toward Focus Ten."
+A 1680000 400 0 >36 0 5 410 7  # ch5 alpha vol 18->0 over 3 min (peel back to F10)
+A 1680000 500 0 >36 0 6 510.1 7  # ch6 alpha vol 18->0
+A 1680000 600 0 >36 0 7 604.8 7  # ch7 vol 18->0
+A 1860000 400 0 0 0 5 410 7  # ch5 alpha off (Focus 10 restored)
+A 1860000 500 0 0 0 6 510.1 7  # ch6 alpha off
+A 1860000 600 0 0 0 7 604.8 7  # ch7 off
+
+# --- Soft close (31:00-33:00): fade the F10 septon base, bed, and light to zero ---
+S 1860000 default 20 "Back in Focus Ten. Now let the body draw you gently the rest of the way home."
+A 1860000 100 0 >60 0 1 101.5 7  # ch1 delta vol 30->0 over 2 min
+A 1860000 200 0 >44 0 2 204 7  # ch2 septon vol 22->0
+A 1860000 204 0 >44 0 8 208 7  # ch8 septon vol 22->0
+A 1860000 208 0 >44 0 9 212 7  # ch9 septon vol 22->0
+A 1860000 250 0 >60 0 3 254 7  # ch3 theta vol 30->0
+A 1860000 300 0 >60 0 4 304 7  # ch4 theta vol 30->0
+A 1860000 200 ~-100:100:6000 >16 0 10 0 5   # ch10 pink bed vol 8->0; pan LFO continues
+1860000 4 50 >20 - - - 10 1 0
+1860000 4 50 >20 - - - 5 1 180
+S 1950000 default 20 "Coming fully back to the room, calm, clear, and refreshed."
+A 1980000 100 0 0 0 1 101.5 7  # end: ch1 volume 0
+A 1980000 200 0 0 0 2 204 7  # end: ch2 volume 0
+A 1980000 204 0 0 0 8 208 7  # end: ch8 volume 0
+A 1980000 208 0 0 0 9 212 7  # end: ch9 volume 0
+A 1980000 250 0 0 0 3 254 7  # end: ch3 volume 0
+A 1980000 300 0 0 0 4 304 7  # end: ch4 volume 0
+A 1980000 200 ~-100:100:6000 0 0 10 0 5   # end: ch10 pink bed volume 0
+1980000 4 50 0 - - - 10 1 0
+1980000 4 50 0 - - - 5 1 180
+
+S 1980000 default 20 "WAKE UP!"
+S 1990000 default 40 "WAKE UP!"
+S 2000000 default 50 "WAKE UP!"
+S 2010000 default 60 "WAKE UP!"
