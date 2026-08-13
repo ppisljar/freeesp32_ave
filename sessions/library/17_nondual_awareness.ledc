@@ -20,35 +20,35 @@
 # BEGINS; its value is the start; the target is the next same-channel/field row's value.
 
 # --- Brief settle / alpha (00:00-05:00, beat 10 Hz): vol + light fade in ---
-0 10 50 >0 60 30 200 5          # LED 10 Hz violet-blue flicker; brightness ramps 0->18% over 15 s
+0 10 50 >0 60 30 200 15   # LED 10 Hz violet-blue flicker; brightness ramps 0->18% over 15 s
 A 0 200 0 >0 0 1 210 0           # binaural: carrier 200 / freq_r 210 => 10 Hz beat; vol fades 0->50 over 60 s
 S 3000 default 20 "Settle, and let the breath find its own rhythm. Nowhere to go, nothing to fix."
-15000 10 50 18 60 30 200 5      # brightness reaches 18% (ramp-in >=15 s done)
-30000 10 50 ~8:22:12000 60 30 200 5   # slow breathing LFO: brightness sine 8<->22% over 12 s
+15000 10 50 18 60 30 200 15   # brightness reaches 18% (ramp-in >=15 s done)
+30000 10 50 ~8:22:12000 60 30 200 15   # slow breathing LFO: brightness sine 8<->22% over 12 s
 A 60000 200 0 100 0 1 210 0       # alpha settle holds: carrier 200, vol steady 50 to 05:00
 
 # --- Descend to the theta-alpha border (05:00-06:30, beat 10->7 Hz, gentle) ---
 A 300000 >200 0 100 0 1 210 0     # carrier ramps 200->203 (beat 10->7) over 90 s; vol holds 50
-300000 >10 50 ~8:22:12000 60 30 200 5  # LED 10->7 lockstep with the beat
+300000 >10 50 ~8:22:12000 60 30 200 15   # LED 10->7 lockstep with the beat
 S 300000 default 20 "Let awareness open and rest wherever it is. Choose nothing; receive everything."
 
 # --- Long FLAT open hold (06:30-26:00 = 19.5 min, beat 7 Hz, deliberately steady) ---
 A 390000 203 0 100 0 1 210 0      # carrier fixed 203 => beat 7 Hz held perfectly flat (no sweeps)
-390000 7 50 ~8:22:12000 60 30 200 5    # dim violet-blue 7 Hz; only the slow breathing LFO moves
+390000 7 50 ~8:22:12000 60 30 200 15   # dim violet-blue 7 Hz; only the slow breathing LFO moves
 S 600000 default 20 "Rest in open awareness — nothing to do, nothing to hold."
 S 1080000 default 20 "Let awareness be vast and still, like a clear sky holding every passing cloud."
 
 # --- Gentle return (26:00-29:00, beat 7->10 Hz) ---
 A 1560000 >203 0 100 0 1 210 0    # carrier ramps 203->200 (beat 7->10) over 3 min
-1560000 >7 50 ~8:22:12000 60 30 200 5  # LED 7->10 lockstep
+1560000 >7 50 ~8:22:12000 60 30 200 15   # LED 7->10 lockstep
 S 1560000 default 20 "Gently returning, carrying this stillness with you."
 
 # --- Soft close (29:00-30:00): vol + brightness fade to 0 over 60 s ---
 A 1740000 200 0 >100 0 1 210 0    # beat back at alpha 10; vol ramps 50->0 over final 60 s
-1740000 10 50 >18 60 30 200 5   # brightness fades 18->0 (>=10 s), preempts LFO
+1740000 10 50 >18 60 30 200 15   # brightness fades 18->0 (>=10 s), preempts LFO
 S 1740000 default 20 "Back at ten hertz. Gently return to the room, spacious and rested."
 A 1800000 200 0 0 0 1 210 0      # end: volume 0
-1800000 10 50 0 60 30 200 5     # end: brightness 0
+1800000 10 50 0 60 30 200 15   # end: brightness 0
 
 S 1800000 default 20 "WAKE UP!"
 S 1810000 default 40 "WAKE UP!"

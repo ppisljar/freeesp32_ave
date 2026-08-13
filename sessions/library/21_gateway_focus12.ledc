@@ -39,12 +39,12 @@
 # segment BEGINS; its value is the start; the target is the next same-channel/field row.
 
 # --- Prep / fade-in (00:00-03:00): delta bed + phased pink bed + LED fade in ---
-0 4 50 >0 90 0 200 5            # LED 4 Hz violet, brightness ramps 0->20% over 20 s
+0 4 50 >0 90 0 200 15   # LED 4 Hz violet, brightness ramps 0->20% over 20 s
 A 0 100 0 >0 0 1 101.5 7  # ch1 100[1.5] delta bed; vol fades 0->30 over 60 s; sine
 A 0 200 ~-100:100:6000 >0 0 10 0 5   # ch10 phased pink bed; pan L<->R 6 s LFO; vol fades 0->8; wave 5 pink
 S 2000 default 20 "Settle in. Let the breath slow and the body grow heavy, releasing with every exhale."
-20000 4 50 20 90 0 200 5        # brightness reaches 20% (ramp-in >=15 s done)
-30000 4 50 ~12:22:10000 90 0 200 5   # breathing LFO: brightness sine 12<->22% over 10 s
+20000 4 50 20 90 0 200 15   # brightness reaches 20% (ramp-in >=15 s done)
+30000 4 50 ~12:22:10000 90 0 200 15   # breathing LFO: brightness sine 12<->22% over 10 s
 A 60000 100 0 60 0 1 101.5 7  # ch1 delta holds vol 30 through the session
 A 60000 200 ~-100:100:6000 16 0 10 0 5   # ch10 pink bed holds vol 8; pan LFO continues
 
@@ -92,7 +92,7 @@ A 1860000 208 0 >44 0 9 212 7  # ch9 septon vol 22->0
 A 1860000 250 0 >60 0 3 254 7  # ch3 theta vol 30->0
 A 1860000 300 0 >60 0 4 304 7  # ch4 theta vol 30->0
 A 1860000 200 ~-100:100:6000 >16 0 10 0 5   # ch10 pink bed vol 8->0; pan LFO continues
-1860000 4 50 >20 90 0 200 5     # LED brightness 20->0 over final 2 min (preempts LFO)
+1860000 4 50 >20 90 0 200 15   # LED brightness 20->0 over final 2 min (preempts LFO)
 S 1950000 default 20 "Coming fully back to the room, calm, clear, and refreshed."
 A 1980000 100 0 0 0 1 101.5 7  # end: ch1 volume 0
 A 1980000 200 0 0 0 2 204 7  # end: ch2 volume 0
@@ -101,7 +101,7 @@ A 1980000 208 0 0 0 9 212 7  # end: ch9 volume 0
 A 1980000 250 0 0 0 3 254 7  # end: ch3 volume 0
 A 1980000 300 0 0 0 4 304 7  # end: ch4 volume 0
 A 1980000 200 ~-100:100:6000 0 0 10 0 5   # end: ch10 pink bed volume 0
-1980000 4 50 0 90 0 200 5       # end: brightness 0
+1980000 4 50 0 90 0 200 15   # end: brightness 0
 
 S 1980000 default 20 "WAKE UP!"
 S 1990000 default 40 "WAKE UP!"

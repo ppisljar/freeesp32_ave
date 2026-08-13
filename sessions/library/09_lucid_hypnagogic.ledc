@@ -27,12 +27,12 @@
 # ============================================================================
 
 # ---- LED: dim warm amber, 10 Hz -> 6 Hz, breathing brightness cue, Soft Off --
-0       10 50 >0 255 120 30 10          # t=0:00  10 Hz flicker, brightness fade-in from 0
-15000   10 50 12 255 120 30 10          # t=0:15  brightness 12% (15 s ramp-in, >=10 s rule)
-120000  >10 50 12 255 120 30 10         # t=2:00  flicker descend START 10 Hz (1:1 with beat)
-480000  6 50 ~6:15:10000 255 120 30 10  # t=8:00  6 Hz hold; brightness sine LFO 6<->15% /10s = breathing cue
-3300000 6 50 >15 255 120 30 10          # t=55:00 Soft Off START: brightness 15 -> 0
-3600000 6 50 0 255 120 30 10            # t=60:00 fully off (no wake ramp)
+0 10 50 >0 255 120 30 15   # t=0:00  10 Hz flicker, brightness fade-in from 0
+15000 10 50 12 255 120 30 15   # t=0:15  brightness 12% (15 s ramp-in, >=10 s rule)
+120000 >10 50 12 255 120 30 15   # t=2:00  flicker descend START 10 Hz (1:1 with beat)
+480000 6 50 ~6:15:10000 255 120 30 15   # t=8:00  6 Hz hold; brightness sine LFO 6<->15% /10s = breathing cue
+3300000 6 50 >15 255 120 30 15   # t=55:00 Soft Off START: brightness 15 -> 0
+3600000 6 50 0 255 120 30 15   # t=60:00 fully off (no wake ramp)
 
 # ---- ch1: isochronic theta driver (carrier 220 Hz, beat via modulation) ------
 A 0       220 0 >0 10 1                  # t=0:00  vol fade-in from 0; beat (mod) 10 Hz
