@@ -285,6 +285,16 @@
                     <div class="diag-stat"><span class="diag-k">Log buffered</span><span id="diagLogBytes">—</span></div>
                 </div>
 
+                <h3 style="margin:14px 0 4px 0;">Audio real-time <span id="diagAudioNote" style="font-size:12px;color:#666;font-weight:normal;"></span></h3>
+                <div class="diag-grid">
+                    <div class="diag-stat"><span class="diag-k">CPU clock</span><span id="diagAudCpu">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Underruns</span><span id="diagAudUnder" class="diag-reason">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Write errors</span><span id="diagAudWrErr">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Buffers written</span><span id="diagAudBufs">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Fill avg</span><span id="diagAudFillAvg">—</span></div>
+                    <div class="diag-stat"><span class="diag-k">Fill max</span><span id="diagAudFillMax">—</span></div>
+                </div>
+
                 <div class="controls" style="margin-top:10px;">
                     <button id="diagRefresh">Refresh</button>
                     <label style="font-size:13px;display:inline-flex;align-items:center;gap:4px;">

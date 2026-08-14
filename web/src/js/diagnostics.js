@@ -128,7 +128,34 @@ async function loadLogs() {
     }
 }
 
-async function refreshAll() { await Promise.all([loadState(), loadLogs()]); }
+// Real-time audio telemetry (GET /api/audiostats). fill_* cycles are wall-clock
+// around audio_generator_fill_buffer; the per-fill budget is 1024/44100 s (~23.2 ms),
+// so fill_max as a % of that is the headroom margin. short_writes = I2S underruns.
+const AUDIO_BUDGET_US = 1024 / 44100 * 1e6;   // ~23220 µs per fill
+async function loadAudioStats() {
+    let a;
+    try {
+        a = await fetch('/api/audiostats', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+    } catch (e) { a = null; }
+    if (!a) { $('diagAudioNote').textContent = '(unavailable)'; return; }
+    $('diagAudioNote').textContent = '';
+    $('diagAudCpu').textContent = (a.cpu_mhz != null ? a.cpu_mhz + ' MHz' : '—');
+    const under = $('diagAudUnder');
+    const u = a.short_writes || 0;
+    under.textContent = u + (u > 0 ? ' ⚠' : '');
+    under.className = 'diag-reason ' + (u > 0 ? 'diag-bad' : 'diag-ok');
+    $('diagAudWrErr').textContent = (a.write_errors || 0) + (a.gen_fail ? ' (+' + a.gen_fail + ' gen)' : '');
+    $('diagAudBufs').textContent = Number(a.buffers_written || 0).toLocaleString();
+    $('diagAudFillAvg').textContent = (a.fill_avg_us != null ? a.fill_avg_us + ' µs' : '—');
+    if (a.fill_max_us != null) {
+        const pct = a.fill_max_us / AUDIO_BUDGET_US * 100;
+        $('diagAudFillMax').textContent = a.fill_max_us + ' µs (' + pct.toFixed(1) + '% of budget)';
+    } else {
+        $('diagAudFillMax').textContent = '—';
+    }
+}
+
+async function refreshAll() { await Promise.all([loadState(), loadLogs(), loadAudioStats()]); }
 
 async function clearLogs() {
     try { await fetch('/api/logs?clear=1', { cache: 'no-store' }); } catch (e) { /* ignore */ }
