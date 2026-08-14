@@ -137,6 +137,10 @@ typedef struct {
     ledc_channel_t ledc_channels[NUM_LED_CHANNELS];          /**< LEDC channel numbers for ch 0..7 */
     uint16_t direct_channel_brightness[NUM_LED_CHANNELS];    /**< Current brightness, Q8.8 percent (0..LED_BRIGHTNESS_Q8_MAX) per channel */
     gpio_num_t direct_pins[NUM_LED_CHANNELS];                /**< GPIO per logical channel */
+    /* Last LEDC duty actually written per channel, so s_direct_refresh can skip
+     * ledc_set_duty/ledc_update_duty for channels whose duty is unchanged.
+     * -1 (0xFFFFFFFF) marks "never written" so the first refresh always writes. */
+    uint32_t direct_last_duty[NUM_LED_CHANNELS];             /**< Last duty pushed to LEDC per channel */
 } led_strip_handle_t;
 
 /**

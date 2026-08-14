@@ -143,7 +143,7 @@ static volatile float    s_iso_depth     = 0.0f;         // >0 overrides mod_dep
 // it's frequency-independent by construction). Set via audio_generator_set_phase().
 
 // Internal functions
-static float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type);
+static inline float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type);
 static inline void apply_modulation(float* sample, uint32_t mod_phase_q32, float mod_depth);
 static inline void apply_panning(float input, float pan, float* left, float* right);
 
@@ -892,6 +892,40 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
                                    channel->wave_type <= AUDIO_WAVE_NOISE_BROWN);
         const float carrier_scale = is_noise_ch ? AUDIO_NOISE_LEVEL_SCALE : 1.0f;
 
+        // C (fix 7): hoist per-sample buffer-CONSTANT values out of the loop for
+        // channels that are NOT sweeping the relevant parameter. Values are
+        // bit-identical to the per-sample form because the inputs
+        // (current_freq, current_pan, params.*, buffer_beat_jitter) do not change
+        // across the buffer when the corresponding sweep is inactive. Swept
+        // parameters still recompute per sample inside their *_sweep_active branch.
+        //
+        // Binaural pan-bypass: constant per buffer (depends only on configured
+        // params). Computed once; matches the original per-sample test exactly.
+        const bool binaural_bypass = (channel->params.frequency_r > 0.0f &&
+                                      channel->params.frequency_r != channel->params.frequency);
+
+        // Frequency-derived buffer constants (valid only when !freq_sweep_active).
+        // freq_diff/current_freq_r mirror the per-sample computation at line ~915;
+        // inc_l/inc_r mirror the phase-increment casts at lines ~1338-1339.
+        if (!freq_sweep_active && channel->params.frequency_r > 0.0f) {
+            float freq_diff = channel->params.frequency_r - channel->params.frequency;
+            channel->current_freq_r = channel->current_freq + freq_diff + buffer_beat_jitter;
+        }
+        const uint32_t inc_l_const = (uint32_t)(channel->current_freq   * Q32_PER_HZ);
+        const uint32_t inc_r_const = (uint32_t)(channel->current_freq_r * Q32_PER_HZ);
+
+        // Pan-derived buffer constants (valid only when !pan_sweep_active and not
+        // binaural-bypassed). Precompute the equal-power gains once; per-sample we
+        // just multiply sample_l by them — identical to apply_panning() output.
+        float pan_gain_l = 0.0f, pan_gain_r = 0.0f;
+        if (!pan_sweep_active && !binaural_bypass) {
+            float idxf = (channel->current_pan + 1.0f) * (float)(SINE_LUT_SIZE / 8u);
+            uint32_t int_idx = (uint32_t)idxf;
+            float frac = idxf - (float)int_idx;
+            pan_gain_l = fast_cos_idx(int_idx, frac);
+            pan_gain_r = fast_sin_idx(int_idx, frac);
+        }
+
         for (size_t i = 0; i < samples; i++) {
             // --- Frequency ---
             if (freq_sweep_active) {
@@ -910,7 +944,10 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             }
             // Preserve binaural beat frequency offset after any carrier sweep update.
             // A3: add a slow anti-habituation jitter to the beat (default off = no-op).
-            if (channel->params.frequency_r > 0.0f) {
+            // C (fix 7): only recompute per-sample while a FREQUENCY sweep is active
+            // (current_freq changes each sample). When no freq sweep is active,
+            // current_freq_r was hoisted before the loop to the identical value.
+            if (freq_sweep_active && channel->params.frequency_r > 0.0f) {
                 float freq_diff = channel->params.frequency_r - channel->params.frequency;
                 channel->current_freq_r = channel->current_freq + freq_diff + buffer_beat_jitter;
             }
@@ -1320,12 +1357,17 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
             // bypasses pan on a channel that was never meant to be binaural,
             // leaking its signal into both ears.
             float final_left, final_right;
-            if (channel->params.frequency_r > 0.0f &&
-                channel->params.frequency_r != channel->params.frequency) {
+            if (binaural_bypass) {
                 final_left  = sample_l;
                 final_right = sample_r;
-            } else {
+            } else if (pan_sweep_active) {
+                // Pan is sweeping → current_pan changed this sample; recompute.
                 apply_panning(sample_l, channel->current_pan, &final_left, &final_right);
+            } else {
+                // C (fix 7): pan constant across buffer → use hoisted gains. This is
+                // sample_l * fast_cos/sin_idx(int_idx,frac) — identical to apply_panning.
+                final_left  = sample_l * pan_gain_l;
+                final_right = sample_l * pan_gain_r;
             }
 
             // Mix into output buffer (stereo interleaved).  Use the smoothed
@@ -1335,8 +1377,16 @@ esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
 
             // Update phase accumulators.  Modular uint32_t arithmetic wraps for
             // free at 2^32; no branch is needed to keep phase in range.
-            channel->phase_l_q32 += (uint32_t)(channel->current_freq   * Q32_PER_HZ);
-            channel->phase_r_q32 += (uint32_t)(channel->current_freq_r * Q32_PER_HZ);
+            // C (fix 7): when a frequency sweep is active current_freq(_r) changed
+            // this sample, so recompute the increment; otherwise use the hoisted
+            // buffer-constant increments (bit-identical to the per-sample cast).
+            if (freq_sweep_active) {
+                channel->phase_l_q32 += (uint32_t)(channel->current_freq   * Q32_PER_HZ);
+                channel->phase_r_q32 += (uint32_t)(channel->current_freq_r * Q32_PER_HZ);
+            } else {
+                channel->phase_l_q32 += inc_l_const;
+                channel->phase_r_q32 += inc_r_const;
+            }
 
             channel->samples_generated++;
         }
@@ -1834,7 +1884,7 @@ int audio_generator_log_sweep_progress(void)
  *     t = 2 × 0.25² = 0.125
  *     For a 400→440 Hz sweep: freq = 400 + 40 × 0.125 = 405 Hz  ✓
  */
-static float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type) {
+static inline float interpolate_sweep(float start, float target, float progress, audio_gen_sweep_type_t type) {
     if (progress <= 0.0f) return start;
     if (progress >= 1.0f) return target;
 

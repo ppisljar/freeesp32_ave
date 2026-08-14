@@ -2,6 +2,31 @@
 #define AUDIO_TEST_H
 
 #include "esp_err.h"
+#include <stdint.h>
+
+/**
+ * @brief Read-only audio output telemetry (Fix E instrumentation).
+ *
+ * Purely additive counters/timers gathered in the audio output task; they do
+ * not alter audio or LED timing. Snapshot is a plain copy of volatile globals.
+ */
+typedef struct {
+    uint32_t buffers_written;   /**< total i2s_channel_write calls that returned ESP_OK */
+    uint32_t write_errors;      /**< i2s_channel_write calls that returned != ESP_OK */
+    uint32_t short_writes;      /**< writes where bytes_written < requested (underrun) */
+    uint32_t gen_fail;          /**< audio_generator_fill_buffer returned != ESP_OK */
+    // Cycle-count profiling of audio_generator_fill_buffer (esp_cpu_get_cycle_count).
+    uint32_t fill_min_cycles;
+    uint32_t fill_max_cycles;
+    uint32_t fill_avg_cycles;
+    uint32_t fill_count;        /**< number of fill_buffer samples accumulated */
+} audio_stats_t;
+
+/**
+ * @brief Snapshot the audio output telemetry counters.
+ * @param out Destination struct (must be non-NULL).
+ */
+void audio_test_get_stats(audio_stats_t *out);
 
 /**
  * @brief Audio Test Functions

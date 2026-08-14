@@ -1057,6 +1057,9 @@ static esp_err_t s_direct_init(led_strip_handle_t *handle, const gpio_num_t pin_
     }
 
     memset(handle->direct_channel_brightness, 0, sizeof(handle->direct_channel_brightness));
+    /* 0xFF fill → direct_last_duty[] = ~0 (impossible real duty), so the first
+     * s_direct_refresh writes every channel regardless of its initial duty. */
+    memset(handle->direct_last_duty, 0xFF, sizeof(handle->direct_last_duty));
     return ESP_OK;
 }
 
@@ -1123,6 +1126,7 @@ static esp_err_t s_direct_refresh(led_strip_handle_t *handle)
      * meaning "constant HIGH, no LOW pulse" for an 8-bit timer — required to
      * fully extinguish active-low LEDs. Using 255 leaves a 1/256 LOW pulse
      * per cycle that visibly lights active-low LEDs in the supposed off state. */
+    /* Hoisted once per refresh (was already outside the loop). */
     const uint8_t active_low_mask = (uint8_t)settings_get()->led_direct_active_low_mask;
     for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (handle->direct_pins[ch] == GPIO_NUM_NC) continue;
@@ -1130,8 +1134,14 @@ static esp_err_t s_direct_refresh(led_strip_handle_t *handle)
          * (25600) maps to DUTY_MAX (constant HIGH). Product ≤ 25600*2048 fits u32. */
         uint32_t duty = ((uint32_t)brightness[ch] * LED_DIRECT_DUTY_MAX) / LED_BRIGHTNESS_Q8_MAX;
         if (active_low_mask & (1u << ch)) duty = LED_DIRECT_DUTY_MAX - duty;
+        /* Skip channels whose duty is unchanged since the last refresh — the
+         * hardware already holds this exact duty, so re-writing it is a no-op that
+         * only burns ledc_set_duty/ledc_update_duty cycles. Any CHANGED channel is
+         * still written exactly as before. First refresh writes (last = ~0). */
+        if (duty == handle->direct_last_duty[ch]) continue;
         ledc_set_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch], duty);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, handle->ledc_channels[ch]);
+        handle->direct_last_duty[ch] = duty;
     }
 
     return ESP_OK;

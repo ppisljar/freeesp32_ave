@@ -13,6 +13,7 @@
 #include "settings.h"            // runtime device settings (GET/POST /api/settings)
 #include "log_ctrl.h"            // runtime categorized logging (GET/POST /api/loglevels)
 #include "isr_profiling.h"       // g_isr_profiles for GET /api/isrprofile
+#include "audio_test.h"          // audio_test_get_stats for GET /api/audiostats
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -113,6 +114,7 @@ static esp_err_t reports_put_handler(httpd_req_t *req);
 static esp_err_t reports_delete_handler(httpd_req_t *req);
 static esp_err_t logs_handler(httpd_req_t *req);
 static esp_err_t isrprofile_handler(httpd_req_t *req);
+static esp_err_t audiostats_handler(httpd_req_t *req);
 static esp_err_t coredump_handler(httpd_req_t *req);
 static esp_err_t coredump_erase_handler(httpd_req_t *req);
 
@@ -288,8 +290,11 @@ esp_err_t web_server_init(void)
     s_async_queue = xQueueCreate(ASYNC_QUEUE_DEPTH, sizeof(async_job_t));
     if (s_async_queue) {
         for (int i = 0; i < ASYNC_WORKERS; i++) {
-            xTaskCreate(async_worker_task, "http_async", ASYNC_WORKER_STACK,
-                        NULL, 5, NULL);
+            // Pin to core 0 (protocol core): keeps the async HTTP workers off
+            // core 1 where the audio output task and LED flicker render task run,
+            // so long handlers can't steal cycles from the real-time audio/LED path.
+            xTaskCreatePinnedToCore(async_worker_task, "http_async", ASYNC_WORKER_STACK,
+                                    NULL, 5, NULL, 0);
         }
     } else {
         ESP_LOGE(TAG, "async worker queue alloc failed — long handlers run inline");
@@ -426,6 +431,14 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &isrprofile_uri);
+
+    httpd_uri_t audiostats_uri = {
+        .uri = "/api/audiostats",
+        .method = HTTP_GET,
+        .handler = audiostats_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &audiostats_uri);
 
     httpd_uri_t coredump_uri = {
         .uri = "/api/coredump",
@@ -2337,6 +2350,33 @@ static esp_err_t isrprofile_handler(httpd_req_t *req)
 #else
     httpd_resp_sendstr(req, "{\"error\":\"CONFIG_ISR_PROFILING disabled\"}");
 #endif
+    return ESP_OK;
+}
+
+// GET /api/audiostats — read-only audio output telemetry (Fix E). Reports the
+// I2S write anomaly counters (write_errors / short_writes = underruns) and the
+// min/avg/max cycle count of audio_generator_fill_buffer. cpu_mhz is included so
+// the caller can convert cycles → microseconds. Cheap: one struct copy + snprintf.
+static esp_err_t audiostats_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    audio_stats_t st;
+    audio_test_get_stats(&st);
+    const int mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    char buf[384];
+    int n = snprintf(buf, sizeof(buf),
+        "{\"cpu_mhz\":%d,"
+        "\"buffers_written\":%u,\"write_errors\":%u,\"short_writes\":%u,\"gen_fail\":%u,"
+        "\"fill_count\":%u,\"fill_min_cyc\":%u,\"fill_avg_cyc\":%u,\"fill_max_cyc\":%u,"
+        "\"fill_avg_us\":%u,\"fill_max_us\":%u}",
+        mhz,
+        (unsigned)st.buffers_written, (unsigned)st.write_errors,
+        (unsigned)st.short_writes, (unsigned)st.gen_fail,
+        (unsigned)st.fill_count, (unsigned)st.fill_min_cycles,
+        (unsigned)st.fill_avg_cycles, (unsigned)st.fill_max_cycles,
+        (unsigned)(mhz ? st.fill_avg_cycles / (unsigned)mhz : 0u),
+        (unsigned)(mhz ? st.fill_max_cycles / (unsigned)mhz : 0u));
+    httpd_resp_send(req, buf, n);
     return ESP_OK;
 }
 

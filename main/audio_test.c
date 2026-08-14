@@ -7,17 +7,47 @@
 #include "bg_player.h"
 #include "settings.h"           // audio_max_volume (master output gain)
 #include "esp_log.h"
+#include "esp_cpu.h"            // esp_cpu_get_cycle_count() — fill_buffer profiling
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/i2s_std.h"
 #include <math.h>
 #include <string.h>
+#include <limits.h>
 
 static const char* TAG = "audio_test";
 
 // Task handle for audio output
 static TaskHandle_t audio_output_task_handle = NULL;
 static bool audio_output_running = false;
+
+// ---- Fix E: audio output telemetry (task-context, O(1), lock-free) ----------
+// Simple 32-bit counters written only by the single audio output task and read
+// (racily but harmlessly — monotonic counters) by the /api/audiostats handler.
+// This is purely additive: it never changes audio samples or timing.
+static volatile uint32_t s_audio_buffers_written = 0;
+static volatile uint32_t s_audio_write_errors    = 0;
+static volatile uint32_t s_audio_short_writes    = 0;
+static volatile uint32_t s_audio_gen_fail        = 0;
+// fill_buffer cycle-count profile (min/max/sum/count → min/avg/max).
+static volatile uint32_t s_fill_min_cycles = UINT32_MAX;
+static volatile uint32_t s_fill_max_cycles = 0;
+static volatile uint64_t s_fill_sum_cycles = 0;
+static volatile uint32_t s_fill_count      = 0;
+
+void audio_test_get_stats(audio_stats_t *out)
+{
+    if (!out) return;
+    out->buffers_written = s_audio_buffers_written;
+    out->write_errors    = s_audio_write_errors;
+    out->short_writes    = s_audio_short_writes;
+    out->gen_fail        = s_audio_gen_fail;
+    uint32_t cnt = s_fill_count;
+    out->fill_count      = cnt;
+    out->fill_min_cycles = (cnt ? s_fill_min_cycles : 0u);
+    out->fill_max_cycles = s_fill_max_cycles;
+    out->fill_avg_cycles = (cnt ? (uint32_t)(s_fill_sum_cycles / cnt) : 0u);
+}
 
 // External I2S handle from audio manager
 extern i2s_chan_handle_t tx_handle;
@@ -119,9 +149,17 @@ void audio_test_output_task(void* pvParameters)
     while (audio_output_running) {
         // audio_generator_fill_buffer memsets the buffer to 0 as its first act,
         // so an additional memset here is wasted ~256 cycles per cycle.
-        // Generate audio samples from all active channels
+        // Generate audio samples from all active channels.
+        // Fix E: bracket fill_buffer with a cycle-count profile (O(1), no locks).
+        uint32_t _fb_start = esp_cpu_get_cycle_count();
         esp_err_t ret = audio_generator_fill_buffer(audio_buffer, stereo_samples);
+        uint32_t _fb_elapsed = esp_cpu_get_cycle_count() - _fb_start;
+        if (_fb_elapsed < s_fill_min_cycles) s_fill_min_cycles = _fb_elapsed;
+        if (_fb_elapsed > s_fill_max_cycles) s_fill_max_cycles = _fb_elapsed;
+        s_fill_sum_cycles += _fb_elapsed;
+        s_fill_count++;
         if (ret != ESP_OK) {
+            s_audio_gen_fail++;
             ESP_LOGW(TAG, "Audio generation failed: %s", esp_err_to_name(ret));
         }
 
@@ -157,11 +195,18 @@ void audio_test_output_task(void* pvParameters)
 
         // Output to I2S
         if (tx_handle) {
+            const size_t req_bytes = stereo_samples * 2 * sizeof(int16_t);
             ret = i2s_channel_write(tx_handle, i2s_buffer,
-                                   stereo_samples * 2 * sizeof(int16_t),
+                                   req_bytes,
                                    &bytes_written, portMAX_DELAY);
             if (ret != ESP_OK) {
+                s_audio_write_errors++;   // Fix E
                 ESP_LOGW(TAG, "I2S write failed: %s", esp_err_to_name(ret));
+            } else {
+                s_audio_buffers_written++;            // Fix E
+                if (bytes_written < req_bytes) {
+                    s_audio_short_writes++;           // Fix E: partial write = underrun
+                }
             }
         }
 
