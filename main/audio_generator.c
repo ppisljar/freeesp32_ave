@@ -655,7 +655,7 @@ static float    s_mix_gain_target    = 1.0f;
 static float    s_mix_gain_step      = 0.0f;
 static uint32_t s_mix_gain_ramp_left = 0u;
 
-esp_err_t audio_generator_fill_buffer(float* output_buffer, size_t samples) {
+esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t samples) {
     if (!generator_initialized || !output_buffer) {
         return ESP_ERR_INVALID_ARG;
     }

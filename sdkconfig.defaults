@@ -22,3 +22,4 @@ CONFIG_AUDIO_DEFAULT_CODEC_ES8388=y
 
 # WebSocket server support (bg_websocket_pcm_push_plan.md — /api/bg-ws raw-PCM ingest)
 CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_ESP32_REV_MIN_3=y
