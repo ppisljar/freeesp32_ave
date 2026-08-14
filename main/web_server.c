@@ -27,6 +27,7 @@
 #endif
 #include "esp_timer.h"
 #include "esp_system.h"          // esp_restart (POST /api/reboot)
+#include "esp_chip_info.h"       // esp_chip_info — silicon revision for /api/version
 #include "esp_ota_ops.h"         // OTA boot-slot handoff (POST /api/ota)
 #include "esp_app_desc.h"        // esp_app_get_description (GET /api/version)
 #include "nvs.h"                 // WiFi cred handoff to the updater (namespace "ota")
@@ -1287,6 +1288,15 @@ static esp_err_t version_handler(httpd_req_t *req)
     if (running) {
         cJSON_AddStringToObject(root, "partition", running->label);
         cJSON_AddNumberToObject(root, "address", (double)running->address);
+    }
+    // Silicon identity — chip_revision is MXX format (300 = v3.0), so >=300 means
+    // ESP32 rev 3 (safe to drop the PSRAM cache workaround → free ~9.5 KB IRAM).
+    {
+        esp_chip_info_t chip;
+        esp_chip_info(&chip);
+        cJSON_AddNumberToObject(root, "chip_model", (double)chip.model);
+        cJSON_AddNumberToObject(root, "chip_cores", (double)chip.cores);
+        cJSON_AddNumberToObject(root, "chip_revision", (double)chip.revision);
     }
 
     char *out = cJSON_PrintUnformatted(root);
