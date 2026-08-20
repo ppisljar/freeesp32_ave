@@ -97,7 +97,12 @@ let s_bgWs = null;
 // websocket_bg_push_reliability_investigation.md (Regime 2).
 const s_pumpChan = (typeof MessageChannel !== 'undefined') ? new MessageChannel() : null;
 let s_pumpTask = null;
-if (s_pumpChan) s_pumpChan.port1.onmessage = () => { const t = s_pumpTask; s_pumpTask = null; if (t) t(); };
+if (s_pumpChan) {
+    s_pumpChan.port1.onmessage = () => { const t = s_pumpTask; s_pumpTask = null; if (t) t(); };
+    // Node's MessagePort holds the event loop open, so importing this module
+    // would hang `node --test` forever. Browsers have no unref() — no-op there.
+    if (typeof s_pumpChan.port1.unref === 'function') s_pumpChan.port1.unref();
+}
 function armPump(fn, ms) {
     const hidden = (typeof document !== 'undefined') && document.hidden;
     if (hidden && s_pumpChan) { s_pumpTask = fn; s_pumpChan.port2.postMessage(0); }
@@ -140,6 +145,12 @@ export const WS_CHUNK_BYTES = 16384;
 // Pause sending while this many bytes sit unsent in the socket (browser-side
 // backpressure — the device also paces us via TCP + its ring back-channel).
 export const WS_HIGH_WATER = 512 * 1024;
+// Give up if the device hasn't completed the WS handshake in this long. Without
+// it a device that never accepts the connection (its httpd out of sockets) is
+// only noticed when the BROWSER gives up — ~240 s in Chrome — and the session
+// meanwhile plays through with no speech and no visible error. The device
+// answers in milliseconds when healthy, so 10 s is already generous.
+export const WS_OPEN_TIMEOUT_MS = 10000;
 
 // The handshake text frame the device expects before any PCM. Pure → testable.
 export function wsHandshakeMsg(pan = 0, loudness = 50) {
@@ -159,7 +170,8 @@ export function wsUrl(loc = (typeof location !== 'undefined' ? location : null))
 // then pumps `pcmBytes` (Uint8Array) in WS_CHUNK_BYTES frames, pausing when the
 // socket's bufferedAmount is high. Resolves when the clip has been sent and the
 // socket closes; rejects on WS error. Supersedes any prior WS push.
-export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) {
+export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress,
+                                     openTimeoutMs = WS_OPEN_TIMEOUT_MS } = {}) {
     return new Promise((resolve, reject) => {
         if (s_bgWs) { try { s_bgWs.close(1000, 'supersede'); } catch (e) { /* ignore */ } s_bgWs = null; }
         let ws;
@@ -173,6 +185,35 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
         let off = 0;
         let sending = false;
         let sentAll = false;
+        // The promise settles exactly once: whichever of open-timeout / error /
+        // close gets there first wins, and the later ones stay quiet.
+        let settled = false;
+        let openTimer = null;
+        function settle(fn) {
+            if (settled) return;
+            settled = true;
+            if (openTimer !== null) { clearTimeout(openTimer); openTimer = null; }
+            if (s_bgWs === ws) s_bgWs = null;
+            fn();
+        }
+
+        openTimer = setTimeout(() => {
+            openTimer = null;
+            if (ws.readyState === WebSocket.OPEN) return;      // opened just in time
+            const secs = Math.round(openTimeoutMs / 1000);
+            clogE('ws', 'handshake timed out after ' + secs + 's (readyState=' + ws.readyState
+                      + ') — the device never accepted the connection');
+            // Settle FIRST, then close: closing can fire onclose synchronously,
+            // and the generic "closed before the clip finished" reason would
+            // otherwise win the race and hide why this actually failed.
+            settle(() => {
+                try { ws.close(4000, 'open timeout'); } catch (e) { /* ignore */ }
+                reject(new Error(
+                    'No speech: the device did not accept the audio connection within ' + secs
+                    + 's. Its web server is likely out of sockets — reboot the device and play again. '
+                    + 'The session is running WITHOUT the spoken lines.'));
+            });
+        }, openTimeoutMs);
 
         function pump() {
             if (sending || ws.readyState !== WebSocket.OPEN) return;
@@ -200,7 +241,12 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
             })();
         }
 
-        ws.onopen = () => { clogI('ws', 'open — sending handshake'); ws.send(wsHandshakeMsg(pan, loudness)); pump(); };
+        ws.onopen = () => {
+            if (openTimer !== null) { clearTimeout(openTimer); openTimer = null; }
+            clogI('ws', 'open — sending handshake');
+            ws.send(wsHandshakeMsg(pan, loudness));
+            pump();
+        };
         ws.onmessage = (ev) => {
             // Back-channel {consumed, ring_ms} — device ring fill. Used as active
             // flow control: WebSocket message events are NOT throttled in a
@@ -218,14 +264,16 @@ export function pushBgWs(pcmBytes, { pan = 0, loudness = 50, onProgress } = {}) 
             } catch (e) { /* ignore non-JSON */ }
         };
         ws.onclose = (ev) => {
-            if (s_bgWs === ws) s_bgWs = null;
-            if (sentAll) { clogI('ws', 'closed cleanly after EOS (code=' + ev.code + ')'); resolve({ ok: true }); }
-            else { clogE('ws', 'closed BEFORE clip finished (code=' + ev.code + ' reason="' + (ev.reason || '') + '" clean=' + ev.wasClean + ', sent ' + off + '/' + pcmBytes.length + ' bytes)'); reject(new Error('bg-ws closed before the clip finished sending')); }
+            settle(() => {
+                if (sentAll) { clogI('ws', 'closed cleanly after EOS (code=' + ev.code + ')'); resolve({ ok: true }); }
+                else { clogE('ws', 'closed BEFORE clip finished (code=' + ev.code + ' reason="' + (ev.reason || '') + '" clean=' + ev.wasClean + ', sent ' + off + '/' + pcmBytes.length + ' bytes)'); reject(new Error('bg-ws closed before the clip finished sending')); }
+            });
         };
         ws.onerror = () => {
-            if (s_bgWs === ws) s_bgWs = null;
-            clogE('ws', 'connection error (sent ' + off + '/' + pcmBytes.length + ' bytes)');
-            reject(new Error('bg-ws connection error'));
+            settle(() => {
+                clogE('ws', 'connection error (sent ' + off + '/' + pcmBytes.length + ' bytes)');
+                reject(new Error('bg-ws connection error'));
+            });
         };
     });
 }
