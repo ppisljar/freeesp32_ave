@@ -10,6 +10,11 @@
 // report (from config.js) and reports re-opened from the dropdown flow through
 // the SAME editor, so a title/comment can be set at generation time or amended
 // later and re-saved.
+//
+// The dropdown lists reports newest-first and labels each one
+// "<date> - <session>.ledc - <title>"; the open report is reflected in the URL
+// (#reports/<src>:<file>.rpt) so a specific report can be linked to and
+// re-opened on load.
 import { showMessage } from './util.js';
 import { getStoredLog, deleteStoredLog } from './logcapture.js';
 
@@ -23,7 +28,7 @@ const BODY_MARKER = '=== SESSION REPORT ===';
 
 // The report currently shown in the editor/box, so the Save button knows which
 // file to (over)write and which body to re-wrap with the edited header.
-let current = { name: null, src: null, session: null, body: '' };
+let current = { name: null, src: null, session: null, date: '', body: '' };
 
 // ---- filename ------------------------------------------------------------
 // Build a filesystem-safe report filename from the session name + timestamp,
@@ -46,6 +51,47 @@ function sanitizeBase(name) {
     return b || 'session';
 }
 
+// ---- report identity (date / session / title) ----------------------------
+// Reports are named "<session-base>-YYYYMMDD-HHMMSS.rpt", so the session and the
+// recording time are recoverable from the filename alone — no fetch needed to
+// sort the list or label an entry. Legacy/hand-named files degrade gracefully
+// (base = whole name, date = null).
+export function parseReportName(name) {
+    const m = /^(.*)-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.rpt$/i.exec(name || '');
+    if (!m) return { base: String(name || '').replace(/\.rpt$/i, ''), date: null };
+    const d = new Date(+m[2], +m[3] - 1, +m[4], +m[5], +m[6], +m[7]);
+    return { base: m[1], date: isNaN(d.getTime()) ? null : d };
+}
+
+function fmtWhen(d) {
+    if (!d) return '(no date)';
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+         + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+// Dropdown text for one report: date/time, the .ledc it came from, and the
+// custom title when the user actually set one (a title equal to the session
+// name is the auto-default and adds nothing).
+export function reportLabel(e) {
+    const ledc = e.session || (e.base ? e.base + '.ledc' : e.name);
+    let s = fmtWhen(e.date) + '  ·  ' + ledc;
+    const title = (e.title || '').trim();
+    if (title && title !== e.session && title !== e.base) s += '  ·  ' + title;
+    return s;
+}
+
+// Newest first; undated entries sink to the bottom, ties broken by name.
+export function compareReports(a, b) {
+    const ta = a.date ? a.date.getTime() : null, tb = b.date ? b.date.getTime() : null;
+    if (ta !== tb) {
+        if (ta == null) return 1;
+        if (tb == null) return -1;
+        return tb - ta;
+    }
+    return a.name < b.name ? 1 : (a.name > b.name ? -1 : 0);
+}
+
 // ---- compose / parse -----------------------------------------------------
 // Wrap a machine body with the editable header. Called every time we save so
 // the on-disk report always reflects the current Title/Comments inputs.
@@ -66,19 +112,20 @@ export function parseReport(text) {
     const t = text || '';
     const idx = t.indexOf(BODY_MARKER);
     if (idx < 0 || !/^Title:/.test(t)) {
-        return { title: '', session: '', comments: '', body: t };
+        return { title: '', session: '', date: '', comments: '', body: t };
     }
     const header = t.slice(0, idx);
     const body = t.slice(idx);
     const grab = re => { const m = header.match(re); return m ? m[1].trim() : ''; };
     const title = grab(/^Title:\s*(.*)$/m);
     const session = grab(/^Session:\s*(.*)$/m);
+    const date = grab(/^Date:\s*(.*)$/m);
     // Comments run from the "Comments:" line to the end of the header block.
     let comments = '';
     const cm = header.match(/^Comments:\s*\n([\s\S]*)$/m);
     if (cm) comments = cm[1].replace(/\s+$/, '');
     if (comments === '(none)') comments = '';
-    return { title, session, comments, body };
+    return { title, session, date, comments, body };
 }
 
 // ---- editor UI -----------------------------------------------------------
@@ -98,6 +145,9 @@ function readMeta() {
         title: (e.title && e.title.value) || '',
         comments: (e.comments && e.comments.value) || '',
         session: current.session,
+        // Re-saving an edited title must not restamp the report: keep the date
+        // it was recorded with (composeReport falls back to "now" when empty).
+        date: current.date,
     };
 }
 
@@ -129,6 +179,7 @@ function persist(name, text) {
                 try { localStorage.setItem(LOCAL_PREFIX + name, text); }
                 catch (e) { showMessage('Report not saved locally: ' + e, 'error'); return null; }
                 showMessage('Report saved to browser as ' + name, 'info');
+                noteSaved('local', name, text);
                 refreshReportList();
                 return name;
             }
@@ -136,10 +187,28 @@ function persist(name, text) {
             return fetch('/api/reports/' + encodeURIComponent(name),
                 { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: text })
                 .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
-                .then(() => { showMessage('Report saved to device as ' + name, 'info'); refreshReportList(); return name; })
+                .then(() => {
+                    showMessage('Report saved to device as ' + name, 'info');
+                    noteSaved('spiffs', name, text);
+                    refreshReportList();
+                    return name;
+                })
                 .catch(err => { showMessage('Report not saved to device: ' + err, 'error'); return null; });
         })
         .catch(() => null);   // never let report storage break the report flow
+}
+
+// After a successful write: the report now has a home, so the editor knows
+// which source it belongs to, the URL can point at it, and the dropdown label
+// picks up an edited title without re-reading the file from the device.
+function noteSaved(src, name, text) {
+    const p = parseReport(text);
+    // Only device reports need the header cache; browser ones are read locally.
+    if (src === 'spiffs') writeMetaCache(src, name, { title: p.title, session: p.session, date: p.date });
+    if (current.name === name) {
+        current.src = src;
+        setHash(src, name);
+    }
 }
 
 // Called by config.js when a session ends: takes the machine body + session
@@ -148,7 +217,7 @@ function persist(name, text) {
 // text so config.js can forward title/comments to the generator upload.
 export function presentGeneratedReport(body, sessionName) {
     const session = sessionName || 'session';
-    current = { name: makeReportName(session), src: null, session, body };
+    current = { name: makeReportName(session), src: null, session, date: new Date().toLocaleString(), body };
     showEditor({ title: session, comments: '' });
     const composed = composeReport(current.body, readMeta());
     persist(current.name, composed);
@@ -271,36 +340,116 @@ function listLocal() {
         const k = localStorage.key(i);
         if (k && k.startsWith(LOCAL_PREFIX)) names.push(k.slice(LOCAL_PREFIX.length));
     }
-    return Promise.resolve(names.sort().reverse());   // newest-named first
+    return Promise.resolve(names);
+}
+
+// Titles live inside the report file, so labelling a device report means
+// reading it. That is one HTTP round-trip per report against a very small
+// device, so the header of each device report is cached in localStorage and
+// re-read only for files we have never seen (or whose title we just changed).
+const META_PREFIX = 'rptmeta:';
+function metaKey(src, name) { return META_PREFIX + src + ':' + name; }
+function readMetaCache(src, name) {
+    try { return JSON.parse(localStorage.getItem(metaKey(src, name)) || 'null'); }
+    catch (e) { return null; }
+}
+function writeMetaCache(src, name, meta) {
+    try { localStorage.setItem(metaKey(src, name), JSON.stringify(meta)); } catch (e) { /* quota — labels just fall back */ }
+}
+function dropMetaCache(src, name) {
+    try { localStorage.removeItem(metaKey(src, name)); } catch (e) { /* ignore */ }
+}
+
+// Entries currently backing the dropdown, plus per-source availability so a
+// failed device listing still renders its "(unavailable)" placeholder.
+let s_entries = [];
+let s_avail = { spiffs: true, local: true };
+
+function makeEntry(src, name) {
+    const p = parseReportName(name);
+    const e = { src, name, base: p.base, date: p.date, session: '', title: '', metaKnown: false };
+    // Browser-stored reports are already in memory — parse the header directly.
+    // Device reports use the cache, and are filled in later by fetchMissingMeta.
+    const m = src === 'local' ? parseReport(localStorage.getItem(LOCAL_PREFIX + name) || '')
+                              : readMetaCache(src, name);
+    if (m) applyEntryMeta(e, m);
+    return e;
+}
+
+function applyEntryMeta(e, m) {
+    e.title = m.title || '';
+    e.session = m.session || '';
+    e.metaKnown = true;
+    // Fall back to the header's Date line for files whose name has no stamp.
+    if (!e.date && m.date) {
+        const d = new Date(m.date);
+        if (!isNaN(d.getTime())) e.date = d;
+    }
+}
+
+function renderList() {
+    const dd = document.getElementById('reportDropdown');
+    if (!dd) return;
+    // Selection survives a re-render (labels refresh once titles arrive), and
+    // falls back to the open report when the list is built after it was opened.
+    const keep = dd.value || (current.name ? current.src + ':' + current.name : '');
+    dd.innerHTML = '';
+    ['spiffs', 'local'].forEach(src => {
+        const group = document.createElement('optgroup');
+        group.label = SRC_LABEL[src];
+        const rows = s_entries.filter(e => e.src === src);
+        if (!s_avail[src] || rows.length === 0) {
+            const o = document.createElement('option');
+            o.textContent = s_avail[src] ? '(none)' : '(unavailable)';
+            o.disabled = true;
+            group.appendChild(o);
+        } else {
+            rows.forEach(e => {
+                const o = document.createElement('option');
+                o.value = e.src + ':' + e.name;
+                o.textContent = reportLabel(e);
+                o.title = e.name;
+                group.appendChild(o);
+            });
+        }
+        dd.appendChild(group);
+    });
+    // Keep whatever was selected (re-render happens once titles arrive).
+    if (keep) dd.value = keep;
+}
+
+// Read the header of every device report we have no cached title for, one at a
+// time so the device is never hit with a burst, then re-render the labels.
+function fetchMissingMeta() {
+    const pending = s_entries.filter(e => e.src === 'spiffs' && !e.metaKnown);
+    if (!pending.length) return Promise.resolve();
+    return pending.reduce((chain, e) => chain.then(() =>
+        loadReport(e.src, e.name)
+            .then(text => {
+                const r = parseReport(text);
+                const m = { title: r.title, session: r.session, date: r.date };
+                applyEntryMeta(e, m);
+                writeMetaCache(e.src, e.name, m);
+            })
+            .catch(() => { e.metaKnown = true; })   // unreadable: label from the filename
+    ), Promise.resolve()).then(() => { s_entries.sort(compareReports); renderList(); });
 }
 
 export function refreshReportList() {
     const dd = document.getElementById('reportDropdown');
     if (!dd) return Promise.resolve();
-    const sources = [['spiffs', listSpiffs()], ['local', listLocal()]];
-    return Promise.allSettled(sources.map(s => s[1])).then(results => {
-        dd.innerHTML = '';
+    const sources = ['spiffs', 'local'];
+    return Promise.allSettled([listSpiffs(), listLocal()]).then(results => {
+        s_entries = [];
         results.forEach((res, i) => {
-            const src = sources[i][0];
-            const group = document.createElement('optgroup');
-            group.label = SRC_LABEL[src];
-            if (res.status === 'fulfilled') {
-                lastLists[src] = res.value;
-                if (res.value.length === 0) {
-                    const o = document.createElement('option'); o.textContent = '(none)'; o.disabled = true; group.appendChild(o);
-                } else {
-                    res.value.forEach(name => {
-                        const o = document.createElement('option');
-                        o.value = src + ':' + name; o.textContent = name;
-                        group.appendChild(o);
-                    });
-                }
-            } else {
-                lastLists[src] = [];
-                const o = document.createElement('option'); o.textContent = '(unavailable)'; o.disabled = true; group.appendChild(o);
-            }
-            dd.appendChild(group);
+            const src = sources[i];
+            s_avail[src] = res.status === 'fulfilled';
+            lastLists[src] = res.status === 'fulfilled' ? res.value : [];
+            lastLists[src].forEach(name => s_entries.push(makeEntry(src, name)));
         });
+        s_entries.sort(compareReports);
+        renderList();
+        return fetchMissingMeta();
     });
 }
 
@@ -320,21 +469,61 @@ function parseSel() {
     return { src: val.slice(0, val.indexOf(':')), name: val.slice(val.indexOf(':') + 1) };
 }
 
+// ---- URL <-> open report -------------------------------------------------
+// The open report lives in the hash as "#reports/<src>:<file>.rpt", so a report
+// can be linked to, bookmarked, and restored on reload.
+function hashRef() {
+    const m = /^#reports\/([a-z]+):(.+)$/.exec(location.hash || '');
+    if (!m) return null;
+    let name = m[2];
+    try { name = decodeURIComponent(name); } catch (e) { /* keep raw */ }
+    return { src: m[1], name };
+}
+
+function setHash(src, name) {
+    const want = '#reports/' + src + ':' + encodeURIComponent(name);
+    if (location.hash !== want) location.hash = want;
+}
+
+function clearHash() {
+    if (/^#reports\//.test(location.hash || '')) location.hash = '#reports';
+}
+
+// Load a report into the editor and point the dropdown + URL at it.
+export function openReport(src, name) {
+    return loadReport(src, name)
+        .then(text => {
+            const parsed = parseReport(text);
+            const stamped = parseReportName(name).date;
+            current = {
+                name, src,
+                session: parsed.session || sanitizeBase(name),
+                date: parsed.date || (stamped ? stamped.toLocaleString() : ''),
+                body: parsed.body,
+            };
+            const dd = document.getElementById('reportDropdown');
+            if (dd) dd.value = src + ':' + name;
+            showEditor({ title: parsed.title, comments: parsed.comments });
+            setHash(src, name);
+            showMessage('Viewing ' + name + ' (' + SRC_LABEL[src] + ')', 'success');
+        })
+        .catch(err => showMessage('Load failed: ' + err, 'error'));
+}
+
+// Dropdown "change" handler.
 export function viewReport() {
     const sel = parseSel();
     if (!sel) { showMessage('Pick a report first', 'error'); return; }
-    loadReport(sel.src, sel.name)
-        .then(text => {
-            const parsed = parseReport(text);
-            current = {
-                name: sel.name, src: sel.src,
-                session: parsed.session || sanitizeBase(sel.name),
-                body: parsed.body,
-            };
-            showEditor({ title: parsed.title, comments: parsed.comments });
-            showMessage('Viewing ' + sel.name + ' (' + SRC_LABEL[sel.src] + ')', 'success');
-        })
-        .catch(err => showMessage('Load failed: ' + err, 'error'));
+    openReport(sel.src, sel.name);
+}
+
+// Open whatever report the URL names (on load and on back/forward). No-op when
+// the hash names no report or the one already open.
+export function syncReportFromHash() {
+    const ref = hashRef();
+    if (!ref) return;
+    if (current.src === ref.src && current.name === ref.name) return;
+    openReport(ref.src, ref.name);
 }
 
 export function deleteReport() {
@@ -344,11 +533,13 @@ export function deleteReport() {
     const done = () => {
         showMessage('Deleted ' + sel.name, 'success');
         deleteStoredLog(sel.name);         // drop the linked device log too
+        dropMetaCache(sel.src, sel.name);  // and its cached header
         if (current.name === sel.name) {   // clear editor if we just deleted the open one
-            current = { name: null, src: null, session: null, body: '' };
+            current = { name: null, src: null, session: null, date: '', body: '' };
             const e = editorEls();
             if (e.wrap) e.wrap.style.display = 'none';
             if (e.box) e.box.style.display = 'none';
+            clearHash();
         }
         refreshReportList();
     };

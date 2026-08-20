@@ -1,7 +1,13 @@
-// Top tab navigation. Four pages (home / live / reports / settings) toggled by
-// the menu; the active tab is reflected in the URL hash so reload and the
-// browser back/forward buttons work.
+// Top tab navigation. Pages are toggled by the menu; the active tab is
+// reflected in the URL hash so reload and the browser back/forward buttons
+// work. A page may append its own state after a slash — the Reports page uses
+// "#reports/<src>:<file>.rpt" to name the open report — so only the first
+// segment selects the tab.
 const TABS = ['home', 'generator', 'live', 'reports', 'settings', 'firmware', 'diagnostics'];
+
+function tabFromHash() {
+    return (location.hash.replace('#', '').split('/')[0]) || 'home';
+}
 
 function show(tab) {
     if (!TABS.includes(tab)) tab = 'home';
@@ -12,6 +18,6 @@ function show(tab) {
 export function initTabs() {
     document.querySelectorAll('.tab').forEach(b =>
         b.addEventListener('click', () => { location.hash = b.dataset.tab; }));
-    window.addEventListener('hashchange', () => show(location.hash.replace('#', '')));
-    show(location.hash.replace('#', '') || 'home');
+    window.addEventListener('hashchange', () => show(tabFromHash()));
+    show(tabFromHash());
 }

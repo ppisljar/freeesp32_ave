@@ -6,7 +6,7 @@ import { loadExample, playConfig, stopConfig, clearConfig, bindFileInput } from 
 import { refreshConfigList, loadSelected, saveCurrent, saveAsDialog } from './configstore.js';
 import { ctrlInit } from './livecontrol.js';
 import { settingsInit } from './settings.js';
-import { refreshReportList, viewReport, deleteReport, saveReportEdits,
+import { refreshReportList, viewReport, deleteReport, saveReportEdits, syncReportFromHash,
          toggleDeviceLog, downloadDeviceLog, toggleBrowserLog, downloadBrowserLog } from './reportstore.js';
 import { initTabs } from './nav.js';
 import { generatorInit } from './gen/generator.js';
@@ -49,6 +49,9 @@ async function boot() {
     // View a report by selecting it in the dropdown (no separate View button).
     const reportDd = document.getElementById('reportDropdown');
     if (reportDd) reportDd.addEventListener('change', viewReport);
+    // "#reports/<src>:<file>.rpt" names the open report: honour it on load and
+    // on back/forward.
+    window.addEventListener('hashchange', syncReportFromHash);
     bindFileInput();
     initTabs();            // top menu: home / live / reports / settings
 
@@ -60,6 +63,7 @@ async function boot() {
     firmwareInit();        // wire up the Firmware Update tab (OTA flow)
     diagnosticsInit();     // wire up the Diagnostics tab (logs / coredump / reboot)
     refreshReportList();   // list saved reports from device + browser
+    syncReportFromHash();  // open the report named in the URL, if any
 }
 
 boot();
