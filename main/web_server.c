@@ -277,6 +277,16 @@ esp_err_t web_server_init(void)
     // covers 2 in-flight async requests (bg-stream + tts) plus UI traffic.
     config.max_open_sockets = 7;
 #endif
+    // Evict the least-recently-used session when all sockets are taken, instead
+    // of refusing the new connection. Without this the server has no way back:
+    // once the 7 slots are held (long-lived UI polls, a half-dead client, a
+    // browser that vanished without a FIN) every new connection is refused or
+    // aborted — observed as "httpd_accept_conn: error in accept (128)" in the
+    // device log, a bg-ws handshake that never reaches the handler (session runs
+    // with no speech), and finally a web UI that is unreachable until the device
+    // is power-cycled. LRU purge makes the wedge self-healing: the newest client
+    // always gets in, at the cost of dropping the stalest connection.
+    config.lru_purge_enable = true;
 
     // Start HTTP server
     esp_err_t ret = httpd_start(&g_server_state.server, &config);
