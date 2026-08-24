@@ -72,6 +72,30 @@ export function formatTimeMs(ms) {
     return mm + ':' + String(ss).padStart(2, '0') + '.' + String(mmm).padStart(3, '0');
 }
 
+// Group row indices by timestamp so the grid can rule off one moment from the
+// next. Several rows normally share a time — an audio line, its LED line and a
+// speech cue at t=3000 are one instant of the session — and without a divider
+// the grid reads as one undifferentiated run.
+//
+// Untimed rows (comments, bg) join the block that FOLLOWS them, so a section
+// comment heads its group rather than trailing the previous one. Trailing
+// untimed rows stay with the last block. Returns an array of group ids
+// parallel to `rows`, starting at 1.
+export function computeTimeGroups(rows) {
+    const isTimed = r => r.kind === 'led' || r.kind === 'audio' || r.kind === 'speech';
+    const groups = new Array(rows.length).fill(0);
+    let group = 0, prevTime = null, pending = [];
+    for (let i = 0; i < rows.length; i++) {
+        if (!isTimed(rows[i])) { pending.push(i); continue; }
+        if (prevTime === null || rows[i].time !== prevTime) { group++; prevTime = rows[i].time; }
+        for (const j of pending) groups[j] = group;
+        pending = [];
+        groups[i] = group;
+    }
+    for (const j of pending) groups[j] = group || 1;
+    return groups;
+}
+
 // ---- Row helpers -----------------------------------------------------------
 
 function cloneCell(c) { return c ? { ...c } : cell(0); }
@@ -718,10 +742,17 @@ export function initTableView(ctx) {
         table.appendChild(thead);
         const tbody = document.createElement('tbody');
 
+        // Compared against the previous *rendered* row, so hiding a kind never
+        // leaves a divider stranded or swallows one.
+        const timeGroups = computeTimeGroups(doc.rows);
+        let lastGroup = null;
+
         doc.rows.forEach((row, idx) => {
             if (!passesFilter(row)) return;
             const tr = document.createElement('tr');
             tr.className = 'gen-grid-row gen-grid-' + row.kind;
+            if (lastGroup !== null && timeGroups[idx] !== lastGroup) tr.classList.add('is-timebreak');
+            lastGroup = timeGroups[idx];
 
             const tdType = document.createElement('td');
             if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'speech' || row.kind === 'comment') {
@@ -838,10 +869,14 @@ export function initTableView(ctx) {
 
     function buildCards(doc) {
         cards.innerHTML = '';
+        const timeGroups = computeTimeGroups(doc.rows);
+        let lastGroup = null;
         doc.rows.forEach((row, idx) => {
             if (!passesFilter(row)) return;
             const card = document.createElement('div');
             card.className = 'gen-card gen-card-' + row.kind;
+            if (lastGroup !== null && timeGroups[idx] !== lastGroup) card.classList.add('is-timebreak');
+            lastGroup = timeGroups[idx];
 
             const head = document.createElement('div');
             head.className = 'gen-card-head';

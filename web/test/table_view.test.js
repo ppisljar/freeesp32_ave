@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    chipsToMask, maskToChips, parseTimeInput, formatTimeMs,
+    chipsToMask, maskToChips, parseTimeInput, formatTimeMs, computeTimeGroups,
 } from '../src/js/gen/views/table.js';
 import {
     cellInlineGlyph, cellLabel,
@@ -103,4 +103,47 @@ test('cellLabel: step / ramp / periodic', () => {
 
 test('cellLabel: periodic with null modEnd falls back to start value', () => {
     assert.equal(cellLabel({ value: 40, interp: 'sine', modEnd: null, modPeriodMs: null }), '40∿40');
+});
+
+// ---- time grouping (thicker divider between instants) ----------------------
+
+const led    = t => ({ kind: 'led',    time: t });
+const audio  = t => ({ kind: 'audio',  time: t });
+const speech = t => ({ kind: 'speech', time: t });
+const cmt    = () => ({ kind: 'comment', text: '# x' });
+const blank  = () => ({ kind: 'blank' });
+
+test('computeTimeGroups: rows sharing a timestamp form one group', () => {
+    assert.deepEqual(
+        computeTimeGroups([audio(3000), led(3000), speech(3000), audio(60000), led(60000)]),
+        [1, 1, 1, 2, 2]);
+});
+
+test('computeTimeGroups: a comment heads the group that follows it', () => {
+    // The comment must land in group 2 with the rows it introduces, not in
+    // group 1 with the rows above it.
+    assert.deepEqual(
+        computeTimeGroups([audio(3000), led(3000), cmt(), audio(60000), led(60000)]),
+        [1, 1, 2, 2, 2]);
+});
+
+test('computeTimeGroups: leading untimed rows join the first real group', () => {
+    assert.deepEqual(computeTimeGroups([cmt(), blank(), led(0), led(0)]), [1, 1, 1, 1]);
+});
+
+test('computeTimeGroups: trailing untimed rows stay with the last group', () => {
+    assert.deepEqual(computeTimeGroups([led(0), led(500), cmt(), blank()]), [1, 2, 2, 2]);
+});
+
+test('computeTimeGroups: a repeated timestamp after another does not split', () => {
+    assert.deepEqual(computeTimeGroups([led(0), audio(0), led(0)]), [1, 1, 1]);
+});
+
+test('computeTimeGroups: an all-untimed document still yields one group', () => {
+    assert.deepEqual(computeTimeGroups([cmt(), cmt()]), [1, 1]);
+});
+
+test('computeTimeGroups: returns an array parallel to rows', () => {
+    const rows = [led(0), cmt(), audio(10)];
+    assert.equal(computeTimeGroups(rows).length, rows.length);
 });
