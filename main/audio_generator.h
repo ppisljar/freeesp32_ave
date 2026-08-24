@@ -443,10 +443,18 @@ typedef struct {
     float    volume;            // 0..100 (% — UI scale)
     float    modulation;        // beat/modulation freq in Hz
     uint8_t  wave_type;         // 0=sine, 1=square, 2=triangle, 3=sawtooth, 4=white, 5=pink, 6=brown, 7=eeg
+    /* Isochronic pulse shape — animatable, so the UI needs the LIVE value
+     * rather than whatever the .ledc literal said. */
+    float    iso_duty;          // 0..100 (% on-fraction)
+    float    iso_phase;         // 0..359 (degrees)
+    float    iso_attack;        // ms
     bool     mod_freq_active;
     bool     mod_pan_active;
     bool     mod_vol_active;
     bool     mod_mod_active;
+    bool     mod_duty_active;
+    bool     mod_phase_active;
+    bool     mod_attack_active;
 } audio_gen_channel_snapshot_t;
 
 /** Fill `out[0..min(count, NUM_AUDIO_CHANNELS)-1]` with current per-channel

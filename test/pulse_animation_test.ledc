@@ -1,0 +1,32 @@
+# pulse_animation_test.ledc — exercises the animatable pulse fields.
+#
+# Every line below was a no-op before the parse_v2_value fix: the device parsed
+# the >/~ prefix on phase/attack/duty and discarded it, holding the start value.
+# Positional order:
+#   LED   <time> <freq> <duty> <bright> <R> <G> <B> <mask> [env] [phase] [attack] [jitter]
+#   AUDIO A <time> <freq> <pan> <vol> <mod> [ch] [freqR] [waveType] [duty] [env] [phase] [attack] [jitter]
+
+# --- 0:00  audio duty ramps 10 -> 80 over 5 s (the format doc's own example) ---
+A 0     220 0 60 10 1 - 0 >10 3 0 5
+A 5000  220 0 60 10 1 - 0 80  3 0 5
+
+# --- 0:05  audio duty MODULATES 10<->80 every 5 s for 15 s ---
+A 5000  220 0 60 10 1 - 0 ~10:80:5000 3 0 5
+A 20000 220 0 60 10 1 - 0 50 3 0 5
+
+# --- 0:20  audio phase sweeps 0 -> 180 deg over 10 s ---
+A 20000 220 0 60 10 1 - 0 50 3 >0   5
+A 30000 220 0 60 10 1 - 0 50 3 180  5
+
+# --- 0:30  audio attack ramps 3 -> 40 ms over 10 s (trapezoid edge widens) ---
+A 30000 220 0 60 10 1 - 0 50 3 180 >3
+A 40000 220 0 60 10 1 - 0 50 3 180 40
+
+# --- LED: phase sweeps 0 -> 180 over 20 s, then attack ramps 3 -> 60 ms ---
+0     10 50 30 255 120 0 1 3 >0  3
+20000 10 50 30 255 120 0 1 3 180 >3
+40000 10 50 30 255 120 0 1 3 180 60
+
+# --- LED phase MODULATES 0<->180 every 4 s (should visibly wander in/out of phase) ---
+40000 10 50 30 255 120 0 2 3 ~0:180:4000 6
+50000 10 50 30 255 120 0 2 3 90 6

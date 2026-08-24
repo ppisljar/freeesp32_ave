@@ -2254,16 +2254,22 @@ static esp_err_t state_handler(httpd_req_t *req)
     for (int i = 0; i < n_aud; i++) {
         APPEND("%s{\"ch\":%d,\"active\":%s,\"freq\":%.3f,\"freq_r\":%.3f,"
                "\"pan\":%.1f,\"vol\":%.1f,\"mod\":%.2f,\"wave\":%u,"
-               "\"modf\":{\"freq\":%s,\"pan\":%s,\"vol\":%s,\"mod\":%s}}",
+               "\"duty\":%.1f,\"phase\":%.1f,\"attack\":%.1f,"
+               "\"modf\":{\"freq\":%s,\"pan\":%s,\"vol\":%s,\"mod\":%s,"
+               "\"duty\":%s,\"phase\":%s,\"attack\":%s}}",
                (i == 0) ? "" : ",", i + 1,
                aud_snap[i].active ? "true" : "false",
                aud_snap[i].freq, aud_snap[i].freq_r,
                aud_snap[i].pan, aud_snap[i].volume, aud_snap[i].modulation,
                aud_snap[i].wave_type,
+               aud_snap[i].iso_duty, aud_snap[i].iso_phase, aud_snap[i].iso_attack,
                aud_snap[i].mod_freq_active ? "true" : "false",
                aud_snap[i].mod_pan_active  ? "true" : "false",
                aud_snap[i].mod_vol_active  ? "true" : "false",
-               aud_snap[i].mod_mod_active  ? "true" : "false");
+               aud_snap[i].mod_mod_active  ? "true" : "false",
+               aud_snap[i].mod_duty_active   ? "true" : "false",
+               aud_snap[i].mod_phase_active  ? "true" : "false",
+               aud_snap[i].mod_attack_active ? "true" : "false");
     }
     APPEND("],");
 

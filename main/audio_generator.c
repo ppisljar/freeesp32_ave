@@ -1571,6 +1571,11 @@ esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, flo
         case AUDIO_PARAM_AMPLITUDE: ch->current_amp      = value; break;
         case AUDIO_PARAM_PAN:       ch->current_pan      = value; break;
         case AUDIO_PARAM_MOD_FREQ:  ch->current_mod_freq = value; break;
+        /* Pulse shape. Stored in the channel's native representation, so a
+         * value set here is indistinguishable from one an animation produced. */
+        case AUDIO_PARAM_ISO_DUTY:   ch->iso_duty      = iso_duty_from_pct(value); break;
+        case AUDIO_PARAM_ISO_ATTACK: ch->iso_attack_ms = (value < 0.0f) ? 0.0f : value; break;
+        case AUDIO_PARAM_ISO_PHASE:  ch->mod_phase_offset_q32 = iso_phase_to_q32(value); break;
         default: return ESP_ERR_INVALID_ARG;
     }
     return ESP_OK;
@@ -1628,6 +1633,13 @@ esp_err_t audio_generator_get_param_locked(int channel, audio_param_t param, flo
         case AUDIO_PARAM_AMPLITUDE: *out = ch->current_amp;      break;
         case AUDIO_PARAM_PAN:       *out = ch->current_pan;      break;
         case AUDIO_PARAM_MOD_FREQ:  *out = ch->current_mod_freq; break;
+        /* Same units the sweep/mod work in, so a caller reading back mid-ramp
+         * sees the animated value rather than the entry's literal. */
+        case AUDIO_PARAM_ISO_DUTY:   *out = ch->iso_duty * 100.0f;   break;
+        case AUDIO_PARAM_ISO_ATTACK: *out = ch->iso_attack_ms;       break;
+        case AUDIO_PARAM_ISO_PHASE:
+            *out = (float)ch->mod_phase_offset_q32 * (360.0f / 4294967296.0f);
+            break;
         default: return ESP_ERR_INVALID_ARG;
     }
     return ESP_OK;
@@ -1793,6 +1805,13 @@ int audio_generator_get_snapshot(audio_gen_channel_snapshot_t *out, int count)
         out[ch].volume            = c->current_amp * 100.0f;   /* internal 0..1  → UI 0..100 */
         out[ch].modulation        = c->current_mod_freq;
         out[ch].wave_type         = (uint8_t)c->wave_type;
+        /* Live pulse shape in UI units, so a ramp is visible as it runs. */
+        out[ch].iso_duty          = c->iso_duty * 100.0f;
+        out[ch].iso_attack        = c->iso_attack_ms;
+        out[ch].iso_phase         = (float)c->mod_phase_offset_q32 * (360.0f / 4294967296.0f);
+        out[ch].mod_duty_active   = c->mods[AUDIO_PARAM_ISO_DUTY].active;
+        out[ch].mod_phase_active  = c->mods[AUDIO_PARAM_ISO_PHASE].active;
+        out[ch].mod_attack_active = c->mods[AUDIO_PARAM_ISO_ATTACK].active;
         out[ch].mod_freq_active   = c->mods[AUDIO_PARAM_FREQUENCY].active;
         out[ch].mod_pan_active    = c->mods[AUDIO_PARAM_PAN].active;
         out[ch].mod_vol_active    = c->mods[AUDIO_PARAM_AMPLITUDE].active;
