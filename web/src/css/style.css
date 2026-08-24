@@ -148,6 +148,10 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .gen-pulse-fields .gen-card-field { display: flex; flex-direction: column; gap: 2px; }
 .gen-pulse-fields .gen-card-label { font-size: 10px; color: #667; text-transform: uppercase; letter-spacing: .03em; }
 .gen-pulse-fields .gen-num { width: 72px; }
+/* Tri-state pulse control: the state picker, then the value box(es) it reveals. */
+.gen-pulse-ctl { display: inline-flex; align-items: center; gap: 4px; }
+.gen-pulse-mode { font-size: 12px; padding: 2px; }
+.gen-pulse-fields .gen-pulse-ctl .gen-num { width: 62px; }
 
 /* 8 channel buttons in a fixed 4-wide grid => 2 compact rows, not 8.
    Presets ('4' / 'all') span the full width on a third row. */

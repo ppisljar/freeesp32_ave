@@ -23,10 +23,7 @@ import {
     WAVE_TYPES, NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS,
 } from '../model.js';
 import { createCompoundCell, closeOpenPopover, openPopover } from './cell.js';
-import {
-    parsePulseCell, formatPulseCell, parsePulseEnv, formatPulseEnv,
-    parsePulseJitter, formatPulseJitter,
-} from '../pulse.js';
+import { parsePulseEnv, formatPulseEnv } from '../pulse.js';
 import { previewSpeech } from '../tts.js';
 import { decodeFile, audioBufferToWav16, wavBlob } from '../bgaudio.js';
 import * as bgstore from '../bgstore.js';
@@ -483,32 +480,128 @@ export function initTableView(ctx) {
         const sel = document.createElement('select');
         sel.className = 'gen-wave-select';
         const mk = (val, label) => { const o = document.createElement('option'); o.value = val; o.textContent = label; sel.appendChild(o); };
-        mk('', '(off)');
-        mk('-', '— leave');
+        // Same wording as the tri-state selects beside it — env is the one pulse
+        // field whose "set" state is an enum, not a number, but the three states
+        // are identical and should read identically.
+        mk('', 'off');
+        mk('-', 'leave');
         names.forEach((n, i) => mk(String(i), i + ' ' + n));
         sel.value = formatPulseEnv(row.env);
+        sel.title = 'off = omit the field · leave = "-" (device keeps its current value) · or pick an envelope';
         sel.addEventListener('change', () => { row.env = parsePulseEnv(sel.value); commitValue(); });
         return sel;
     }
 
-    // Text input for a compound-cell pulse field (phase/attack, audio duty).
-    function pulseCellInput(row, fieldName, title) {
+    // The tri-state as a control rather than a spelling test. These fields were
+    // text boxes where "" meant off, "-" meant leave-unchanged and a number meant
+    // set — three different things you had to know to type, with an empty box
+    // that looked broken rather than deliberate. Pick the state from a select;
+    // the value input only exists when there is a value to give.
+    const PULSE_MODES = [['', 'off'], ['-', 'leave'], ['v', 'set']];
+
+    function pulseModeSelect(current) {
+        const sel = document.createElement('select');
+        sel.className = 'gen-pulse-mode';
+        for (const [val, label] of PULSE_MODES) {
+            const o = document.createElement('option');
+            o.value = val;
+            o.textContent = label;
+            sel.appendChild(o);
+        }
+        sel.value = current === undefined ? '' : (current === null ? '-' : 'v');
+        sel.title = 'off = omit the field · leave = "-" (device keeps its current value) · set = use the value';
+        return sel;
+    }
+
+    function numberInput(placeholder, title) {
         const inp = document.createElement('input');
-        inp.type = 'text'; inp.className = 'gen-num'; inp.placeholder = 'off';
-        inp.title = (title || fieldName) + ' — blank = off, - = leave unchanged, number = set';
-        inp.value = formatPulseCell(row[fieldName]);
-        inp.addEventListener('change', () => { row[fieldName] = parsePulseCell(inp.value); commitValue(); });
+        inp.type = 'number';
+        inp.className = 'gen-num';
+        inp.placeholder = placeholder;
+        if (title) inp.title = title;
         return inp;
     }
 
-    // Text input for the jitter field: "amp" or "amp:period_ms".
+    // phase / attack / audio duty.
+    function pulseCellInput(row, fieldName, title) {
+        const wrap = document.createElement('span');
+        wrap.className = 'gen-pulse-ctl';
+        const sel = pulseModeSelect(row[fieldName]);
+        const num = numberInput('0', title || fieldName);
+        const cur = row[fieldName];
+        num.value = (cur && typeof cur === 'object') ? String(cur.value) : '';
+
+        const sync = () => { num.style.display = sel.value === 'v' ? '' : 'none'; };
+        const commit = () => {
+            if (sel.value === '') { row[fieldName] = undefined; }
+            else if (sel.value === '-') { row[fieldName] = null; }
+            else {
+                const n = parseFloat(num.value);
+                const v = Number.isFinite(n) ? n : 0;
+                const prev = row[fieldName];
+                // A ramp or modulation authored in the Text view lives in this
+                // same cell. Change only the number so editing the value here
+                // does not quietly flatten it to a step.
+                row[fieldName] = (prev && typeof prev === 'object') ? { ...prev, value: v } : cell(v);
+            }
+            commitValue();
+        };
+        sel.addEventListener('change', () => {
+            if (sel.value === 'v' && num.value === '') num.value = '0';
+            sync();
+            commit();
+        });
+        num.addEventListener('change', commit);
+        sync();
+        wrap.appendChild(sel);
+        wrap.appendChild(num);
+        return wrap;
+    }
+
+    // jitter: amplitude in Hz, plus an optional period. Two labelled boxes beat
+    // the "amp:period" micro-syntax the text field used to require.
     function pulseJitterInput(row) {
-        const inp = document.createElement('input');
-        inp.type = 'text'; inp.className = 'gen-num'; inp.placeholder = 'off';
-        inp.title = 'jitter — amp[:period_ms], - = leave unchanged, blank = off';
-        inp.value = formatPulseJitter(row.jitter);
-        inp.addEventListener('change', () => { row.jitter = parsePulseJitter(inp.value); commitValue(); });
-        return inp;
+        const wrap = document.createElement('span');
+        wrap.className = 'gen-pulse-ctl';
+        const sel = pulseModeSelect(row.jitter);
+        const amp = numberInput('Hz', 'Jitter amplitude (Hz)');
+        const per = numberInput('45000', 'Jitter period (ms) — blank uses the 45000 ms default');
+        const j = row.jitter;
+        // Accept the bare-number jitter the model permits as well as {amp, period}.
+        amp.value = (j && typeof j === 'object') ? String(j.amp)
+                  : (typeof j === 'number' ? String(j) : '');
+        per.value = (j && typeof j === 'object' && j.period !== undefined && j.period !== null)
+                  ? String(j.period) : '';
+
+        const sync = () => {
+            const on = sel.value === 'v';
+            amp.style.display = on ? '' : 'none';
+            per.style.display = on ? '' : 'none';
+        };
+        const commit = () => {
+            if (sel.value === '') { row.jitter = undefined; }
+            else if (sel.value === '-') { row.jitter = null; }
+            else {
+                const a = parseFloat(amp.value);
+                const p = parseFloat(per.value);
+                // period undefined round-trips as a bare amp, matching serialize.js.
+                row.jitter = { amp: Number.isFinite(a) ? a : 0,
+                               period: per.value === '' || !Number.isFinite(p) ? undefined : p };
+            }
+            commitValue();
+        };
+        sel.addEventListener('change', () => {
+            if (sel.value === 'v' && amp.value === '') amp.value = '0';
+            sync();
+            commit();
+        });
+        amp.addEventListener('change', commit);
+        per.addEventListener('change', commit);
+        sync();
+        wrap.appendChild(sel);
+        wrap.appendChild(amp);
+        wrap.appendChild(per);
+        return wrap;
     }
 
     // The pulse-field control set for a row (LED or audio), used by the grid
