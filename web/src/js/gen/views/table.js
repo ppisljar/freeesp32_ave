@@ -476,42 +476,28 @@ export function initTableView(ctx) {
     const AUDIO_ENV_NAMES = ['square', 'sine', 'triangle', 'trapezoid', 'tremolo'];
 
     function pulseEnvSelect(row, isAudio) {
+        if (row.env === null) return unchangedChip('Env');
         const names = isAudio ? AUDIO_ENV_NAMES : LED_ENV_NAMES;
         const sel = document.createElement('select');
         sel.className = 'gen-wave-select';
         const mk = (val, label) => { const o = document.createElement('option'); o.value = val; o.textContent = label; sel.appendChild(o); };
-        // Same wording as the tri-state selects beside it — env is the one pulse
-        // field whose "set" state is an enum, not a number, but the three states
-        // are identical and should read identically.
-        mk('', 'off');
-        mk('-', 'leave');
+        // Empty = omit the field, which the device reads as env 0. Named
+        // "default" rather than "off" because an envelope is always applied.
+        mk('', 'default');
         names.forEach((n, i) => mk(String(i), i + ' ' + n));
         sel.value = formatPulseEnv(row.env);
-        sel.title = 'off = omit the field · leave = "-" (device keeps its current value) · or pick an envelope';
+        sel.title = 'Pulse envelope — empty omits the field (device default: 0 square)';
         sel.addEventListener('change', () => { row.env = parsePulseEnv(sel.value); commitValue(); });
         return sel;
     }
 
-    // The tri-state as a control rather than a spelling test. These fields were
-    // text boxes where "" meant off, "-" meant leave-unchanged and a number meant
-    // set — three different things you had to know to type, with an empty box
-    // that looked broken rather than deliberate. Pick the state from a select;
-    // the value input only exists when there is a value to give.
-    const PULSE_MODES = [['', 'off'], ['-', 'leave'], ['v', 'set']];
-
-    function pulseModeSelect(current) {
-        const sel = document.createElement('select');
-        sel.className = 'gen-pulse-mode';
-        for (const [val, label] of PULSE_MODES) {
-            const o = document.createElement('option');
-            o.value = val;
-            o.textContent = label;
-            sel.appendChild(o);
-        }
-        sel.value = current === undefined ? '' : (current === null ? '-' : 'v');
-        sel.title = 'off = omit the field · leave = "-" (device keeps its current value) · set = use the value';
-        return sel;
-    }
+    // Pulse fields are plain inputs, like every other cell in the grid. An empty
+    // box means "omit the field", and the placeholder says what that gets you —
+    // which is the whole point, because "empty" is not the same thing for all of
+    // them: phase defaults to 0 and jitter to off (so there, empty really does
+    // equal 0), but attack defaults to 3 ms and audio duty to 50%. Writing 0
+    // into attack is an instant edge, not the click-safe default.
+    const PULSE_DEFAULTS = { phase: '0', attack: '3', duty: '50' };
 
     function numberInput(placeholder, title) {
         const inp = document.createElement('input');
@@ -524,81 +510,61 @@ export function initTableView(ctx) {
 
     // phase / attack / audio duty.
     function pulseCellInput(row, fieldName, title) {
-        const wrap = document.createElement('span');
-        wrap.className = 'gen-pulse-ctl';
-        const sel = pulseModeSelect(row[fieldName]);
-        const num = numberInput('0', title || fieldName);
+        // `-` (leave unchanged) reads as the same chip the main compound cells
+        // use. It is a real format state on every field, but the grid cannot
+        // author it anywhere yet, and letting only these five do so is what made
+        // them look like a different application. Author `-` in the Text view.
+        if (row[fieldName] === null) return unchangedChip(title);
+        const def = PULSE_DEFAULTS[fieldName] || '';
+        const inp = numberInput(def, (title || fieldName) + ' — empty = default' + (def ? ' (' + def + ')' : ''));
         const cur = row[fieldName];
-        num.value = (cur && typeof cur === 'object') ? String(cur.value) : '';
-
-        const sync = () => { num.style.display = sel.value === 'v' ? '' : 'none'; };
-        const commit = () => {
-            if (sel.value === '') { row[fieldName] = undefined; }
-            else if (sel.value === '-') { row[fieldName] = null; }
-            else {
-                const n = parseFloat(num.value);
+        inp.value = (cur && typeof cur === 'object') ? String(cur.value) : '';
+        inp.addEventListener('change', () => {
+            if (inp.value.trim() === '') {
+                row[fieldName] = undefined;
+            } else {
+                const n = parseFloat(inp.value);
                 const v = Number.isFinite(n) ? n : 0;
                 const prev = row[fieldName];
                 // A ramp or modulation authored in the Text view lives in this
-                // same cell. Change only the number so editing the value here
-                // does not quietly flatten it to a step.
+                // same cell. Change only the number so editing here does not
+                // quietly flatten it to a step.
                 row[fieldName] = (prev && typeof prev === 'object') ? { ...prev, value: v } : cell(v);
             }
             commitValue();
-        };
-        sel.addEventListener('change', () => {
-            if (sel.value === 'v' && num.value === '') num.value = '0';
-            sync();
-            commit();
         });
-        num.addEventListener('change', commit);
-        sync();
-        wrap.appendChild(sel);
-        wrap.appendChild(num);
-        return wrap;
+        return inp;
     }
 
-    // jitter: amplitude in Hz, plus an optional period. Two labelled boxes beat
-    // the "amp:period" micro-syntax the text field used to require.
+    // jitter: amplitude in Hz plus an optional period. Two boxes beat the
+    // "amp:period_ms" micro-syntax the text field used to require. Empty amp
+    // omits the field; an explicit 0 also means off, per the format.
     function pulseJitterInput(row) {
+        if (row.jitter === null) return unchangedChip('Jitter');
         const wrap = document.createElement('span');
         wrap.className = 'gen-pulse-ctl';
-        const sel = pulseModeSelect(row.jitter);
-        const amp = numberInput('Hz', 'Jitter amplitude (Hz)');
-        const per = numberInput('45000', 'Jitter period (ms) — blank uses the 45000 ms default');
+        const amp = numberInput('off', 'Jitter amplitude (Hz) — empty or 0 = off');
+        const per = numberInput('45000', 'Jitter period (ms) — empty uses the 45000 ms default');
         const j = row.jitter;
         // Accept the bare-number jitter the model permits as well as {amp, period}.
         amp.value = (j && typeof j === 'object') ? String(j.amp)
                   : (typeof j === 'number' ? String(j) : '');
         per.value = (j && typeof j === 'object' && j.period !== undefined && j.period !== null)
                   ? String(j.period) : '';
-
-        const sync = () => {
-            const on = sel.value === 'v';
-            amp.style.display = on ? '' : 'none';
-            per.style.display = on ? '' : 'none';
-        };
         const commit = () => {
-            if (sel.value === '') { row.jitter = undefined; }
-            else if (sel.value === '-') { row.jitter = null; }
-            else {
+            if (amp.value.trim() === '') {
+                row.jitter = undefined;
+            } else {
                 const a = parseFloat(amp.value);
-                const p = parseFloat(per.value);
+                const pv = parseFloat(per.value);
                 // period undefined round-trips as a bare amp, matching serialize.js.
                 row.jitter = { amp: Number.isFinite(a) ? a : 0,
-                               period: per.value === '' || !Number.isFinite(p) ? undefined : p };
+                               period: per.value.trim() === '' || !Number.isFinite(pv) ? undefined : pv };
             }
             commitValue();
         };
-        sel.addEventListener('change', () => {
-            if (sel.value === 'v' && amp.value === '') amp.value = '0';
-            sync();
-            commit();
-        });
         amp.addEventListener('change', commit);
         per.addEventListener('change', commit);
-        sync();
-        wrap.appendChild(sel);
         wrap.appendChild(amp);
         wrap.appendChild(per);
         return wrap;
