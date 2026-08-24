@@ -1,7 +1,6 @@
 # Animatable pulse fields — `phase`, `attack`, audio `duty`
 
-**Status:** Steps 1–4 DONE and hardware-verified 2026-08-24 (OTA). Step 5 (web
-UI editor) NOT started — see the note at the end.
+**Status:** DONE — all 6 steps, hardware-verified 2026-08-24 (OTA).
 
 Hardware verification, read live from `/api/state` while the timeline ran:
 

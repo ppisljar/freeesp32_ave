@@ -523,31 +523,42 @@ export function initTableView(ctx) {
     }
 
     // phase / attack / audio duty.
-    function pulseCellInput(row, fieldName, title) {
+    //
+    // These carry one more state than freq/bright/vol: they are optional, so
+    // "off" (omit the field) has to be expressible and a compound trigger has no
+    // way to say it. Hence the split — an unset field is an empty number box
+    // whose placeholder names the default, and typing a value promotes it to the
+    // same compound trigger the core fields use, ramps and all. Turning it back
+    // off lives in that trigger's popover.
+    function pulseCellInput(row, idx, fieldName, title, resolve) {
         // `-` (leave unchanged) reads as the same chip the main compound cells
-        // use. It is a real format state on every field, but the grid cannot
-        // author it anywhere yet, and letting only these five do so is what made
-        // them look like a different application. Author `-` in the Text view.
+        // use. The grid cannot author `-` on any field yet; author it in the
+        // Text view.
         if (row[fieldName] === null) return unchangedChip(title);
-        const def = PULSE_DEFAULTS[fieldName] || '';
-        const inp = numberInput(def, (title || fieldName) + ' — empty = default' + (def ? ' (' + def + ')' : ''));
-        const cur = row[fieldName];
-        inp.value = (cur && typeof cur === 'object') ? String(cur.value) : '';
-        inp.addEventListener('change', () => {
-            if (inp.value.trim() === '') {
-                row[fieldName] = undefined;
-            } else {
+
+        if (row[fieldName] === undefined) {
+            const def = PULSE_DEFAULTS[fieldName] || '';
+            const inp = numberInput(def, (title || fieldName) + ' — empty = default' + (def ? ' (' + def + ')' : ''));
+            inp.addEventListener('change', () => {
+                if (inp.value.trim() === '') return;          // still off — nothing to do
                 const n = parseFloat(inp.value);
-                const v = Number.isFinite(n) ? n : 0;
-                const prev = row[fieldName];
-                // A ramp or modulation authored in the Text view lives in this
-                // same cell. Change only the number so editing here does not
-                // quietly flatten it to a step.
-                row[fieldName] = (prev && typeof prev === 'object') ? { ...prev, value: v } : cell(v);
-            }
-            commitValue();
+                row[fieldName] = cell(Number.isFinite(n) ? n : 0);
+                // Structural: the cell becomes a compound trigger, so the row
+                // has to be rebuilt rather than just re-serialised.
+                commitStructure();
+            });
+            return inp;
+        }
+
+        const t = createCompoundCell({
+            title: title,
+            getCell: () => row[fieldName],
+            onChange: (c) => { row[fieldName] = c; commitValue(); },
+            resolveTarget: resolve,
+            onClear: () => { row[fieldName] = undefined; commitStructure(); },
         });
-        return inp;
+        cellTriggers.push(t);
+        return t;
     }
 
     // jitter: amplitude in Hz plus an optional period. Two boxes beat the
@@ -586,14 +597,19 @@ export function initTableView(ctx) {
 
     // The pulse-field control set for a row (LED or audio), used by the grid
     // more-row and the mobile card 'more' block.
-    function pulseFields(row) {
+    function pulseFields(row, idx) {
         const wrap = document.createElement('div');
         wrap.className = 'gen-pulse-fields';
         const add = (label, el) => wrap.appendChild(field(label, el));
-        if (row.kind === 'audio') add('Duty %', pulseCellInput(row, 'duty', 'Duty %'));
+        if (row.kind === 'audio') add('Duty %', pulseCellInput(row, idx, 'duty', 'Duty %',
+            () => audioRampTarget(idx, row.channel, 'duty')));
         add('Env', pulseEnvSelect(row, row.kind === 'audio'));
-        add('Phase°', pulseCellInput(row, 'phase', 'Phase (deg)'));
-        add('Attack ms', pulseCellInput(row, 'attack', 'Attack (ms)'));
+        add('Phase°', pulseCellInput(row, idx, 'phase', 'Phase (deg)',
+            () => row.kind === 'audio' ? audioRampTarget(idx, row.channel, 'phase')
+                                       : ledRampTarget(idx, row.mask, 'phase')));
+        add('Attack ms', pulseCellInput(row, idx, 'attack', 'Attack (ms)',
+            () => row.kind === 'audio' ? audioRampTarget(idx, row.channel, 'attack')
+                                       : ledRampTarget(idx, row.mask, 'attack')));
         add('Jitter', pulseJitterInput(row));
         return wrap;
     }
@@ -926,8 +942,8 @@ export function initTableView(ctx) {
                 // pulse-field input audio's uses. Same concept, different slot.
                 const tdDuty = blankCell(); tdDuty.appendChild(compound(row, idx, 'duty', 'Duty (%)', () => ledRampTarget(idx, row.mask, 'duty'))); tr.appendChild(tdDuty);          // Duty %
                 const tdEnvL = blankCell(); tdEnvL.appendChild(pulseEnvSelect(row, false)); tr.appendChild(tdEnvL);
-                const tdPhL = blankCell(); tdPhL.appendChild(pulseCellInput(row, 'phase', 'Phase (deg)')); tr.appendChild(tdPhL);
-                const tdAtL = blankCell(); tdAtL.appendChild(pulseCellInput(row, 'attack', 'Attack (ms)')); tr.appendChild(tdAtL);
+                const tdPhL = blankCell(); tdPhL.appendChild(pulseCellInput(row, idx, 'phase', 'Phase (deg)', () => ledRampTarget(idx, row.mask, 'phase'))); tr.appendChild(tdPhL);
+                const tdAtL = blankCell(); tdAtL.appendChild(pulseCellInput(row, idx, 'attack', 'Attack (ms)', () => ledRampTarget(idx, row.mask, 'attack'))); tr.appendChild(tdAtL);
                 const tdJtL = blankCell(); tdJtL.appendChild(pulseJitterInput(row)); tr.appendChild(tdJtL);
             } else if (row.kind === 'audio') {
                 const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
@@ -938,10 +954,10 @@ export function initTableView(ctx) {
                 const tdMod = blankCell(); tdMod.appendChild(compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))); tr.appendChild(tdMod);          // Color / Mod
                 const tdFr = blankCell(); tdFr.appendChild(freqRInput(row)); tr.appendChild(tdFr);
                 const tdWave = blankCell(); tdWave.appendChild(waveSelect(row)); tr.appendChild(tdWave);
-                const tdDutyP = blankCell(); tdDutyP.appendChild(pulseCellInput(row, 'duty', 'Duty %')); tr.appendChild(tdDutyP);
+                const tdDutyP = blankCell(); tdDutyP.appendChild(pulseCellInput(row, idx, 'duty', 'Duty %', () => audioRampTarget(idx, row.channel, 'duty'))); tr.appendChild(tdDutyP);
                 const tdEnvA = blankCell(); tdEnvA.appendChild(pulseEnvSelect(row, true)); tr.appendChild(tdEnvA);
-                const tdPhA = blankCell(); tdPhA.appendChild(pulseCellInput(row, 'phase', 'Phase (deg)')); tr.appendChild(tdPhA);
-                const tdAtA = blankCell(); tdAtA.appendChild(pulseCellInput(row, 'attack', 'Attack (ms)')); tr.appendChild(tdAtA);
+                const tdPhA = blankCell(); tdPhA.appendChild(pulseCellInput(row, idx, 'phase', 'Phase (deg)', () => audioRampTarget(idx, row.channel, 'phase'))); tr.appendChild(tdPhA);
+                const tdAtA = blankCell(); tdAtA.appendChild(pulseCellInput(row, idx, 'attack', 'Attack (ms)', () => audioRampTarget(idx, row.channel, 'attack'))); tr.appendChild(tdAtA);
                 const tdJtA = blankCell(); tdJtA.appendChild(pulseJitterInput(row)); tr.appendChild(tdJtA);
             } else if (row.kind === 'bg') {
                 // URL spans Time+Ch/Mask+Freq (it's the long field); pan/loudness
@@ -1053,7 +1069,7 @@ export function initTableView(ctx) {
                 const sum = document.createElement('summary');
                 sum.textContent = 'pulse ▾';
                 more.appendChild(sum);
-                more.appendChild(pulseFields(row));
+                more.appendChild(pulseFields(row, idx));
                 card.appendChild(more);
             } else if (row.kind === 'audio') {
                 card.appendChild(field('Time', timeCell(row)));
@@ -1069,7 +1085,7 @@ export function initTableView(ctx) {
                 more.appendChild(field('Mod', compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))));
                 more.appendChild(field('FreqR', freqRInput(row)));
                 more.appendChild(field('Wave', waveSelect(row)));
-                more.appendChild(pulseFields(row));
+                more.appendChild(pulseFields(row, idx));
                 card.appendChild(more);
             } else if (row.kind === 'bg') {
                 card.appendChild(field('BG', bgInputs(row)));

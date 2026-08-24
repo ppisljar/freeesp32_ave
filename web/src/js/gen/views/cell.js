@@ -152,6 +152,9 @@ export function buildCellEditor(initial, opts) {
     opts = opts || {};
     const onChange = opts.onChange || function () {};
     const resolveTarget = opts.resolveTarget || (() => null);
+    // Optional fields (the pulse ones) can be turned off entirely; the core
+    // fields cannot, so the Clear action is opt-in rather than always present.
+    const onClear = opts.onClear || null;
 
     let cur = cell(initial ? initial.value : 0,
                    initial ? initial.interp : 'none',
@@ -265,6 +268,16 @@ export function buildCellEditor(initial, opts) {
         });
     }
 
+    if (onClear) {
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'gen-cell-clear';
+        clear.textContent = 'Clear (off)';
+        clear.title = 'Omit this field — the device falls back to its default';
+        clear.addEventListener('click', () => { closeOpenPopover(); onClear(); });
+        form.appendChild(clear);
+    }
+
     syncVisibility();
     return form;
 }
@@ -311,6 +324,7 @@ export function createCompoundCell(opts) {
             resolveTarget: opts.resolveTarget,
             step: opts.step,
             onChange: (c) => { opts.onChange(c); paint(); },
+            onClear: opts.onClear,
         });
         openPopover(btn, form, opts.title || 'Edit value');
     });

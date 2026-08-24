@@ -230,6 +230,8 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .gen-cell-radio { font-size: 12px; display: flex; align-items: center; gap: 4px; }
 .gen-cell-extras { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid #eee; padding-top: 6px; }
 .gen-cell-target { font-size: 11px; color: #0a5ad0; }
+.gen-cell-clear { display: block; margin: 10px 0 0 0; background: #f7f7f7; color: #666; border: 1px solid #ddd; font-size: 12px; padding: 4px 10px; }
+.gen-cell-clear:hover { background: #eee; color: #333; }
 .gen-color-editor { display: flex; flex-direction: column; gap: 8px; min-width: 200px; }
 .gen-color-chan { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 
