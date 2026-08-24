@@ -45,9 +45,13 @@
 
 /* Forward declaration for fill_buffer's modulation eval (definition lives
  * further down next to the set_mod / clear_mod public API). */
-static inline float audio_eval_sweep_block(const audio_gen_channel_t *ch,
-                                          audio_param_t param);
-static inline float audio_eval_mod(const audio_gen_channel_t *ch,
+/* Deliberately NOT inline. Both are called once per channel per fill_buffer
+ * block — roughly 2.7k calls/sec across 16 channels — so the call overhead is
+ * noise, while inlining them at seven sites cost real IRAM in a build that sits
+ * at ~98% full. IRAM_ATTR is kept because the caller is IRAM-resident. */
+static float IRAM_ATTR audio_eval_sweep_block(const audio_gen_channel_t *ch,
+                                              audio_param_t param);
+static float IRAM_ATTR audio_eval_mod(const audio_gen_channel_t *ch,
                                    audio_param_t param, uint64_t now_us);
 
 static const char* TAG = "audio_generator";
@@ -1703,8 +1707,8 @@ esp_err_t audio_generator_clear_mod(int channel, audio_param_t param)
  * SHAPE params (duty/phase/attack) move over seconds and are consumed by the
  * gate, not the oscillator, so a per-block update is inaudible — and keeps the
  * per-sample loop, which runs from IRAM, exactly as it was. */
-static inline float audio_eval_sweep_block(const audio_gen_channel_t *ch,
-                                           audio_param_t param)
+static float IRAM_ATTR audio_eval_sweep_block(const audio_gen_channel_t *ch,
+                                             audio_param_t param)
 {
     const audio_param_sweep_t *sw = &ch->sweeps[param];
     if (sw->duration_samples == 0) return sw->target;   /* inactive: hold target */
@@ -1714,8 +1718,8 @@ static inline float audio_eval_sweep_block(const audio_gen_channel_t *ch,
     return interpolate_sweep(sw->start, sw->target, progress, sw->curve);
 }
 
-static inline float audio_eval_mod(const audio_gen_channel_t *ch,
-                                   audio_param_t param, uint64_t now_us)
+static float IRAM_ATTR audio_eval_mod(const audio_gen_channel_t *ch,
+                                     audio_param_t param, uint64_t now_us)
 {
     const typeof(ch->mods[0]) *m = &ch->mods[param];
     if (m->period_us == 0) return m->start;

@@ -804,8 +804,7 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             portENTER_CRITICAL_ISR(&s_flicker_mux);
             led_sweep_param_t sw_freq = s->sw_freq, sw_duty = s->sw_duty,
                               sw_bri = s->sw_brightness, sw_r = s->sw_r,
-                              sw_g = s->sw_g, sw_b = s->sw_b,
-                              sw_phase = s->sw_phase, sw_attack = s->sw_attack;
+                              sw_g = s->sw_g, sw_b = s->sw_b;
             led_mod_slot_t md_freq = s->mod_freq, md_duty = s->mod_duty,
                            md_bri = s->mod_brightness, md_r = s->mod_r,
                            md_g = s->mod_g, md_b = s->mod_b;
@@ -835,25 +834,6 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             // modulation is active on that field, evaluate it and override.
             // Modulation wins because it's continuous (sweep is one-shot).
             // Frequency (milliHz units) — guard against zero.
-            /* Pulse shape (phase / attack). Evaluated once per flicker cycle
-             * rather than per tick: both are consumed at cycle granularity —
-             * phase as a delay derived from the live period, attack as the
-             * trapezoid edge — so a mid-cycle change could not be observed
-             * anyway, and this keeps the per-tick ISR path untouched.
-             * curve == LED_INTERP_NONE means "not swept": leave the latched
-             * value alone rather than snapping it to a zeroed target. */
-            if (s->mod_phase.active) {
-                int32_t mv = led_eval_mod_iram(&s->mod_phase, now_us);
-                s->phase_offset_deg = (int16_t)(((mv < 0) ? 0 : (uint32_t)mv) >> 8) % 360;
-            } else if (sw_phase.curve != LED_INTERP_NONE) {
-                s->phase_offset_deg = (int16_t)(led_interp_param(&sw_phase, progress_q16) % 360u);
-            }
-            if (s->mod_attack.active) {
-                int32_t mv = led_eval_mod_iram(&s->mod_attack, now_us);
-                s->attack_ms = (uint16_t)(((mv < 0) ? 0 : (uint32_t)mv) >> 8);
-            } else if (sw_attack.curve != LED_INTERP_NONE) {
-                s->attack_ms = (uint16_t)led_interp_param(&sw_attack, progress_q16);
-            }
             uint32_t new_freq = led_interp_param(&sw_freq, progress_q16);
             if (md_freq.active) {
                 int32_t mv = led_eval_mod_iram(&md_freq, now_us);
@@ -1039,6 +1019,61 @@ static void led_flicker_task(void *arg) {
 
         if (!matrix_handle) {
             continue;
+        }
+
+        /* Pulse shape (phase / attack) — task context, deliberately.
+         *
+         * Both are consumed at flicker-cycle granularity: phase becomes a delay
+         * derived from the live period, attack the trapezoid edge width. Neither
+         * needs sample or tick resolution, and evaluating them in the ISR cost
+         * ~2.9 KB of IRAM (two more inline expansions of led_eval_mod_iram and
+         * led_interp_param) on a build that was already 96% full. The ISR just
+         * reads the fields; this loop, which the ISR notifies on every state
+         * change, keeps them current. */
+        {
+            uint64_t now_us = (uint64_t)esp_timer_get_time();
+            for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+                led_flicker_state_t *s = &flicker_state[ch];
+                if (!s->active) continue;
+                portENTER_CRITICAL(&s_flicker_mux);
+                led_sweep_param_t swp = s->sw_phase, swa = s->sw_attack;
+                led_mod_slot_t    mdp = s->mod_phase, mda = s->mod_attack;
+                uint64_t sw_start = s->sweep_start_us, sw_dur = s->sweep_duration_us;
+                portEXIT_CRITICAL(&s_flicker_mux);
+
+                if (!mdp.active && swp.curve == LED_INTERP_NONE &&
+                    !mda.active && swa.curve == LED_INTERP_NONE) {
+                    continue;   /* nothing time-varying on this channel */
+                }
+                uint32_t prog_q16;
+                if (sw_dur == 0) {
+                    prog_q16 = 65536u;
+                } else {
+                    uint64_t es = (now_us >= sw_start) ? (now_us - sw_start) : 0;
+                    uint64_t p  = (es * 65536ULL) / sw_dur;
+                    prog_q16 = (p > 65536ULL) ? 65536u : (uint32_t)p;
+                }
+                /* Both ends are reduced to 0..359 / clamped at install time, so
+                 * interpolating between them stays in range — no modulo needed. */
+                int16_t  new_phase  = s->phase_offset_deg;
+                uint16_t new_attack = s->attack_ms;
+                if (mdp.active) {
+                    int32_t mv = led_eval_mod_iram(&mdp, now_us);
+                    new_phase = (int16_t)(((mv < 0) ? 0 : (uint32_t)mv) >> 8);
+                } else if (swp.curve != LED_INTERP_NONE) {
+                    new_phase = (int16_t)led_interp_param(&swp, prog_q16);
+                }
+                if (mda.active) {
+                    int32_t mv = led_eval_mod_iram(&mda, now_us);
+                    new_attack = (uint16_t)(((mv < 0) ? 0 : (uint32_t)mv) >> 8);
+                } else if (swa.curve != LED_INTERP_NONE) {
+                    new_attack = (uint16_t)led_interp_param(&swa, prog_q16);
+                }
+                portENTER_CRITICAL(&s_flicker_mux);
+                s->phase_offset_deg = new_phase;
+                s->attack_ms        = new_attack;
+                portEXIT_CRITICAL(&s_flicker_mux);
+            }
         }
 
         // Snapshot per-channel state under s_flicker_mux.
