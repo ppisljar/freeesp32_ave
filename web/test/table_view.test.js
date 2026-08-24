@@ -163,7 +163,7 @@ test('orderRowsForDisplay: already-ordered rows are left alone', () => {
                      ['speech', 'led', 'audio']);
 });
 
-test('orderRowsForDisplay: each instant is sorted independently, groups keep file order', () => {
+test('orderRowsForDisplay: each instant is sorted independently, groups run in time order', () => {
     assert.deepEqual(
         kindsInOrder([audio(3000), speech(3000), audio(60000), led(60000)]),
         ['speech', 'audio', 'led', 'audio']);
@@ -224,4 +224,36 @@ test('cellTargetHint: a zero target is reported, not treated as absent', () => {
 
 test('cellTargetHint: tolerates a missing cell', () => {
     assert.equal(cellTargetHint(null, 40), '');
+});
+
+// ---- grouping by timestamp value, not by adjacency -------------------------
+// Sessions are commonly written channel-by-channel, so one instant's rows are
+// scattered through the file. Grouping on consecutive runs missed that and left
+// 35 of the 77 library sessions with every row in a group of its own.
+
+test('computeTimeGroups: rows at one time group together even when far apart', () => {
+    assert.deepEqual(
+        computeTimeGroups([audio(0), audio(1000), led(0), led(1000)]),
+        [1, 2, 1, 2]);
+});
+
+test('computeTimeGroups: groups are numbered in ascending time, not file order', () => {
+    assert.deepEqual(computeTimeGroups([led(2000), led(0), led(1000)]), [3, 1, 2]);
+});
+
+test('orderRowsForDisplay: an audio section then an LED section interleaves by time', () => {
+    const rows = [audio(0), audio(1000), led(0), led(1000)];
+    assert.deepEqual(orderRowsForDisplay(rows).map(i => rows[i].kind + '@' + rows[i].time),
+                     ['led@0', 'audio@0', 'led@1000', 'audio@1000']);
+});
+
+test('orderRowsForDisplay: chronological even when the file is not', () => {
+    const rows = [led(2000), audio(0), led(0)];
+    assert.deepEqual(orderRowsForDisplay(rows).map(i => rows[i].kind + '@' + rows[i].time),
+                     ['led@0', 'audio@0', 'led@2000']);
+});
+
+test('computeTimeGroups: a comment before a late-file row heads that row\'s time block', () => {
+    // cmt sits before led(0); led(0) belongs to the t=0 block, so the comment does too.
+    assert.deepEqual(computeTimeGroups([audio(0), audio(1000), cmt(), led(0)]), [1, 2, 1, 1]);
 });

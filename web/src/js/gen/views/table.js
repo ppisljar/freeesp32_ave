@@ -74,22 +74,38 @@ export function formatTimeMs(ms) {
 // speech cue at t=3000 are one instant of the session — and without a divider
 // the grid reads as one undifferentiated run.
 //
+// Grouping is by timestamp VALUE, not by consecutive runs of it. Sessions are
+// commonly written channel-by-channel (all the audio for a phase, then all the
+// LED for it), so the rows belonging to one instant are routinely scattered
+// through the file; keying on adjacency put each of them in a group of its own
+// and left 35 of the 77 library sessions ungrouped.
+//
+// Groups are numbered in ascending time, which is also the order the grid
+// renders them: a timeline should read earliest-first regardless of where its
+// lines happen to sit in the file.
+//
 // Untimed rows (comments, bg) join the block that FOLLOWS them, so a section
 // comment heads its group rather than trailing the previous one. Trailing
 // untimed rows stay with the last block. Returns an array of group ids
 // parallel to `rows`, starting at 1.
 export function computeTimeGroups(rows) {
     const isTimed = r => r.kind === 'led' || r.kind === 'audio' || r.kind === 'speech';
+    const times = [...new Set(rows.filter(isTimed).map(r => r.time))].sort((a, b) => a - b);
+    const idOf = new Map(times.map((t, i) => [t, i + 1]));
+
     const groups = new Array(rows.length).fill(0);
-    let group = 0, prevTime = null, pending = [];
+    let pending = [];
+    let lastGroup = 1;
     for (let i = 0; i < rows.length; i++) {
         if (!isTimed(rows[i])) { pending.push(i); continue; }
-        if (prevTime === null || rows[i].time !== prevTime) { group++; prevTime = rows[i].time; }
-        for (const j of pending) groups[j] = group;
+        const g = idOf.get(rows[i].time);
+        for (const j of pending) groups[j] = g;
         pending = [];
-        groups[i] = group;
+        groups[i] = g;
+        lastGroup = g;
     }
-    for (const j of pending) groups[j] = group || 1;
+    // Trailing comments have no following block; keep them with the last one.
+    for (const j of pending) groups[j] = lastGroup;
     return groups;
 }
 
@@ -106,13 +122,11 @@ const DISPLAY_KIND_RANK = { comment: 0, bg: 0, blank: 0, raw: 0, speech: 1, led:
 // therefore the serialized file are untouched.
 export function orderRowsForDisplay(rows) {
     const groups = computeTimeGroups(rows);
-    // Groups keep the order they first appear in the file, so the timeline still
-    // reads top-to-bottom even though rows move within a group.
-    const firstSeen = new Map();
-    groups.forEach((g, i) => { if (!firstSeen.has(g)) firstSeen.set(g, i); });
+    // Group ids ascend with time, so ordering on them puts the timeline in
+    // chronological order and gathers each instant's scattered lines together.
     const rank = r => (r.kind in DISPLAY_KIND_RANK) ? DISPLAY_KIND_RANK[r.kind] : 9;
     return rows.map((_, i) => i).sort((a, b) => {
-        if (groups[a] !== groups[b]) return firstSeen.get(groups[a]) - firstSeen.get(groups[b]);
+        if (groups[a] !== groups[b]) return groups[a] - groups[b];
         const ra = rank(rows[a]), rb = rank(rows[b]);
         if (ra !== rb) return ra - rb;
         return a - b;   // explicit tie-break: same kind keeps file order
