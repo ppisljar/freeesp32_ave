@@ -20,6 +20,7 @@
 #                        may also be set via $DEVICE_HOST instead of arg 1
 #   --no-validate        skip the local parse/safety-lint gate before pushing
 #   --dry-run            print what would be pushed; do not PUT
+#   --with-fixtures      also push test*.ledc (normally sessions only)
 #
 # Exit status: 0 if every file pushed (HTTP 200), non-zero otherwise.
 
@@ -34,17 +35,19 @@ VALIDATOR="$SCRIPT_DIR/validate_session.mjs"
 HOST="${DEVICE_HOST:-}"
 VALIDATE=1
 DRY_RUN=0
+WITH_FIXTURES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-validate) VALIDATE=0; shift ;;
     --dry-run|-n)  DRY_RUN=1; shift ;;
+    --with-fixtures) WITH_FIXTURES=1; shift ;;
     -*) echo "Unknown option: $1" >&2; exit 2 ;;
     *)  HOST="$1"; shift ;;
   esac
 done
 
 if [ -z "$HOST" ]; then
-  echo "Usage: ./push_library.sh <device-host-or-ip> [--no-validate] [--dry-run]" >&2
+  echo "Usage: ./push_library.sh <device-host-or-ip> [--no-validate] [--dry-run] [--with-fixtures]" >&2
   echo "  (or set \$DEVICE_HOST). Example: ./push_library.sh 192.168.1.42" >&2
   exit 2
 fi
@@ -54,8 +57,25 @@ HOST="${HOST#http://}"; HOST="${HOST#https://}"; HOST="${HOST%/}"
 BASE="http://$HOST"
 
 shopt -s nullglob
-FILES=("$LIB_DIR"/*.ledc)
+ALL=("$LIB_DIR"/*.ledc)
 shopt -u nullglob
+
+# Real sessions are named "NN_name.ledc". Everything else in the library
+# (test.ledc, test2a/b/c.ledc, test_iso.ledc) is a parser/round-trip fixture
+# that only the local test suite needs. cfgfs is small — it filled up and
+# started rejecting writes with the fixtures included — so the device carries
+# sessions only. Pass --with-fixtures if you really want them there.
+FILES=()
+SKIPPED=0
+for f in "${ALL[@]}"; do
+  if [ "$WITH_FIXTURES" != "1" ] && ! [[ "$(basename "$f")" =~ ^[0-9][0-9]_ ]]; then
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
+  FILES+=("$f")
+done
+[ "$SKIPPED" -gt 0 ] && echo "Skipping $SKIPPED non-session fixture(s); --with-fixtures overrides."
+
 if [ "${#FILES[@]}" -eq 0 ]; then
   echo "No .ledc files in $LIB_DIR — nothing to push." >&2
   exit 1
