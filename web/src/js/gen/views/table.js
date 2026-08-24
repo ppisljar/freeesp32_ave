@@ -135,7 +135,7 @@ export function initTableView(ctx) {
     // Per-kind visibility. Independent toggles rather than one mutually
     // exclusive filter: "LED only" used to leave speech and comments on screen,
     // and there was no way to drop them, so the LED view was never actually
-    // only LED. All on by default. bg/blank/raw are structural and always show.
+    // only LED. All on by default. bg/raw always show; blank rows never do.
     const shown = { led: true, audio: true, speech: true, comment: true };
 
     // Build the static chrome (filter bar / scroller / cards / add bar) once.
@@ -636,7 +636,12 @@ export function initTableView(ctx) {
     // Should a row be shown given the current toggles?
     function passesFilter(row) {
         if (Object.prototype.hasOwnProperty.call(shown, row.kind)) return shown[row.kind];
-        return true; // bg / blank / raw are structural — always shown
+        // Blank lines are spacing for the text view; as grid rows they are just
+        // empty bands, and filtering any kind out leaves a trail of them behind.
+        // They stay in the model — only the grid declines to draw them — so the
+        // text view and serialization keep the file's original formatting.
+        if (row.kind === 'blank') return false;
+        return true; // bg carries content, raw flags an unparsable line
     }
 
     // ---- Filter bar -------------------------------------------------------
