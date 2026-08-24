@@ -132,7 +132,11 @@ export function initTableView(ctx) {
 
     let applyingEdit = false; // true while WE commit a value edit (skip our own rebuild)
     let visible = false;
-    let filter = 'all'; // 'all' | 'led' | 'audio'
+    // Per-kind visibility. Independent toggles rather than one mutually
+    // exclusive filter: "LED only" used to leave speech and comments on screen,
+    // and there was no way to drop them, so the LED view was never actually
+    // only LED. All on by default. bg/blank/raw are structural and always show.
+    const shown = { led: true, audio: true, speech: true, comment: true };
 
     // Build the static chrome (filter bar / scroller / cards / add bar) once.
     root.innerHTML = '';
@@ -629,12 +633,10 @@ export function initTableView(ctx) {
         return wrap;
     }
 
-    // Should a row be shown given the current filter?
+    // Should a row be shown given the current toggles?
     function passesFilter(row) {
-        if (filter === 'all') return true;
-        if (row.kind === 'led') return filter === 'led';
-        if (row.kind === 'audio') return filter === 'audio';
-        return true; // comments / blank / raw / bg always shown
+        if (Object.prototype.hasOwnProperty.call(shown, row.kind)) return shown[row.kind];
+        return true; // bg / blank / raw are structural — always shown
     }
 
     // ---- Filter bar -------------------------------------------------------
@@ -644,12 +646,14 @@ export function initTableView(ctx) {
         label.className = 'gen-filter-label';
         label.textContent = 'Show:';
         filterBar.appendChild(label);
-        for (const [val, txt] of [['all', 'All'], ['led', 'LED only'], ['audio', 'Audio only']]) {
+        for (const [kind, txt] of [['led', 'LED'], ['audio', 'Audio'], ['speech', 'Speech'], ['comment', 'Comments']]) {
             const b = document.createElement('button');
             b.type = 'button';
-            b.className = 'gen-filter-chip' + (filter === val ? ' on' : '');
+            b.className = 'gen-filter-chip' + (shown[kind] ? ' on' : '');
             b.textContent = txt;
-            b.addEventListener('click', () => { filter = val; rebuild(ctx.getDoc()); });
+            b.setAttribute('aria-pressed', shown[kind] ? 'true' : 'false');
+            b.title = (shown[kind] ? 'Hide' : 'Show') + ' ' + txt.toLowerCase() + ' rows';
+            b.addEventListener('click', () => { shown[kind] = !shown[kind]; rebuild(ctx.getDoc()); });
             filterBar.appendChild(b);
         }
     }
