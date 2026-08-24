@@ -861,10 +861,18 @@ export function initTableView(ctx) {
     //   Duty↔Pan, Bright↔Vol, Color↔Mod. FreqR/Wave are audio-only trailers.
     // The pulse fields used to hide behind a per-row "⋯" disclosure. They are
     // ordinary settings, so they get ordinary columns; the grid scrolls
-    // horizontally when it outgrows the page. "Duty %" is the audio pulse duty,
-    // distinct from the shared Duty/Pan knob — LED has no equivalent.
+    // horizontally when it outgrows the page.
+    //
+    // Most shared columns pair the two line types by POSITION in the file, which
+    // is why Freq is LED flicker rate but audio carrier pitch. Duty is the
+    // exception, deliberately: per ledc_format.md both kinds have exactly one
+    // duty and it means the same thing (pulse gate duty), it just sits at slot 3
+    // on an LED line and slot 9 on an audio one. Pairing by position put LED's
+    // duty next to audio's pan — an unrelated mix control — and stranded audio's
+    // duty in a second column of the same name. One "Duty %" column carries both;
+    // "Pan" is then audio/BG only.
     const COLS = ['Type', 'Time', 'Ch / Mask', 'Freq',
-                  'Duty / Pan', 'Bright / Vol', 'Color / Mod', 'FreqR', 'Wave',
+                  'Pan', 'Bright / Vol', 'Color / Mod', 'FreqR', 'Wave',
                   'Duty %', 'Env', 'Phase°', 'Attack ms', 'Jitter', ''];
 
     function blankCell() { return document.createElement('td'); }
@@ -908,12 +916,15 @@ export function initTableView(ctx) {
                 const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
                 const tdMask = blankCell(); tdMask.appendChild(maskChips(row)); tr.appendChild(tdMask);
                 const tdFreq = blankCell(); tdFreq.appendChild(compound(row, idx, 'freq', 'Frequency (Hz)', () => ledRampTarget(idx, row.mask, 'freq'))); tr.appendChild(tdFreq);
-                const tdDuty = blankCell(); tdDuty.appendChild(compound(row, idx, 'duty', 'Duty (%)', () => ledRampTarget(idx, row.mask, 'duty'))); tr.appendChild(tdDuty);        // Duty / Pan
+                tr.appendChild(blankCell()); // Pan — LED has none
                 const tdBr = blankCell(); tdBr.appendChild(compound(row, idx, 'bright', 'Brightness (%)', () => ledRampTarget(idx, row.mask, 'bright'))); tr.appendChild(tdBr);      // Bright / Vol
                 const tdCol = blankCell(); tdCol.appendChild(colorSwatch(row)); tr.appendChild(tdCol);                                                                               // Color / Mod
                 tr.appendChild(blankCell()); // FreqR
                 tr.appendChild(blankCell()); // Wave
-                tr.appendChild(blankCell()); // Duty % (audio-only pulse duty)
+                // LED duty is a core positional field, so it keeps the full
+                // compound-cell widget (ramps and all) rather than the optional
+                // pulse-field input audio's uses. Same concept, different slot.
+                const tdDuty = blankCell(); tdDuty.appendChild(compound(row, idx, 'duty', 'Duty (%)', () => ledRampTarget(idx, row.mask, 'duty'))); tr.appendChild(tdDuty);          // Duty %
                 const tdEnvL = blankCell(); tdEnvL.appendChild(pulseEnvSelect(row, false)); tr.appendChild(tdEnvL);
                 const tdPhL = blankCell(); tdPhL.appendChild(pulseCellInput(row, 'phase', 'Phase (deg)')); tr.appendChild(tdPhL);
                 const tdAtL = blankCell(); tdAtL.appendChild(pulseCellInput(row, 'attack', 'Attack (ms)')); tr.appendChild(tdAtL);
@@ -922,7 +933,7 @@ export function initTableView(ctx) {
                 const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
                 const tdCh = blankCell(); tdCh.appendChild(channelSelect(row)); tr.appendChild(tdCh);
                 const tdFreq = blankCell(); tdFreq.appendChild(compound(row, idx, 'freq', 'Frequency (Hz)', () => audioRampTarget(idx, row.channel, 'freq'))); tr.appendChild(tdFreq);
-                const tdPan = blankCell(); tdPan.appendChild(compound(row, idx, 'pan', 'Pan (-100..100)', () => audioRampTarget(idx, row.channel, 'pan'))); tr.appendChild(tdPan);    // Duty / Pan
+                const tdPan = blankCell(); tdPan.appendChild(compound(row, idx, 'pan', 'Pan (-100..100)', () => audioRampTarget(idx, row.channel, 'pan'))); tr.appendChild(tdPan);    // Pan
                 const tdVol = blankCell(); tdVol.appendChild(compound(row, idx, 'vol', 'Volume (%)', () => audioRampTarget(idx, row.channel, 'vol'))); tr.appendChild(tdVol);        // Bright / Vol
                 const tdMod = blankCell(); tdMod.appendChild(compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))); tr.appendChild(tdMod);          // Color / Mod
                 const tdFr = blankCell(); tdFr.appendChild(freqRInput(row)); tr.appendChild(tdFr);
@@ -934,12 +945,12 @@ export function initTableView(ctx) {
                 const tdJtA = blankCell(); tdJtA.appendChild(pulseJitterInput(row)); tr.appendChild(tdJtA);
             } else if (row.kind === 'bg') {
                 // URL spans Time+Ch/Mask+Freq (it's the long field); pan/loudness
-                // land in the shared Duty/Pan and Bright/Vol columns like audio.
+                // land in the shared Pan and Bright/Vol columns like audio.
                 const tdUrl = document.createElement('td');
                 tdUrl.colSpan = 3;
                 tdUrl.appendChild(bgSourceControls(row));
                 tr.appendChild(tdUrl);
-                const tdPan = blankCell(); tdPan.appendChild(bgPanInput(row)); tr.appendChild(tdPan);   // Duty / Pan
+                const tdPan = blankCell(); tdPan.appendChild(bgPanInput(row)); tr.appendChild(tdPan);   // Pan
                 const tdVol = blankCell(); tdVol.appendChild(bgVolInput(row)); tr.appendChild(tdVol);   // Bright / Vol
                 tr.appendChild(blankCell()); // Color / Mod
                 tr.appendChild(blankCell()); // FreqR
