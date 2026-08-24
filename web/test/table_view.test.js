@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    chipsToMask, maskToChips, parseTimeInput, formatTimeMs, computeTimeGroups,
+    chipsToMask, maskToChips, parseTimeInput, formatTimeMs, computeTimeGroups, orderRowsForDisplay,
 } from '../src/js/gen/views/table.js';
 import {
     cellInlineGlyph, cellLabel,
@@ -146,4 +146,49 @@ test('computeTimeGroups: an all-untimed document still yields one group', () => 
 test('computeTimeGroups: returns an array parallel to rows', () => {
     const rows = [led(0), cmt(), audio(10)];
     assert.equal(computeTimeGroups(rows).length, rows.length);
+});
+
+// ---- display ordering (S, LED, audio within one instant) -------------------
+
+const kindsInOrder = rows => orderRowsForDisplay(rows).map(i => rows[i].kind);
+
+test('orderRowsForDisplay: within one instant it is speech, LED, audio', () => {
+    assert.deepEqual(kindsInOrder([audio(3000), led(3000), speech(3000)]),
+                     ['speech', 'led', 'audio']);
+});
+
+test('orderRowsForDisplay: already-ordered rows are left alone', () => {
+    assert.deepEqual(kindsInOrder([speech(0), led(0), audio(0)]),
+                     ['speech', 'led', 'audio']);
+});
+
+test('orderRowsForDisplay: each instant is sorted independently, groups keep file order', () => {
+    assert.deepEqual(
+        kindsInOrder([audio(3000), speech(3000), audio(60000), led(60000)]),
+        ['speech', 'audio', 'led', 'audio']);
+});
+
+test('orderRowsForDisplay: a comment stays at the head of the block it introduces', () => {
+    assert.deepEqual(kindsInOrder([cmt(), audio(0), speech(0), led(0)]),
+                     ['comment', 'speech', 'led', 'audio']);
+});
+
+test('orderRowsForDisplay: two rows of one kind keep their file order', () => {
+    const rows = [led(0), led(0)];
+    rows[0].tag = 'first'; rows[1].tag = 'second';
+    const out = orderRowsForDisplay(rows).map(i => rows[i].tag);
+    assert.deepEqual(out, ['first', 'second']);
+});
+
+test('orderRowsForDisplay: returns every index exactly once', () => {
+    const rows = [audio(0), cmt(), led(0), speech(5), blank(), audio(5)];
+    const out = orderRowsForDisplay(rows);
+    assert.deepEqual([...out].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5]);
+});
+
+test('orderRowsForDisplay: does not mutate the rows array', () => {
+    const rows = [audio(0), speech(0), led(0)];
+    const before = rows.map(r => r.kind);
+    orderRowsForDisplay(rows);
+    assert.deepEqual(rows.map(r => r.kind), before);
 });

@@ -96,6 +96,32 @@ export function computeTimeGroups(rows) {
     return groups;
 }
 
+// Display order within one instant: speech, then LED, then audio. Untimed rows
+// (comments, bg) lead the block they head. Model order breaks ties, so rows of
+// the same kind keep the order the file gave them.
+//
+// A canonical order makes a moment readable at a glance — the cue you hear, the
+// light that goes with it, the tone underneath — instead of whatever sequence
+// the file happened to be written in.
+const DISPLAY_KIND_RANK = { comment: 0, bg: 0, blank: 0, raw: 0, speech: 1, led: 2, audio: 3 };
+
+// Returns model-row indices in display order. The view reorders; `doc.rows` and
+// therefore the serialized file are untouched.
+export function orderRowsForDisplay(rows) {
+    const groups = computeTimeGroups(rows);
+    // Groups keep the order they first appear in the file, so the timeline still
+    // reads top-to-bottom even though rows move within a group.
+    const firstSeen = new Map();
+    groups.forEach((g, i) => { if (!firstSeen.has(g)) firstSeen.set(g, i); });
+    const rank = r => (r.kind in DISPLAY_KIND_RANK) ? DISPLAY_KIND_RANK[r.kind] : 9;
+    return rows.map((_, i) => i).sort((a, b) => {
+        if (groups[a] !== groups[b]) return firstSeen.get(groups[a]) - firstSeen.get(groups[b]);
+        const ra = rank(rows[a]), rb = rank(rows[b]);
+        if (ra !== rb) return ra - rb;
+        return a - b;   // explicit tie-break: same kind keeps file order
+    });
+}
+
 // ---- Row helpers -----------------------------------------------------------
 
 function cloneCell(c) { return c ? { ...c } : cell(0); }
@@ -525,12 +551,40 @@ export function initTableView(ctx) {
                 d.rows.splice(idx, 1);
                 recomputeBg(); commitStructure();
             });
-            item('Move up', () => {
-                if (idx > 0) { const r = d.rows.splice(idx, 1)[0]; d.rows.splice(idx - 1, 0, r); recomputeBg(); commitStructure(); }
-            });
-            item('Move down', () => {
-                if (idx < d.rows.length - 1) { const r = d.rows.splice(idx, 1)[0]; d.rows.splice(idx + 1, 0, r); recomputeBg(); commitStructure(); }
-            });
+            // Move must follow what you can SEE. The grid sorts each instant into
+            // speech/LED/audio, so a naive model-order swap can rewrite the file
+            // while the grid looks identical — an invisible edit. Move the row to
+            // its display neighbour's slot instead, and only offer the item when
+            // the result actually differs on screen (reordering two rows the sort
+            // puts straight back is a no-op worth hiding rather than performing).
+            // Rendered rows only: blank lines and toggled-off kinds are in the
+            // display order but not on screen, and stepping onto one of those
+            // produces exactly the invisible edit this is here to prevent.
+            const renderedOrder = (rows) => orderRowsForDisplay(rows).filter(i => passesFilter(rows[i]));
+            const moveTrial = (dir) => {
+                const order = renderedOrder(d.rows);
+                const pos = order.indexOf(idx);
+                if (pos < 0) return null;
+                const target = order[pos + dir];
+                if (target === undefined) return null;
+                const trial = d.rows.slice();
+                const moved = trial.splice(idx, 1)[0];
+                trial.splice(target > idx ? target - 1 : target, 0, moved);
+                // Compare by row identity, so "different" means visibly different.
+                const before = order.map(i => d.rows[i]);
+                const after = renderedOrder(trial).map(i => trial[i]);
+                const same = after.length === before.length && after.every((r, i) => r === before[i]);
+                return same ? null : trial;
+            };
+            const applyMove = (trial) => {
+                d.rows.length = 0;
+                for (const r of trial) d.rows.push(r);
+                recomputeBg(); commitStructure();
+            };
+            const upTrial = moveTrial(-1);
+            if (upTrial) item('Move up', () => applyMove(upTrial));
+            const downTrial = moveTrial(+1);
+            if (downTrial) item('Move down', () => applyMove(downTrial));
             openPopover(btn, menu, 'Row actions');
         });
         return wrap;
@@ -747,7 +801,8 @@ export function initTableView(ctx) {
         const timeGroups = computeTimeGroups(doc.rows);
         let lastGroup = null;
 
-        doc.rows.forEach((row, idx) => {
+        orderRowsForDisplay(doc.rows).forEach(idx => {
+            const row = doc.rows[idx];
             if (!passesFilter(row)) return;
             const tr = document.createElement('tr');
             tr.className = 'gen-grid-row gen-grid-' + row.kind;
@@ -871,7 +926,8 @@ export function initTableView(ctx) {
         cards.innerHTML = '';
         const timeGroups = computeTimeGroups(doc.rows);
         let lastGroup = null;
-        doc.rows.forEach((row, idx) => {
+        orderRowsForDisplay(doc.rows).forEach(idx => {
+            const row = doc.rows[idx];
             if (!passesFilter(row)) return;
             const card = document.createElement('div');
             card.className = 'gen-card gen-card-' + row.kind;
