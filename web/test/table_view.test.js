@@ -9,6 +9,7 @@ import {
     chipsToMask, maskToChips, parseTimeInput, formatTimeMs, computeTimeGroups, orderRowsForDisplay,
 } from '../src/js/gen/views/table.js';
 import {
+    cellTargetHint,
     cellInlineGlyph, cellLabel,
 } from '../src/js/gen/views/cell.js';
 import { cell } from '../src/js/gen/model.js';
@@ -191,4 +192,36 @@ test('orderRowsForDisplay: does not mutate the rows array', () => {
     const before = rows.map(r => r.kind);
     orderRowsForDisplay(rows);
     assert.deepEqual(rows.map(r => r.kind), before);
+});
+
+// ---- ramp destination sub-label -------------------------------------------
+
+test('cellTargetHint: a linear ramp reports where it lands', () => {
+    assert.equal(cellTargetHint({ value: 10, interp: 'lin' }, 40), '\u21b3 40');
+});
+
+test('cellTargetHint: a quadratic ramp reports it too', () => {
+    assert.equal(cellTargetHint({ value: 10, interp: 'quad' }, 40), '\u21b3 40');
+});
+
+test('cellTargetHint: a ramp with no later entry says it holds', () => {
+    // Silence here would read as "no ramp" even though the cell is coloured as one.
+    assert.equal(cellTargetHint({ value: 10, interp: 'lin' }, null), '\u21b3 holds');
+    assert.equal(cellTargetHint({ value: 10, interp: 'lin' }, undefined), '\u21b3 holds');
+});
+
+test('cellTargetHint: a step value has no destination', () => {
+    assert.equal(cellTargetHint({ value: 10, interp: 'none' }, 40), '');
+});
+
+test('cellTargetHint: a periodic mod gets none — the trigger already shows start-end', () => {
+    assert.equal(cellTargetHint({ value: 10, interp: 'sine', modEnd: 20 }, 40), '');
+});
+
+test('cellTargetHint: a zero target is reported, not treated as absent', () => {
+    assert.equal(cellTargetHint({ value: 10, interp: 'lin' }, 0), '\u21b3 0');
+});
+
+test('cellTargetHint: tolerates a missing cell', () => {
+    assert.equal(cellTargetHint(null, 40), '');
 });

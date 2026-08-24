@@ -57,6 +57,25 @@ export function cellLabel(c) {
     return (g ? g + ' ' : '') + c.value;
 }
 
+// The sub-label shown UNDER the trigger, mirroring the mm:ss.mmm hint under a
+// time field. A ramp's destination is otherwise invisible until you open the
+// popover — the colour tells you a value moves, not where it lands.
+//
+// `target` is the resolved value at the next same-field entry (null when there
+// isn't one). Only ramps get a hint: a step has no destination, and a periodic
+// mod already shows "start∿end" on the trigger itself.
+//
+// The marker is "↳", not the "→" the trigger uses as its linear-interp glyph.
+// Reusing "→" would stack "→ 20" over "→ 60", two arrows meaning different
+// things — one "this ramps", one "to here".
+export function cellTargetHint(c, target) {
+    if (!c || (c.interp !== 'lin' && c.interp !== 'quad')) return '';
+    // No later entry to ramp toward: the device holds the start value, which is
+    // worth saying outright — a ramp that silently does nothing looks like a bug.
+    if (target === null || target === undefined) return '\u21b3 holds';
+    return '\u21b3 ' + target;
+}
+
 // ---- Popover plumbing ------------------------------------------------------
 
 let openClose = null; // the close() of the currently-open popover, if any
@@ -263,14 +282,29 @@ export function createCompoundCell(opts) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'gen-cell-trigger';
+    // Two stacked spans rather than bare text, so the ramp destination can sit
+    // under the value the way mm:ss sits under a time in ms. Callers that used
+    // to poke btn.textContent must call btn.repaint() instead — writing
+    // textContent here would drop both spans and freeze the cell.
+    const main = document.createElement('span');
+    main.className = 'gen-cell-main';
+    const hint = document.createElement('span');
+    hint.className = 'gen-cell-hint';
+    btn.appendChild(main);
+    btn.appendChild(hint);
 
     function paint() {
         const c = opts.getCell();
-        btn.textContent = cellLabel(c);
+        main.textContent = cellLabel(c);
+        const h = cellTargetHint(c, opts.resolveTarget ? opts.resolveTarget() : null);
+        hint.textContent = h;
+        hint.style.display = h ? '' : 'none';
         btn.classList.toggle('is-ramp', c && (c.interp === 'lin' || c.interp === 'quad'));
         btn.classList.toggle('is-mod', c && isModInterp(c.interp));
     }
     paint();
+    // Let owners refresh a trigger whose ramp target changed elsewhere.
+    btn.repaint = paint;
 
     btn.addEventListener('click', () => {
         const form = buildCellEditor(opts.getCell(), {

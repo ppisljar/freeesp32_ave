@@ -157,7 +157,11 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .gen-chip.on { background: #28a745; color: #fff; border-color: #28a745; }
 .gen-chip-preset { grid-column: span 2; width: auto; padding: 0 6px; background: #e6eefc; color: #345; }
 
-.gen-cell-trigger { font-size: 12px; padding: 2px 8px; min-width: 44px; min-height: 26px; background: #fff; border: 1px solid #ccc; border-radius: 4px; color: #222; }
+.gen-cell-trigger { font-size: 12px; padding: 2px 8px; min-width: 44px; min-height: 26px; background: #fff; border: 1px solid #ccc; border-radius: 4px; color: #222; display: inline-flex; flex-direction: column; align-items: center; line-height: 1.25; }
+.gen-cell-main { display: block; }
+/* Where a ramp lands, sized and coloured like the mm:ss hint under a time. */
+.gen-cell-hint { display: block; font-size: 10px; color: #999; font-family: monospace; }
+.gen-cell-trigger.is-ramp .gen-cell-hint { color: #5b8fd6; }
 .gen-cell-trigger.is-ramp { border-color: #0a84ff; color: #0a5ad0; }
 .gen-cell-trigger.is-mod  { border-color: #a05cff; color: #6a2ed0; }
 .gen-swatch { width: 40px; height: 24px; min-height: 24px; padding: 0; border: 1px solid #999; border-radius: 4px; font-size: 10px; color: #fff; text-shadow: 0 0 2px #000; }

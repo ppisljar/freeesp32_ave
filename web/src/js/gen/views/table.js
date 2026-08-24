@@ -22,7 +22,7 @@ import {
     ledRow, audioRow, commentRow, bgRow, bg, speechRow, cell,
     WAVE_TYPES, NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS,
 } from '../model.js';
-import { createCompoundCell, closeOpenPopover, openPopover, cellLabel } from './cell.js';
+import { createCompoundCell, closeOpenPopover, openPopover } from './cell.js';
 import {
     parsePulseCell, formatPulseCell, parsePulseEnv, formatPulseEnv,
     parsePulseJitter, formatPulseJitter,
@@ -207,11 +207,18 @@ export function initTableView(ctx) {
     addBar.className = 'gen-table-add';
     root.appendChild(addBar);
 
+    // Every compound trigger currently on screen. A ramp's sub-label reports a
+    // value that lives in a DIFFERENT row, so editing the row a ramp points at
+    // has to refresh the ramp's hint — and a value edit deliberately skips the
+    // grid rebuild that would otherwise do it. Rebuilt with the grid.
+    let cellTriggers = [];
+
     // ---- Commit helpers ---------------------------------------------------
     // Value edit: preview/text update, but DON'T rebuild our own grid.
     function commitValue() {
         applyingEdit = true;
         try { ctx.setDoc(ctx.getDoc()); } finally { applyingEdit = false; }
+        for (const t of cellTriggers) t.repaint();
     }
     // Structural edit: commit AND rebuild (setDoc emits -> refresh rebuilds).
     function commitStructure() {
@@ -429,7 +436,7 @@ export function initTableView(ctx) {
                 // The compound triggers self-repaint via their own paint() only on
                 // popover edits; nudge their labels after a native-picker change.
                 for (const f of ['r', 'g', 'b']) {
-                    if (triggers[f]) triggers[f].textContent = cellLabel(row[f]);
+                    if (triggers[f]) triggers[f].repaint();
                 }
             }
             makeChan('r', 'R');
@@ -453,12 +460,14 @@ export function initTableView(ctx) {
 
     function compound(row, idx, field, title, resolve) {
         if (row[field] === null) return unchangedChip(title);
-        return createCompoundCell({
+        const t = createCompoundCell({
             title: title,
             getCell: () => row[field],
             onChange: (c) => { row[field] = c; commitValue(); },
             resolveTarget: resolve,
         });
+        cellTriggers.push(t);
+        return t;
     }
 
     // ---- v2 pulse-field controls (env / phase / attack / jitter, audio duty) ----
@@ -1014,6 +1023,7 @@ export function initTableView(ctx) {
     function rebuild(doc) {
         const st = gridScroll.scrollTop, sl = gridScroll.scrollLeft;
         renderFilters();
+        cellTriggers = [];   // the ones below are about to be discarded
         gridScroll.innerHTML = '';
         gridScroll.appendChild(buildGrid(doc));
         buildCards(doc);
