@@ -70,12 +70,14 @@ function fmtWhen(d) {
          + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-// Dropdown text for one report: date/time, the .ledc it came from, and the
-// custom title when the user actually set one (a title equal to the session
-// name is the auto-default and adds nothing).
+// Dropdown text for one report: a "*" when the report carries comments, then
+// date/time, the .ledc it came from, and the custom title when the user
+// actually set one (a title equal to the session name is the auto-default and
+// adds nothing). The marker leads so the annotated reports line up down the
+// left edge of the dropdown and can be picked out without reading each row.
 export function reportLabel(e) {
     const ledc = e.session || (e.base ? e.base + '.ledc' : e.name);
-    let s = fmtWhen(e.date) + '  ·  ' + ledc;
+    let s = (e.hasComments ? '* ' : '') + fmtWhen(e.date) + '  ·  ' + ledc;
     const title = (e.title || '').trim();
     if (title && title !== e.session && title !== e.base) s += '  ·  ' + title;
     return s;
@@ -204,7 +206,8 @@ function persist(name, text) {
 function noteSaved(src, name, text) {
     const p = parseReport(text);
     // Only device reports need the header cache; browser ones are read locally.
-    if (src === 'spiffs') writeMetaCache(src, name, { title: p.title, session: p.session, date: p.date });
+    if (src === 'spiffs') writeMetaCache(src, name, { title: p.title, session: p.session, date: p.date,
+                                                     hasComments: !!(p.comments || '').trim() });
     if (current.name === name) {
         current.src = src;
         setHash(src, name);
@@ -350,8 +353,15 @@ function listLocal() {
 const META_PREFIX = 'rptmeta:';
 function metaKey(src, name) { return META_PREFIX + src + ':' + name; }
 function readMetaCache(src, name) {
-    try { return JSON.parse(localStorage.getItem(metaKey(src, name)) || 'null'); }
-    catch (e) { return null; }
+    try {
+        const m = JSON.parse(localStorage.getItem(metaKey(src, name)) || 'null');
+        // Caches written before the comment marker existed carry no
+        // hasComments field. Treating those as complete would leave every
+        // already-listed report unmarked until it happened to be rewritten, so
+        // reject them: fetchMissingMeta re-reads the file and overwrites the
+        // same key with the current shape.
+        return (m && typeof m.hasComments === 'boolean') ? m : null;
+    } catch (e) { return null; }
 }
 function writeMetaCache(src, name, meta) {
     try { localStorage.setItem(metaKey(src, name), JSON.stringify(meta)); } catch (e) { /* quota — labels just fall back */ }
@@ -367,7 +377,7 @@ let s_avail = { spiffs: true, local: true };
 
 function makeEntry(src, name) {
     const p = parseReportName(name);
-    const e = { src, name, base: p.base, date: p.date, session: '', title: '', metaKnown: false };
+    const e = { src, name, base: p.base, date: p.date, session: '', title: '', hasComments: false, metaKnown: false };
     // Browser-stored reports are already in memory — parse the header directly.
     // Device reports use the cache, and are filled in later by fetchMissingMeta.
     const m = src === 'local' ? parseReport(localStorage.getItem(LOCAL_PREFIX + name) || '')
@@ -379,6 +389,11 @@ function makeEntry(src, name) {
 function applyEntryMeta(e, m) {
     e.title = m.title || '';
     e.session = m.session || '';
+    // Two shapes reach here: a parsed report (full `comments` text) and a
+    // cached header (already reduced to the boolean). Accept either.
+    e.hasComments = typeof m.hasComments === 'boolean'
+                  ? m.hasComments
+                  : !!(m.comments || '').trim();
     e.metaKnown = true;
     // Fall back to the header's Date line for files whose name has no stamp.
     if (!e.date && m.date) {
@@ -427,7 +442,8 @@ function fetchMissingMeta() {
         loadReport(e.src, e.name)
             .then(text => {
                 const r = parseReport(text);
-                const m = { title: r.title, session: r.session, date: r.date };
+                const m = { title: r.title, session: r.session, date: r.date,
+                            hasComments: !!(r.comments || '').trim() };
                 applyEntryMeta(e, m);
                 writeMetaCache(e.src, e.name, m);
             })

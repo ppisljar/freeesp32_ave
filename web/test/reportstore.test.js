@@ -111,6 +111,18 @@ test('reportLabel: falls back to the filename base when the session is unknown',
     assert.equal(reportLabel(e), '(no date)  \u00b7  nap.ledc');
 });
 
+test('reportLabel: a report with comments is marked with a leading *', () => {
+    const e = { name: 'x.rpt', base: 'x', date: new Date(2026, 0, 2, 3, 4, 5),
+                session: 'nap.ledc', title: 'nap.ledc', hasComments: true };
+    assert.equal(reportLabel(e), '* 2026-01-02 03:04  \u00b7  nap.ledc');
+});
+
+test('reportLabel: a report without comments carries no marker', () => {
+    const e = { name: 'x.rpt', base: 'x', date: new Date(2026, 0, 2, 3, 4, 5),
+                session: 'nap.ledc', title: 'nap.ledc', hasComments: false };
+    assert.ok(!reportLabel(e).startsWith('*'));
+});
+
 // ---- ordering --------------------------------------------------------------
 
 test('compareReports: newest first, undated last', () => {
