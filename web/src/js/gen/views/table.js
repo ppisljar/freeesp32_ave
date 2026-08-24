@@ -879,8 +879,13 @@ export function initTableView(ctx) {
     // ---- Grid (desktop) ---------------------------------------------------
     // LED and Audio share the three middle knob columns:
     //   Duty↔Pan, Bright↔Vol, Color↔Mod. FreqR/Wave are audio-only trailers.
+    // The pulse fields used to hide behind a per-row "⋯" disclosure. They are
+    // ordinary settings, so they get ordinary columns; the grid scrolls
+    // horizontally when it outgrows the page. "Duty %" is the audio pulse duty,
+    // distinct from the shared Duty/Pan knob — LED has no equivalent.
     const COLS = ['Type', 'Time', 'Ch / Mask', 'Freq',
-                  'Duty / Pan', 'Bright / Vol', 'Color / Mod', 'FreqR', 'Wave', ''];
+                  'Duty / Pan', 'Bright / Vol', 'Color / Mod', 'FreqR', 'Wave',
+                  'Duty %', 'Env', 'Phase°', 'Attack ms', 'Jitter', ''];
 
     function blankCell() { return document.createElement('td'); }
 
@@ -928,6 +933,11 @@ export function initTableView(ctx) {
                 const tdCol = blankCell(); tdCol.appendChild(colorSwatch(row)); tr.appendChild(tdCol);                                                                               // Color / Mod
                 tr.appendChild(blankCell()); // FreqR
                 tr.appendChild(blankCell()); // Wave
+                tr.appendChild(blankCell()); // Duty % (audio-only pulse duty)
+                const tdEnvL = blankCell(); tdEnvL.appendChild(pulseEnvSelect(row, false)); tr.appendChild(tdEnvL);
+                const tdPhL = blankCell(); tdPhL.appendChild(pulseCellInput(row, 'phase', 'Phase (deg)')); tr.appendChild(tdPhL);
+                const tdAtL = blankCell(); tdAtL.appendChild(pulseCellInput(row, 'attack', 'Attack (ms)')); tr.appendChild(tdAtL);
+                const tdJtL = blankCell(); tdJtL.appendChild(pulseJitterInput(row)); tr.appendChild(tdJtL);
             } else if (row.kind === 'audio') {
                 const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
                 const tdCh = blankCell(); tdCh.appendChild(channelSelect(row)); tr.appendChild(tdCh);
@@ -937,6 +947,11 @@ export function initTableView(ctx) {
                 const tdMod = blankCell(); tdMod.appendChild(compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))); tr.appendChild(tdMod);          // Color / Mod
                 const tdFr = blankCell(); tdFr.appendChild(freqRInput(row)); tr.appendChild(tdFr);
                 const tdWave = blankCell(); tdWave.appendChild(waveSelect(row)); tr.appendChild(tdWave);
+                const tdDutyP = blankCell(); tdDutyP.appendChild(pulseCellInput(row, 'duty', 'Duty %')); tr.appendChild(tdDutyP);
+                const tdEnvA = blankCell(); tdEnvA.appendChild(pulseEnvSelect(row, true)); tr.appendChild(tdEnvA);
+                const tdPhA = blankCell(); tdPhA.appendChild(pulseCellInput(row, 'phase', 'Phase (deg)')); tr.appendChild(tdPhA);
+                const tdAtA = blankCell(); tdAtA.appendChild(pulseCellInput(row, 'attack', 'Attack (ms)')); tr.appendChild(tdAtA);
+                const tdJtA = blankCell(); tdJtA.appendChild(pulseJitterInput(row)); tr.appendChild(tdJtA);
             } else if (row.kind === 'bg') {
                 // URL spans Time+Ch/Mask+Freq (it's the long field); pan/loudness
                 // land in the shared Duty/Pan and Bright/Vol columns like audio.
@@ -949,6 +964,7 @@ export function initTableView(ctx) {
                 tr.appendChild(blankCell()); // Color / Mod
                 tr.appendChild(blankCell()); // FreqR
                 tr.appendChild(blankCell()); // Wave
+                for (let i = 0; i < 5; i++) tr.appendChild(blankCell()); // pulse columns
             } else if (row.kind === 'speech') {
                 // Time in its own column; voice+volume+text span the rest.
                 const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
@@ -976,30 +992,6 @@ export function initTableView(ctx) {
 
             tbody.appendChild(tr);
 
-            // Per-row 'more' disclosure holding the v2 pulse fields (env/phase/
-            // attack/jitter, audio duty). Hidden until the ⋯ toggle is clicked.
-            if (row.kind === 'led' || row.kind === 'audio') {
-                const moreTr = document.createElement('tr');
-                moreTr.className = 'gen-more-row';
-                moreTr.style.display = 'none';
-                const moreTd = document.createElement('td');
-                moreTd.colSpan = COLS.length;
-                moreTd.appendChild(pulseFields(row));
-                moreTr.appendChild(moreTd);
-                tbody.appendChild(moreTr);
-
-                const tg = document.createElement('button');
-                tg.type = 'button';
-                tg.className = 'gen-more-toggle';
-                tg.textContent = '⋯';
-                tg.title = 'Pulse fields (env / phase / attack / jitter)';
-                tg.addEventListener('click', () => {
-                    const open = moreTr.style.display === 'none';
-                    moreTr.style.display = open ? '' : 'none';
-                    tg.classList.toggle('is-open', open);
-                });
-                tdAct.insertBefore(tg, tdAct.firstChild);
-            }
         });
 
         table.appendChild(tbody);
