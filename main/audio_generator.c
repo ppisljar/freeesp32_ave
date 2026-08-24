@@ -45,6 +45,8 @@
 
 /* Forward declaration for fill_buffer's modulation eval (definition lives
  * further down next to the set_mod / clear_mod public API). */
+static inline float audio_eval_sweep_block(const audio_gen_channel_t *ch,
+                                          audio_param_t param);
 static inline float audio_eval_mod(const audio_gen_channel_t *ch,
                                    audio_param_t param, uint64_t now_us);
 
@@ -228,6 +230,20 @@ static inline float beat_jitter_offset(void) {
 void audio_generator_set_beat_jitter(float amp_hz, float period_ms) {
     s_beat_jitter_hz        = (amp_hz < 0.0f) ? 0.0f : amp_hz;
     if (period_ms >= 1000.0f) s_beat_jitter_period_ms = period_ms;
+}
+
+/* Unit conversions shared by the setters and the per-block sweep/mod evaluation,
+ * so an animated value lands in exactly the same representation a static one
+ * does. duty: percent -> 0..1 on-fraction. phase: degrees -> Q32 cycle fraction. */
+static inline float iso_duty_from_pct(float pct) {
+    if (pct < 0.0f)   pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
+    return pct * 0.01f;
+}
+static inline uint32_t iso_phase_to_q32(float deg) {
+    float d = fmodf(deg, 360.0f);
+    if (d < 0.0f) d += 360.0f;
+    return (uint32_t)(d / 360.0f * 4294967296.0f);
 }
 
 // C4 setter — per-channel pulse phase offset in degrees (0..359).
@@ -518,6 +534,14 @@ esp_err_t audio_generator_start_sweep_locked(int channel, audio_param_t param,
             case AUDIO_PARAM_AMPLITUDE: start = ch->current_amp;      break;
             case AUDIO_PARAM_PAN:       start = ch->current_pan;      break;
             case AUDIO_PARAM_MOD_FREQ:  start = ch->current_mod_freq; break;
+            /* Pulse-shape params: read back in the same units the sweep works
+             * in (duty %, degrees, ms) so a ramp starts where the channel
+             * actually is rather than snapping to the literal. */
+            case AUDIO_PARAM_ISO_DUTY:   start = ch->iso_duty * 100.0f;   break;
+            case AUDIO_PARAM_ISO_ATTACK: start = ch->iso_attack_ms;       break;
+            case AUDIO_PARAM_ISO_PHASE:
+                start = (float)ch->mod_phase_offset_q32 * (360.0f / 4294967296.0f);
+                break;
             default: break;
         }
     }
@@ -742,6 +766,26 @@ esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t sam
         }
         if (channel->mods[AUDIO_PARAM_MOD_FREQ].active) {
             channel->current_mod_freq = audio_eval_mod(channel, AUDIO_PARAM_MOD_FREQ, mod_now_us);
+        }
+
+        /* Isochronic pulse shape (duty / phase / attack). Modulation wins over a
+         * sweep on the same param, matching the four above. Both are evaluated
+         * here, once per buffer — see audio_eval_sweep_block on why these do not
+         * step per-sample. */
+        if (channel->mods[AUDIO_PARAM_ISO_DUTY].active) {
+            channel->iso_duty = iso_duty_from_pct(audio_eval_mod(channel, AUDIO_PARAM_ISO_DUTY, mod_now_us));
+        } else if (channel->sweeps[AUDIO_PARAM_ISO_DUTY].duration_samples > 0) {
+            channel->iso_duty = iso_duty_from_pct(audio_eval_sweep_block(channel, AUDIO_PARAM_ISO_DUTY));
+        }
+        if (channel->mods[AUDIO_PARAM_ISO_ATTACK].active) {
+            channel->iso_attack_ms = fmaxf(0.0f, audio_eval_mod(channel, AUDIO_PARAM_ISO_ATTACK, mod_now_us));
+        } else if (channel->sweeps[AUDIO_PARAM_ISO_ATTACK].duration_samples > 0) {
+            channel->iso_attack_ms = fmaxf(0.0f, audio_eval_sweep_block(channel, AUDIO_PARAM_ISO_ATTACK));
+        }
+        if (channel->mods[AUDIO_PARAM_ISO_PHASE].active) {
+            channel->mod_phase_offset_q32 = iso_phase_to_q32(audio_eval_mod(channel, AUDIO_PARAM_ISO_PHASE, mod_now_us));
+        } else if (channel->sweeps[AUDIO_PARAM_ISO_PHASE].duration_samples > 0) {
+            channel->mod_phase_offset_q32 = iso_phase_to_q32(audio_eval_sweep_block(channel, AUDIO_PARAM_ISO_PHASE));
         }
 
         // Check if channel has finished its duration.  Instead of snapping
@@ -1652,6 +1696,24 @@ esp_err_t audio_generator_clear_mod(int channel, audio_param_t param)
 
 /* Evaluate a modulation slot at time `now_us`. Returns the current wave
  * value in the param's native units. Caller has already checked active. */
+/* Evaluate a sweep once for the whole block, at the block's start sample.
+ *
+ * The core params step per-sample inside the hot loop because they are
+ * audio-rate: a frequency that jumped every 5.8 ms would be audible. The pulse
+ * SHAPE params (duty/phase/attack) move over seconds and are consumed by the
+ * gate, not the oscillator, so a per-block update is inaudible — and keeps the
+ * per-sample loop, which runs from IRAM, exactly as it was. */
+static inline float audio_eval_sweep_block(const audio_gen_channel_t *ch,
+                                           audio_param_t param)
+{
+    const audio_param_sweep_t *sw = &ch->sweeps[param];
+    if (sw->duration_samples == 0) return sw->target;   /* inactive: hold target */
+    uint64_t e0 = (ch->samples_generated >= sw->start_sample)
+                  ? (ch->samples_generated - sw->start_sample) : 0;
+    float progress = (float)(uint32_t)e0 / (float)(uint32_t)sw->duration_samples;
+    return interpolate_sweep(sw->start, sw->target, progress, sw->curve);
+}
+
 static inline float audio_eval_mod(const audio_gen_channel_t *ch,
                                    audio_param_t param, uint64_t now_us)
 {

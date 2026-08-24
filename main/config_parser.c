@@ -58,12 +58,32 @@ static void  parse_mod_extras(const char *str, float *out_end, float *out_period
 static inline bool tok_is_dash(const char *t) {
     return t && t[0] == '-' && t[1] == '\0';
 }
-// Parse a v2 pulse-field step value that may carry an interp glyph (>,*,~,^,/,\,_).
-// The glyph is ignored here — sweeps/modulation on the new pulse fields are a
-// follow-up (step value only for now).
-static inline float parse_v2_value(const char *t) {
+// Degrees wrap to 0..359; percent clamps to 0..100. Used by the pulse fields on
+// both line types so start and mod-end values are bounded the same way.
+static inline float wrap_deg(float d) {
+    float r = fmodf(d, 360.0f);
+    return (r < 0.0f) ? r + 360.0f : r;
+}
+static inline float clamp_pct(float v) {
+    return (v < 0.0f) ? 0.0f : (v > 100.0f ? 100.0f : v);
+}
+// Parse a v2 pulse-field value whose field is an ENUM, so an interp glyph is
+// meaningless and deliberately dropped. Compound pulse fields (phase, attack,
+// audio duty) must NOT use this — they capture their interp like the core
+// fields do, or a ramp silently plays as its start value.
+static inline float parse_v2_enum(const char *t) {
     config_interpolation_t dummy;
     return parse_value_with_interpolation(t, &dummy);
+}
+// Capture a compound pulse field: value + interp, plus the end/period extras
+// when the interp is one of the periodic modulations.
+static inline float parse_v2_cell(const char *t, config_interpolation_t *interp,
+                                  float *mod_end, float *mod_period_ms) {
+    float v = parse_value_with_interpolation(t, interp);
+    if (config_interp_is_modulation(*interp)) {
+        parse_mod_extras(t, mod_end, mod_period_ms);
+    }
+    return v;
 }
 // Parse a jitter token "amp" or "amp:period_ms". Returns amp; *period_ms updated
 // only when a ':period' suffix is present (else left at the caller's default).
@@ -1081,6 +1101,17 @@ static void apply_patch_led_entry(const config_led_entry_t *e)
         .r_curve      = patch_field_curve_led(e->r_interp,          dur_ms),
         .g_curve      = patch_field_curve_led(e->g_interp,          dur_ms),
         .b_curve      = patch_field_curve_led(e->b_interp,          dur_ms),
+        /* Pulse shape. Start == target: the live-patch path has no "next entry"
+         * to ramp toward, so these hold at the patch's literal. The timeline
+         * path below wires real start→target pairs. */
+        .phase_start  = e->phase_deg,
+        .phase_target = e->phase_deg,
+        .attack_start = e->attack_ms,
+        .attack_target= e->attack_ms,
+        .phase_curve  = LED_INTERP_NONE,
+        .attack_curve = LED_INTERP_NONE,
+        .phase_set    = (e->present & LED_SET_PHASE)  != 0,
+        .attack_set   = (e->present & LED_SET_ATTACK) != 0,
         .duration_ms  = dur_ms,
     };
 
@@ -1112,6 +1143,14 @@ static void apply_patch_led_entry(const config_led_entry_t *e)
         int wave = mod_wave_from_interp(e->brightness_interp);
         mod_engine_start_led(mask, MOD_LED_BRIGHT, (mod_wave_t)wave,
                              e->brightness, e->bright_mod_end, e->bright_mod_period_ms);
+    }
+    if ((e->present & LED_SET_PHASE) && config_interp_is_modulation(e->phase_interp)) {
+        mod_engine_start_led(mask, MOD_LED_PHASE, (mod_wave_t)mod_wave_from_interp(e->phase_interp),
+                             (float)e->phase_deg, (float)e->phase_mod_end, e->phase_mod_period_ms);
+    }
+    if ((e->present & LED_SET_ATTACK) && config_interp_is_modulation(e->attack_interp)) {
+        mod_engine_start_led(mask, MOD_LED_ATTACK, (mod_wave_t)mod_wave_from_interp(e->attack_interp),
+                             (float)e->attack_ms, (float)e->attack_mod_end, e->attack_mod_period_ms);
     }
     if (config_interp_is_modulation(e->r_interp)) {
         int wave = mod_wave_from_interp(e->r_interp);
@@ -1421,18 +1460,24 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
 
     // ---- v2 trailing pulse fields (positional): [8]=env [9]=phase [10]=attack [11]=jitter ----
     if (token_count >= 9 && !tok_is_dash(tokens[8])) {
-        int env = (int)parse_v2_value(tokens[8]);
+        int env = (int)parse_v2_enum(tokens[8]);
         led_entry->env = (env >= 0 && env <= 3) ? (uint8_t)env : 0;   // 0..3 (square/sine/tri/trapezoid)
         led_entry->present |= LED_SET_ENV;
     }
     if (token_count >= 10 && !tok_is_dash(tokens[9])) {
-        int d = (int)parse_v2_value(tokens[9]) % 360; if (d < 0) d += 360;
-        led_entry->phase_deg = (uint16_t)d;
+        float end_f = 0.0f, period_f = 0.0f;
+        float d = parse_v2_cell(tokens[9], &led_entry->phase_interp, &end_f, &period_f);
+        led_entry->phase_deg = (uint16_t)wrap_deg(d);
+        led_entry->phase_mod_end = (uint16_t)wrap_deg(end_f);
+        led_entry->phase_mod_period_ms = (uint32_t)period_f;
         led_entry->present |= LED_SET_PHASE;
     }
     if (token_count >= 11 && !tok_is_dash(tokens[10])) {
-        float a = parse_v2_value(tokens[10]);
+        float end_f = 0.0f, period_f = 0.0f;
+        float a = parse_v2_cell(tokens[10], &led_entry->attack_interp, &end_f, &period_f);
         led_entry->attack_ms = (uint16_t)(a < 0.0f ? 0.0f : a);
+        led_entry->attack_mod_end = (uint16_t)(end_f < 0.0f ? 0.0f : end_f);
+        led_entry->attack_mod_period_ms = (uint32_t)period_f;
         led_entry->present |= LED_SET_ATTACK;
     }
     if (token_count >= 12 && !tok_is_dash(tokens[11])) {
@@ -1512,23 +1557,32 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
 
     // ---- v2 trailing pulse fields: [8]=duty [9]=env [10]=phase [11]=attack [12]=jitter ----
     if (token_count >= 9 && !tok_is_dash(tokens[8])) {
-        float d = parse_v2_value(tokens[8]);
-        audio_entry->duty_pct = (d < 0.0f) ? 0.0f : (d > 100.0f ? 100.0f : d);
+        float end_f = 0.0f, period_f = 0.0f;
+        float d = parse_v2_cell(tokens[8], &audio_entry->duty_interp, &end_f, &period_f);
+        audio_entry->duty_pct = clamp_pct(d);
+        audio_entry->duty_mod_end = clamp_pct(end_f);
+        audio_entry->duty_mod_period_ms = period_f;
         audio_entry->present |= AUD_SET_DUTY;
     }
     if (token_count >= 10 && !tok_is_dash(tokens[9])) {
-        int env = (int)parse_v2_value(tokens[9]);
+        int env = (int)parse_v2_enum(tokens[9]);
         audio_entry->env = (env >= 0 && env <= 4) ? (uint8_t)env : 4;   // 0..4 (…/tremolo)
         audio_entry->present |= AUD_SET_ENV;
     }
     if (token_count >= 11 && !tok_is_dash(tokens[10])) {
-        int d = (int)parse_v2_value(tokens[10]) % 360; if (d < 0) d += 360;
-        audio_entry->phase_deg = (uint16_t)d;
+        float end_f = 0.0f, period_f = 0.0f;
+        float d = parse_v2_cell(tokens[10], &audio_entry->phase_interp, &end_f, &period_f);
+        audio_entry->phase_deg = (uint16_t)wrap_deg(d);
+        audio_entry->phase_mod_end = (uint16_t)wrap_deg(end_f);
+        audio_entry->phase_mod_period_ms = (uint32_t)period_f;
         audio_entry->present |= AUD_SET_PHASE;
     }
     if (token_count >= 12 && !tok_is_dash(tokens[11])) {
-        float a = parse_v2_value(tokens[11]);
+        float end_f = 0.0f, period_f = 0.0f;
+        float a = parse_v2_cell(tokens[11], &audio_entry->attack_interp, &end_f, &period_f);
         audio_entry->attack_ms = (a < 0.0f) ? 0.0f : a;
+        audio_entry->attack_mod_end = (end_f < 0.0f) ? 0.0f : end_f;
+        audio_entry->attack_mod_period_ms = period_f;
         audio_entry->present |= AUD_SET_ATTACK;
     }
     if (token_count >= 13 && !tok_is_dash(tokens[12])) {
@@ -2017,6 +2071,29 @@ const config_audio_entry_t *find_prev_audio_for_bit(const config_timeline_t *tim
     return NULL;
 }
 
+/* Next audio entry on this channel that actually SETS `present_mask`.
+ *
+ * The core fields ramp toward the immediately-next entry, which is fine because
+ * they are always present on a canonical line. The pulse fields are optional: a
+ * later entry that omits duty means "leave unchanged", not "ramp to zero", so
+ * ramping toward it would drive the value to a zero-initialised struct member.
+ * Scanning for the next entry that sets the field also matches what the web
+ * table shows as the ramp target, so the editor and the device agree. */
+static const config_audio_entry_t *find_next_audio_with(const config_timeline_t *timeline,
+                                                        size_t current_idx,
+                                                        uint8_t channel_bit,
+                                                        uint16_t present_mask)
+{
+    if (!timeline) return NULL;
+    for (size_t i = current_idx + 1; i < timeline->count; i++) {
+        const config_entry_t *e = &timeline->entries[i];
+        if (e->type != CONFIG_ENTRY_AUDIO) continue;
+        if (!((uint8_t)(1u << e->data.audio.channel) & channel_bit)) continue;
+        if (e->data.audio.present & present_mask) return &e->data.audio;
+    }
+    return NULL;
+}
+
 static const config_audio_entry_t *find_next_audio_for_bit(const config_timeline_t *timeline,
                                                             size_t current_idx,
                                                             uint8_t channel_bit)
@@ -2238,6 +2315,9 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             mod_engine_stop_audio(audio->channel, MOD_AUDIO_PAN);
             mod_engine_stop_audio(audio->channel, MOD_AUDIO_VOLUME);
             mod_engine_stop_audio(audio->channel, MOD_AUDIO_MOD);
+            mod_engine_stop_audio(audio->channel, MOD_AUDIO_ISO_DUTY);
+            mod_engine_stop_audio(audio->channel, MOD_AUDIO_ISO_PHASE);
+            mod_engine_stop_audio(audio->channel, MOD_AUDIO_ISO_ATTACK);
             // Start new modulations for fields that use a modulation prefix.
             if (config_interp_is_modulation(audio->freq_interp)) {
                 mod_engine_start_audio(audio->channel, MOD_AUDIO_FREQ,
@@ -2258,6 +2338,25 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 mod_engine_start_audio(audio->channel, MOD_AUDIO_MOD,
                     (mod_wave_t)mod_wave_from_interp(audio->mod_interp),
                     audio->modulation, audio->mod_mod_end, (uint32_t)audio->mod_mod_period_ms);
+            }
+            /* Pulse-shape modulations. Natural units all the way through (duty %,
+             * degrees, ms) — fill_buffer converts when it applies them. */
+            if ((audio->present & AUD_SET_DUTY) && config_interp_is_modulation(audio->duty_interp)) {
+                mod_engine_start_audio(audio->channel, MOD_AUDIO_ISO_DUTY,
+                    (mod_wave_t)mod_wave_from_interp(audio->duty_interp),
+                    audio->duty_pct, audio->duty_mod_end, (uint32_t)audio->duty_mod_period_ms);
+            }
+            if ((audio->present & AUD_SET_PHASE) && config_interp_is_modulation(audio->phase_interp)) {
+                mod_engine_start_audio(audio->channel, MOD_AUDIO_ISO_PHASE,
+                    (mod_wave_t)mod_wave_from_interp(audio->phase_interp),
+                    (float)audio->phase_deg, (float)audio->phase_mod_end,
+                    (uint32_t)audio->phase_mod_period_ms);
+            }
+            if ((audio->present & AUD_SET_ATTACK) && config_interp_is_modulation(audio->attack_interp)) {
+                mod_engine_start_audio(audio->channel, MOD_AUDIO_ISO_ATTACK,
+                    (mod_wave_t)mod_wave_from_interp(audio->attack_interp),
+                    audio->attack_ms, audio->attack_mod_end,
+                    (uint32_t)audio->attack_mod_period_ms);
             }
 
             // ---- Sweep wiring (substep 3.4) ----
@@ -2379,6 +2478,64 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                     if (sw != ESP_OK) {
                         ESP_LOGW(TAG, "mod sweep start failed ch=%d: %s",
                                  audio->channel, esp_err_to_name(sw));
+                    }
+                }
+            }
+
+            /* Pulse-shape ramps (duty / phase / attack).
+             *
+             * Deliberately outside the block above, which ramps toward the
+             * immediately-next entry. These scan forward for the next entry that
+             * actually SETS the field: an entry omitting duty means "leave
+             * unchanged", so ramping toward its zero-initialised duty_pct would
+             * drive the pulse to 0% instead of holding. A field with no later
+             * setter simply doesn't ramp — the same "holds" the web table shows. */
+            {
+                const uint8_t pulse_bit = (uint8_t)(1u << audio->channel);
+                const struct {
+                    uint16_t               present_bit;
+                    config_interpolation_t interp;
+                    audio_param_t          param;
+                    float                  start;
+                    const char            *name;
+                } pulse[] = {
+                    { AUD_SET_DUTY,   audio->duty_interp,   AUDIO_PARAM_ISO_DUTY,
+                      audio->duty_pct,         "duty"   },
+                    { AUD_SET_PHASE,  audio->phase_interp,  AUDIO_PARAM_ISO_PHASE,
+                      (float)audio->phase_deg, "phase"  },
+                    { AUD_SET_ATTACK, audio->attack_interp, AUDIO_PARAM_ISO_ATTACK,
+                      audio->attack_ms,        "attack" },
+                };
+                for (size_t pi = 0; pi < sizeof(pulse) / sizeof(pulse[0]); pi++) {
+                    if (!(audio->present & pulse[pi].present_bit))       continue;
+                    if (pulse[pi].interp == CONFIG_INTERP_NONE)          continue;
+                    if (config_interp_is_modulation(pulse[pi].interp))   continue;  /* started above */
+
+                    const config_audio_entry_t *nx =
+                        find_next_audio_with(timeline, entry_idx, pulse_bit, pulse[pi].present_bit);
+                    if (nx == NULL) continue;   /* nothing later sets it — hold */
+
+                    float target = (pulse[pi].param == AUDIO_PARAM_ISO_DUTY)  ? nx->duty_pct
+                                 : (pulse[pi].param == AUDIO_PARAM_ISO_PHASE) ? (float)nx->phase_deg
+                                 :                                              nx->attack_ms;
+                    uint32_t win_ms = nx->time_ms - audio->time_ms;
+                    uint64_t win_samples = ((uint64_t)win_ms * AUDIO_GEN_SAMPLE_RATE) / 1000ULL;
+
+                    esp_err_t sw = lock_held
+                        ? audio_generator_start_sweep_locked(audio->channel, pulse[pi].param,
+                                                             pulse[pi].start, target, win_samples,
+                                                             interp_to_audio_curve(pulse[pi].interp))
+                        : audio_generator_start_sweep(audio->channel, pulse[pi].param,
+                                                      pulse[pi].start, target, win_samples,
+                                                      interp_to_audio_curve(pulse[pi].interp));
+#ifdef CONFIG_TIMELINE_DEBUG
+                    ESP_LOGI(TAG, "Timeline sweep: ch=%d param=%s %.2f→%.2f over %ums curve=%d",
+                             audio->channel, pulse[pi].name, pulse[pi].start, target,
+                             win_ms, (int)pulse[pi].interp);
+#endif
+                    if (sw != ESP_OK) {
+                        ESP_LOGW(TAG, "%s sweep start failed ch=%d: %s",
+                                 pulse[pi].name, audio->channel, esp_err_to_name(sw));
                     }
                 }
             }
@@ -2615,6 +2772,29 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             sweep_spec.b_curve  = interp_to_led_curve(led->b_interp);
             bucket_has_sweep = true;
         }
+        /* Pulse shape. Both ends must actually carry the field: an entry that
+         * omits phase means "leave unchanged", so ramping toward its
+         * zero-initialised phase_deg would drag the offset to 0 instead of
+         * holding. Same rule the audio side uses, and the same "holds" the web
+         * table reports when nothing later sets the field. */
+        if ((led->present & LED_SET_PHASE) && (next_bit->present & LED_SET_PHASE) &&
+            led->phase_interp != CONFIG_INTERP_NONE &&
+            !config_interp_is_modulation(led->phase_interp)) {
+            sweep_spec.phase_start  = led->phase_deg;
+            sweep_spec.phase_target = next_bit->phase_deg;
+            sweep_spec.phase_curve  = interp_to_led_curve(led->phase_interp);
+            sweep_spec.phase_set    = true;
+            bucket_has_sweep = true;
+        }
+        if ((led->present & LED_SET_ATTACK) && (next_bit->present & LED_SET_ATTACK) &&
+            led->attack_interp != CONFIG_INTERP_NONE &&
+            !config_interp_is_modulation(led->attack_interp)) {
+            sweep_spec.attack_start  = led->attack_ms;
+            sweep_spec.attack_target = next_bit->attack_ms;
+            sweep_spec.attack_curve  = interp_to_led_curve(led->attack_interp);
+            sweep_spec.attack_set    = true;
+            bucket_has_sweep = true;
+        }
 
         if (!bucket_has_sweep) {
             // This bucket's next entry has no `>` fields — fall to no-sweep path
@@ -2710,6 +2890,24 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     if (led->present & LED_SET_PHASE)  led_matrix_set_phase_masked(led->channel_mask, (int16_t)led->phase_deg);
     if (led->present & LED_SET_ATTACK) led_matrix_set_attack_masked(led->channel_mask, led->attack_ms);
     if (led->present & LED_SET_JITTER) led_matrix_set_jitter_masked(led->channel_mask, led->jitter_amp_hz, led->jitter_period_ms);
+
+    /* Pulse-shape modulation. Cleared first so a new entry preempts whatever was
+     * running, mirroring the audio path; a plain value then leaves the field on
+     * its sweep/step, which is what clear_mod restores. */
+    mod_engine_stop_led(led->channel_mask, MOD_LED_PHASE);
+    mod_engine_stop_led(led->channel_mask, MOD_LED_ATTACK);
+    if ((led->present & LED_SET_PHASE) && config_interp_is_modulation(led->phase_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_PHASE,
+                             (mod_wave_t)mod_wave_from_interp(led->phase_interp),
+                             (float)led->phase_deg, (float)led->phase_mod_end,
+                             led->phase_mod_period_ms);
+    }
+    if ((led->present & LED_SET_ATTACK) && config_interp_is_modulation(led->attack_interp)) {
+        mod_engine_start_led(led->channel_mask, MOD_LED_ATTACK,
+                             (mod_wave_t)mod_wave_from_interp(led->attack_interp),
+                             (float)led->attack_ms, (float)led->attack_mod_end,
+                             led->attack_mod_period_ms);
+    }
 
     // Re-acquire audio lock now that LED dispatch (including any vTaskDelays) is complete.
     if (lock_held) {

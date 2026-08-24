@@ -71,6 +71,20 @@ typedef struct {
     led_interp_t r_curve;          /**< Interpolation curve for red */
     led_interp_t g_curve;          /**< Interpolation curve for green */
     led_interp_t b_curve;          /**< Interpolation curve for blue */
+    /* Pulse-shape params. Compound cells in .ledc, so they ramp like the rest.
+     * Degrees for phase (0..359), milliseconds for the trapezoid edge. */
+    uint16_t phase_start;          /**< Phase offset start (degrees) */
+    uint16_t phase_target;         /**< Phase offset target (degrees) */
+    uint16_t attack_start;         /**< Trapezoid edge start (ms) */
+    uint16_t attack_target;        /**< Trapezoid edge target (ms) */
+    led_interp_t phase_curve;      /**< Interpolation curve for phase */
+    led_interp_t attack_curve;     /**< Interpolation curve for attack */
+    /* Whether this spec carries the field at all. Needed because 0 is a
+     * legitimate phase (and attack), so the target value cannot double as a
+     * "was it set?" flag the way a sentinel would. Absent => the channel keeps
+     * whatever it had, which is the '-' leave-unchanged semantics. */
+    bool     phase_set;
+    bool     attack_set;
     uint32_t duration_ms;          /**< Sweep duration in milliseconds */
 } led_sweep_spec_t;
 
@@ -200,6 +214,12 @@ void led_matrix_set_carrier_masked(uint8_t channel_mask, uint8_t wave);
 
 /** @brief Per-channel trapezoid edge duration (ms, ≤60) on the masked channels. */
 void led_matrix_set_attack_masked(uint8_t channel_mask, uint16_t ms);
+
+/* Periodic modulation on the pulse-shape fields (the ~^/\_ prefixes). */
+esp_err_t led_matrix_set_mod_phase_masked(uint8_t channel_mask, uint8_t wave,
+                                          uint16_t start_deg, uint16_t end_deg, uint32_t period_ms);
+esp_err_t led_matrix_set_mod_attack_masked(uint8_t channel_mask, uint8_t wave,
+                                           uint16_t start_ms, uint16_t end_ms, uint32_t period_ms);
 
 /** @brief Per-channel flicker-rate jitter (amp Hz ≤5, 0=off; period ms ≥1000) on
  *         the masked channels. */

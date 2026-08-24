@@ -47,6 +47,8 @@ typedef enum {
     MOD_LED_R,
     MOD_LED_G,
     MOD_LED_B,
+    MOD_LED_PHASE,
+    MOD_LED_ATTACK,
     MOD_LED_FIELD_COUNT
 } mod_led_field_t;
 
@@ -55,6 +57,10 @@ typedef enum {
     MOD_AUDIO_PAN,
     MOD_AUDIO_VOLUME,
     MOD_AUDIO_MOD,
+    /* Isochronic pulse shape — compound cells in .ledc, so they modulate too. */
+    MOD_AUDIO_ISO_DUTY,
+    MOD_AUDIO_ISO_PHASE,
+    MOD_AUDIO_ISO_ATTACK,
     MOD_AUDIO_FIELD_COUNT
 } mod_audio_field_t;
 

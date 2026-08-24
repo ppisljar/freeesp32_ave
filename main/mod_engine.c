@@ -69,6 +69,16 @@ esp_err_t mod_engine_start_led(uint8_t channel_mask, mod_led_field_t field,
             return led_matrix_set_mod_color_masked(channel_mask, (uint8_t)wave,
                                                    comp, s, e, period_ms);
         }
+        case MOD_LED_PHASE: {
+            uint16_t s = (uint16_t)(((start < 0) ? 0 : (uint32_t)start) % 360u);
+            uint16_t e = (uint16_t)(((end   < 0) ? 0 : (uint32_t)end)   % 360u);
+            return led_matrix_set_mod_phase_masked(channel_mask, (uint8_t)wave, s, e, period_ms);
+        }
+        case MOD_LED_ATTACK: {
+            uint16_t s = (start < 0) ? 0 : ((start > 60000) ? 60000 : (uint16_t)start);
+            uint16_t e = (end   < 0) ? 0 : ((end   > 60000) ? 60000 : (uint16_t)end);
+            return led_matrix_set_mod_attack_masked(channel_mask, (uint8_t)wave, s, e, period_ms);
+        }
         default:
             return ESP_ERR_INVALID_ARG;
     }
@@ -82,6 +92,23 @@ esp_err_t mod_engine_stop_led(uint8_t channel_mask, mod_led_field_t field)
 
 /* -------------------------------------------------------------- audio ------ */
 
+/* Single source of truth for field -> audio_param_t. Returns false for an
+ * unknown field rather than defaulting, so adding a field and forgetting to map
+ * it fails loudly instead of quietly modulating the wrong parameter. */
+static bool audio_param_for_field(mod_audio_field_t field, audio_param_t *out)
+{
+    switch (field) {
+        case MOD_AUDIO_FREQ:       *out = AUDIO_PARAM_FREQUENCY;  return true;
+        case MOD_AUDIO_PAN:        *out = AUDIO_PARAM_PAN;        return true;
+        case MOD_AUDIO_VOLUME:     *out = AUDIO_PARAM_AMPLITUDE;  return true;
+        case MOD_AUDIO_MOD:        *out = AUDIO_PARAM_MOD_FREQ;   return true;
+        case MOD_AUDIO_ISO_DUTY:   *out = AUDIO_PARAM_ISO_DUTY;   return true;
+        case MOD_AUDIO_ISO_PHASE:  *out = AUDIO_PARAM_ISO_PHASE;  return true;
+        case MOD_AUDIO_ISO_ATTACK: *out = AUDIO_PARAM_ISO_ATTACK; return true;
+        default: return false;
+    }
+}
+
 esp_err_t mod_engine_start_audio(uint8_t channel, mod_audio_field_t field,
                                  mod_wave_t wave, float start, float end,
                                  uint32_t period_ms)
@@ -90,14 +117,12 @@ esp_err_t mod_engine_start_audio(uint8_t channel, mod_audio_field_t field,
         return ESP_ERR_INVALID_ARG;
     }
     audio_param_t p;
+    if (!audio_param_for_field(field, &p)) return ESP_ERR_INVALID_ARG;
     float s = start, e = end;
-    switch (field) {
-        case MOD_AUDIO_FREQ:   p = AUDIO_PARAM_FREQUENCY; break;
-        case MOD_AUDIO_PAN:    p = AUDIO_PARAM_PAN;       s /= 100.0f; e /= 100.0f; break;
-        case MOD_AUDIO_VOLUME: p = AUDIO_PARAM_AMPLITUDE; s /= 100.0f; e /= 100.0f; break;
-        case MOD_AUDIO_MOD:    p = AUDIO_PARAM_MOD_FREQ;  break;
-        default: return ESP_ERR_INVALID_ARG;
-    }
+    /* pan/volume are carried as percent in .ledc but held 0..1 internally. The
+     * pulse-shape params keep their natural units (duty %, degrees, ms) — the
+     * conversion happens where they are applied, in fill_buffer. */
+    if (field == MOD_AUDIO_PAN || field == MOD_AUDIO_VOLUME) { s /= 100.0f; e /= 100.0f; }
     /* IMPORTANT: use the _locked variant. mod_engine is called from the
      * timeline dispatch path in config_parser, which holds audio_gen_mutex
      * across the entire batch. The plain audio_generator_set_mod() would
@@ -109,13 +134,7 @@ esp_err_t mod_engine_start_audio(uint8_t channel, mod_audio_field_t field,
 esp_err_t mod_engine_stop_audio(uint8_t channel, mod_audio_field_t field)
 {
     audio_param_t p;
-    switch (field) {
-        case MOD_AUDIO_FREQ:   p = AUDIO_PARAM_FREQUENCY; break;
-        case MOD_AUDIO_PAN:    p = AUDIO_PARAM_PAN;       break;
-        case MOD_AUDIO_VOLUME: p = AUDIO_PARAM_AMPLITUDE; break;
-        case MOD_AUDIO_MOD:    p = AUDIO_PARAM_MOD_FREQ;  break;
-        default: return ESP_ERR_INVALID_ARG;
-    }
+    if (!audio_param_for_field(field, &p)) return ESP_ERR_INVALID_ARG;
     /* _locked: caller (timeline executor) already holds audio_gen_mutex. */
     return audio_generator_clear_mod_locked(channel, p);
 }
@@ -130,10 +149,8 @@ void mod_engine_stop_all(void)
     }
     for (uint8_t ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
         for (uint8_t f = 0; f < MOD_AUDIO_FIELD_COUNT; f++) {
-            audio_param_t p = (f == MOD_AUDIO_FREQ)   ? AUDIO_PARAM_FREQUENCY
-                            : (f == MOD_AUDIO_PAN)    ? AUDIO_PARAM_PAN
-                            : (f == MOD_AUDIO_VOLUME) ? AUDIO_PARAM_AMPLITUDE
-                            :                            AUDIO_PARAM_MOD_FREQ;
+            audio_param_t p;
+            if (!audio_param_for_field((mod_audio_field_t)f, &p)) continue;
             /* _locked: caller already holds audio_gen_mutex. See note above. */
             audio_generator_clear_mod_locked(ch, p);
         }

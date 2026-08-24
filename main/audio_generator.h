@@ -66,6 +66,13 @@ typedef enum {
     AUDIO_PARAM_AMPLITUDE,
     AUDIO_PARAM_PAN,
     AUDIO_PARAM_MOD_FREQ,
+    /* Isochronic pulse SHAPE params. Compound cells in .ledc, so they ramp and
+     * modulate like the four above — but they move over seconds rather than at
+     * audio rate, so fill_buffer evaluates them once per block instead of
+     * per-sample. Units are the natural ones: duty %, phase degrees, attack ms. */
+    AUDIO_PARAM_ISO_DUTY,
+    AUDIO_PARAM_ISO_PHASE,
+    AUDIO_PARAM_ISO_ATTACK,
     AUDIO_PARAM_COUNT
 } audio_param_t;
 

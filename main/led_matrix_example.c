@@ -88,6 +88,7 @@ typedef struct {
     volatile uint32_t cached_attack_q16;   // (clamp(attack_ms*1000) << 16) / cycle_us
     volatile uint16_t a3_cache_duty_q8;    // duty_q8 the A3 cache was computed for
     volatile uint32_t a3_cache_freq;       // frequency_milliHz the A3 cache was computed for
+    volatile uint16_t a3_cache_attack_ms;  // attack_ms the A3 cache was computed for
     // DC (freq==0) constant-output gate: when set, the last DC recompute produced a
     // value that cannot change until a sweep/mod becomes active, so per-tick recompute
     // is skipped. Cleared whenever a sweep/mod is (re)installed or channel (re)starts.
@@ -120,6 +121,8 @@ typedef struct {
     led_sweep_param_t sw_freq;        // milliHz units
     led_sweep_param_t sw_duty;        // Q8.8 units
     led_sweep_param_t sw_brightness;  // Q8.8 units
+    led_sweep_param_t sw_phase;       // degrees (0..359)
+    led_sweep_param_t sw_attack;      // milliseconds
     led_sweep_param_t sw_r;           // Q8.8 units
     led_sweep_param_t sw_g;           // Q8.8 units
     led_sweep_param_t sw_b;           // Q8.8 units
@@ -135,6 +138,8 @@ typedef struct {
     led_mod_slot_t mod_r;
     led_mod_slot_t mod_g;
     led_mod_slot_t mod_b;
+    led_mod_slot_t mod_phase;    // degrees (natural units, not Q8.8)
+    led_mod_slot_t mod_attack;   // milliseconds
 } led_flicker_state_t;
 
 // NUM_LED_CHANNELS independent channel states (bits 0..N-1 of channel_mask map to channels 1..N).
@@ -156,6 +161,8 @@ static led_flicker_state_t flicker_state[NUM_LED_CHANNELS] = {
         .sw_freq        = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_duty        = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_brightness  = { .start_q = 0, .target_q = 0, .curve = 0 },
+        .sw_phase       = { .start_q = 0, .target_q = 0, .curve = 0 },
+        .sw_attack      = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_r           = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_g           = { .start_q = 0, .target_q = 0, .curve = 0 },
         .sw_b           = { .start_q = 0, .target_q = 0, .curve = 0 },
@@ -797,7 +804,8 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             portENTER_CRITICAL_ISR(&s_flicker_mux);
             led_sweep_param_t sw_freq = s->sw_freq, sw_duty = s->sw_duty,
                               sw_bri = s->sw_brightness, sw_r = s->sw_r,
-                              sw_g = s->sw_g, sw_b = s->sw_b;
+                              sw_g = s->sw_g, sw_b = s->sw_b,
+                              sw_phase = s->sw_phase, sw_attack = s->sw_attack;
             led_mod_slot_t md_freq = s->mod_freq, md_duty = s->mod_duty,
                            md_bri = s->mod_brightness, md_r = s->mod_r,
                            md_g = s->mod_g, md_b = s->mod_b;
@@ -827,6 +835,25 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             // modulation is active on that field, evaluate it and override.
             // Modulation wins because it's continuous (sweep is one-shot).
             // Frequency (milliHz units) — guard against zero.
+            /* Pulse shape (phase / attack). Evaluated once per flicker cycle
+             * rather than per tick: both are consumed at cycle granularity —
+             * phase as a delay derived from the live period, attack as the
+             * trapezoid edge — so a mid-cycle change could not be observed
+             * anyway, and this keeps the per-tick ISR path untouched.
+             * curve == LED_INTERP_NONE means "not swept": leave the latched
+             * value alone rather than snapping it to a zeroed target. */
+            if (s->mod_phase.active) {
+                int32_t mv = led_eval_mod_iram(&s->mod_phase, now_us);
+                s->phase_offset_deg = (int16_t)(((mv < 0) ? 0 : (uint32_t)mv) >> 8) % 360;
+            } else if (sw_phase.curve != LED_INTERP_NONE) {
+                s->phase_offset_deg = (int16_t)(led_interp_param(&sw_phase, progress_q16) % 360u);
+            }
+            if (s->mod_attack.active) {
+                int32_t mv = led_eval_mod_iram(&s->mod_attack, now_us);
+                s->attack_ms = (uint16_t)(((mv < 0) ? 0 : (uint32_t)mv) >> 8);
+            } else if (sw_attack.curve != LED_INTERP_NONE) {
+                s->attack_ms = (uint16_t)led_interp_param(&sw_attack, progress_q16);
+            }
             uint32_t new_freq = led_interp_param(&sw_freq, progress_q16);
             if (md_freq.active) {
                 int32_t mv = led_eval_mod_iram(&md_freq, now_us);
@@ -924,17 +951,22 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             // the strip continuously. Cheap for DIRECT/DOTSTAR; heavier for NEOPIXEL.
             //
             // A3: duty_q16/attack_q16 depend only on cycle-boundary-stable inputs
-            // (duty_q8, attack_ms, cycle_duration_us). Cache keyed on (duty_q8,
-            // cd_cache_freq): recompute the two divides ONLY when either changes,
-            // otherwise read the cached values. Bit-identical to the per-tick form
-            // (attack_ms is latched at channel start and never changes at run time).
+            // (duty_q8, attack_ms, cycle_duration_us). Cache keyed on all three:
+            // recompute the two divides ONLY when one changes, otherwise read the
+            // cached values — bit-identical to the per-tick form.
+            //
+            // attack_ms used to be latched at channel start and never change, so
+            // the key omitted it. It is a compound cell now and can ramp, so a
+            // key without it would serve a stale edge width until duty or
+            // frequency happened to move.
             uint32_t cyc_us = (uint32_t)cycle_duration_us;
             // Key on cd_cache_freq (the frequency cyc_us was derived from, updated at
             // the cycle boundary) — NOT cur_freq_mhz (read at top-of-tick, still the
             // OLD rate on a boundary tick that changed frequency). This guarantees
             // attack_q16 (which depends on cyc_us) recomputes on the exact tick the
             // rate changes, so a trapezoid carrier stays bit-identical across sweeps.
-            if (s->a3_cache_duty_q8 != s->duty_q8 || s->a3_cache_freq != s->cd_cache_freq) {
+            if (s->a3_cache_duty_q8 != s->duty_q8 || s->a3_cache_freq != s->cd_cache_freq ||
+                s->a3_cache_attack_ms != s->attack_ms) {
                 uint32_t d16 = ((uint32_t)s->duty_q8 * 65536u) / LED_BRIGHTNESS_Q8_MAX;
                 uint32_t attack_us = (uint32_t)s->attack_ms * 1000u;
                 if (attack_us > 60000u) attack_us = 60000u;   // keep <<16 in 32-bit
@@ -943,6 +975,7 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
                 s->cached_attack_q16 = a16;
                 s->a3_cache_duty_q8  = s->duty_q8;
                 s->a3_cache_freq     = s->cd_cache_freq;
+                s->a3_cache_attack_ms = s->attack_ms;
             }
             uint32_t duty_q16   = s->cached_duty_q16;
             uint32_t attack_q16 = s->cached_attack_q16;
@@ -1789,6 +1822,37 @@ esp_err_t led_matrix_set_mod_color_masked(uint8_t channel_mask, uint8_t wave,
     return ESP_OK;
 }
 
+/* Pulse-shape variants — degrees / milliseconds, stored Q8.8 like the rest so
+ * s_apply_mod and led_eval_mod_iram need no special case; the cycle-boundary
+ * consumer shifts back down. */
+esp_err_t led_matrix_set_mod_phase_masked(uint8_t channel_mask, uint8_t wave,
+                                           uint16_t start_deg, uint16_t end_deg, uint32_t period_ms)
+{
+    int32_t s_q = (int32_t)(start_deg % 360u) * 256;
+    int32_t e_q = (int32_t)(end_deg   % 360u) * 256;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        portENTER_CRITICAL(&s_flicker_mux);
+        s_apply_mod(&flicker_state[ch].mod_phase, wave, s_q, e_q, period_ms);
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
+esp_err_t led_matrix_set_mod_attack_masked(uint8_t channel_mask, uint8_t wave,
+                                            uint16_t start_ms, uint16_t end_ms, uint32_t period_ms)
+{
+    int32_t s_q = (int32_t)start_ms * 256;
+    int32_t e_q = (int32_t)end_ms   * 256;
+    for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        if (!(channel_mask & (1u << ch))) continue;
+        portENTER_CRITICAL(&s_flicker_mux);
+        s_apply_mod(&flicker_state[ch].mod_attack, wave, s_q, e_q, period_ms);
+        portEXIT_CRITICAL(&s_flicker_mux);
+    }
+    return ESP_OK;
+}
+
 /* Clear any active modulation on the named field for matching channels.
  * Sweep / step value (whichever is currently in sw_X) takes over again. */
 esp_err_t led_matrix_clear_mod_masked(uint8_t channel_mask, uint8_t field)
@@ -1803,6 +1867,8 @@ esp_err_t led_matrix_clear_mod_masked(uint8_t channel_mask, uint8_t field)
             case 3: flicker_state[ch].mod_r.active          = false; break;
             case 4: flicker_state[ch].mod_g.active          = false; break;
             case 5: flicker_state[ch].mod_b.active          = false; break;
+            case 6: flicker_state[ch].mod_phase.active      = false; break;
+            case 7: flicker_state[ch].mod_attack.active     = false; break;
         }
         flicker_state[ch].dc_constant_valid = false;   // A4: sweep/step value takes over
         portEXIT_CRITICAL(&s_flicker_mux);
@@ -1945,6 +2011,36 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
             .target_q = (uint32_t)spec->b_target * 256u,
             .curve    = (uint8_t)spec->b_curve,
         };
+        /* Pulse shape. Natural units, not Q8.8 — degrees and milliseconds are
+         * already integers and the ISR consumes them directly. Like the params
+         * above, a running channel continues from its LIVE value so an
+         * interrupted ramp does not snap. */
+        {
+            uint16_t eff_phase_start  = (spec->phase_curve  != LED_INTERP_NONE && already_active)
+                                        ? (uint16_t)s->phase_offset_deg : spec->phase_start;
+            uint16_t eff_attack_start = (spec->attack_curve != LED_INTERP_NONE && already_active)
+                                        ? s->attack_ms : spec->attack_start;
+            s->sw_phase = (led_sweep_param_t){
+                .start_q  = eff_phase_start,
+                .target_q = spec->phase_target,
+                .curve    = (uint8_t)spec->phase_curve,
+            };
+            s->sw_attack = (led_sweep_param_t){
+                .start_q  = eff_attack_start,
+                .target_q = spec->attack_target,
+                .curve    = (uint8_t)spec->attack_curve,
+            };
+            /* Non-swept fields hold their literal — but only when the entry
+             * actually carried the field. An absent field means "leave
+             * unchanged", and 0 is a legitimate phase, so this keys off the
+             * explicit _set flag rather than a sentinel value. */
+            if (spec->phase_curve == LED_INTERP_NONE && spec->phase_set) {
+                s->phase_offset_deg = (int16_t)(spec->phase_target % 360u);
+            }
+            if (spec->attack_curve == LED_INTERP_NONE && spec->attack_set) {
+                s->attack_ms = spec->attack_target;
+            }
+        }
         s->sweep_start_us    = sweep_start_us;
         s->sweep_duration_us = sweep_duration_us;
         s->dc_constant_valid = false;   // A4: republish on (re)start / new sweep

@@ -120,6 +120,13 @@ typedef struct {
     uint16_t attack_ms;       // trapezoid edge duration (ms)
     float    jitter_amp_hz;   // flicker-rate jitter amplitude (Hz, 0=off)
     float    jitter_period_ms;// flicker-rate jitter wander period (ms)
+    /* phase/attack are compound cells per ledc_format.md, so they carry interp
+     * like the core fields above. env is an enum (never ramped) and jitter is
+     * not a compound cell in the format, so neither gets one. */
+    config_interpolation_t phase_interp;
+    config_interpolation_t attack_interp;
+    uint16_t phase_mod_end,  attack_mod_end;
+    uint32_t phase_mod_period_ms, attack_mod_period_ms;
     uint16_t present;         // LED_SET_* bitmask: which fields this line sets ('-'/absent → leave)
 } config_led_entry_t;
 
@@ -150,6 +157,15 @@ typedef struct {
     float    attack_ms;       // raised edge duration (ms)
     float    jitter_amp_hz;   // beat-offset jitter amplitude (Hz, 0=off)
     float    jitter_period_ms;// beat-offset jitter period (ms)
+    /* duty/phase/attack are compound cells per ledc_format.md — same treatment
+     * as the core fields above. env/jitter are not. */
+    config_interpolation_t duty_interp;
+    config_interpolation_t phase_interp;
+    config_interpolation_t attack_interp;
+    float    duty_mod_end,   duty_mod_period_ms;
+    uint16_t phase_mod_end;
+    uint32_t phase_mod_period_ms;
+    float    attack_mod_end, attack_mod_period_ms;
     uint16_t present;         // AUD_SET_* bitmask: which fields this line sets ('-'/absent → leave)
 } config_audio_entry_t;
 
