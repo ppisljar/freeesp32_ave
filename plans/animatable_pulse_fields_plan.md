@@ -1,6 +1,23 @@
 # Animatable pulse fields — `phase`, `attack`, audio `duty`
 
-**Status:** PLANNED — not started.
+**Status:** Steps 1–4 DONE and hardware-verified 2026-08-24 (OTA). Step 5 (web
+UI editor) NOT started — see the note at the end.
+
+Hardware verification, read live from `/api/state` while the timeline ran:
+
+| What | Expected | Measured |
+|---|---|---|
+| audio duty ramp 10→80 / 5 s | 38.0 @ t=2000 | **37.6** |
+| " | 73.7 @ t=4550 | **73.4** |
+| audio duty mod `~10:80:5000` | oscillate 10↔80, 5 s period | **10.8 → 78.3 → 12.9 → 77.7**, `modf.duty=true` |
+| audio phase ramp 0→180 / 10 s | 10.8° @ 0.6 s in | **10.9°** |
+| audio attack ramp 3→40 ms / 10 s | 16.8 @ 3.74 s | **16.7** |
+| " | 32.4 @ 7.94 s | **32.3**, then holds 40.0 |
+
+Real-time path unaffected: 0 write errors, 0 short writes, 0 gen failures across
+8892 buffers; all health subsystems ok. IRAM ended at the pre-change baseline
+(126187 bytes, 4885 free) after the de-inlining work — the feature costs DRAM
+only (+6.9 KB).
 
 ## Problem
 

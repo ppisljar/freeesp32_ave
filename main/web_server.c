@@ -2212,16 +2212,21 @@ static esp_err_t state_handler(httpd_req_t *req)
     bool tl_running     = (config_parser_get_timeline_position() > 0);
     uint32_t tl_pos     = config_parser_get_timeline_position();
 
-    /* 5 KB buffer: 8 LED + 16 audio channels + the diag subsystem-health object.
-     * If channel counts grow much larger, switch to a streaming write via
-     * httpd_resp_send_chunk. */
-    char *buf = (char *)malloc(5120);
+    /* 8 KB buffer: 8 LED + 16 audio channels + the diag subsystem-health object.
+     * Was 5 KB, which the pulse-shape fields overflowed: duty/phase/attack plus
+     * their three modulation flags add ~87 bytes to every one of the 16 audio
+     * channels, about 1.4 KB. The APPEND macro caught it and returned 500
+     * rather than truncating, so the failure was loud — but size this with
+     * headroom rather than to the current fit. If channel counts grow much
+     * larger, switch to a streaming write via httpd_resp_send_chunk. */
+    #define STATE_BUF_SZ 8192
+    char *buf = (char *)malloc(STATE_BUF_SZ);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
     char *p   = buf;
-    char *end = buf + 5120;
+    char *end = buf + STATE_BUF_SZ;
 
     #define APPEND(...) do { \
         int _n = snprintf(p, end - p, __VA_ARGS__); \
