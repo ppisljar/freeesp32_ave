@@ -19,8 +19,8 @@
 #   glyphs: >lin *quad ~sine ^tri /sawup \sawdn _square ; '-' = keep current
 
 # ===== 0 s — STEP one — 8-channel tone bed (setup). LED: 2 masks, 2 flicker rates (multi-mask)
-S 0 default 20 "this is a test"
-S 2000 default 20 "one"
+S 0 default 10 "this is a test"
+S 2000 default 10 "one"
 0 6  50 30 255 0 0 1            # mask1: 6 Hz theta (red)
 0 10 50 30 0 0 255 2            # mask2: 10 Hz alpha (blue)
 A 0 220 -40 50 0 1 0 0          # ch1 sine bed, mid-left
@@ -34,8 +34,8 @@ A 0 440  0  50 0 8 0 0          # ch8 sine bed
 
 # ===== 10 s — STEP two — isochronic gates: audio env 0/1/2/3(+attack)/4 across channels
 #            LED: carrier env 0 (square) vs env 1 (sine) on the two masks, steady (freq 0)
-S 10000 default 20 "this is a test"
-S 12000 default 20 "two"
+S 10000 default 10 "this is a test"
+S 12000 default 10 "two"
 10000 0 50 40 255 0 0 1 0       # mask1: env 0 square carrier (red), steady
 10000 0 50 40 0 255 0 2 1       # mask2: env 1 sine carrier (green), steady
 A 10000 220 0 50 8 1 0 0 50 0   # ch1 env 0 square gate (duty 50)
@@ -46,8 +46,8 @@ A 10000 330 0 50 8 5 0 0 50 4   # ch5 env 4 sine tremolo (legacy bipolar)
 
 # ===== 20 s — STEP three — pulse duty + phase + attack + jitter on audio (env gates)
 #            LED: carrier env 2 (triangle) vs env 3 (trapezoid, attack) on the two masks
-S 20000 default 20 "this is a test"
-S 22000 default 20 "three"
+S 20000 default 10 "this is a test"
+S 22000 default 10 "three"
 20000 6 50 30 0 0 255 1 2       # mask1: 6 Hz, env 2 triangle carrier (blue)
 20000 6 50 30 255 255 0 2 3 0 10    # mask2: 6 Hz, env 3 trapezoid carrier (attack 10, yellow)
 A 20000 220 0 50 8 1 0 0 20 0   # ch1 pulse duty 20% (narrow square gate)
@@ -58,8 +58,8 @@ A 20000 330 0 50 8 5 0 0 50 3 0 20 0.5  # ch5 trapezoid gate, attack 20 ms + mod
 
 # ===== 30 s — STEP four — frequency sweeps: linear (>) and quadratic (*) + volume ramp (>)
 #            LED: flicker jitter on mask1 (8 Hz, anti-habituation) + steady cyan mask2
-S 30000 default 20 "this is a test"
-S 32000 default 20 "four"
+S 30000 default 10 "this is a test"
+S 32000 default 10 "four"
 30000 8 50 30 255 0 255 1 0 0 3 1.5  # mask1: 8 Hz + flicker jitter 1.5 Hz (magenta)
 30000 0 50 45 0 255 255 2 0     # mask2: steady cyan (freq 0)
 A 30000 >200 0 50 0 1           # ch1 linear freq sweep 200 -> 500 (clears gate)
@@ -68,8 +68,8 @@ A 30000 300 0 >20 0 3           # ch3 volume ramp 20 -> 60
 
 # ===== 40 s — STEP five — closing: ~5 s linear fade-out of all 8 audio channels + LED masks
 #            (ch1/ch2 sweep + ch3 vol-ramp targets are folded into these fade-start entries)
-S 40000 default 20 "this is a test"
-S 42000 default 20 "five"
+S 40000 default 10 "this is a test"
+S 42000 default 10 "five"
 40000 0 50 >30 255 0 255 1     # mask1 brightness ramp -> 0 (magenta)
 40000 0 50 >45 0 255 255 2     # mask2 brightness ramp -> 0 (cyan)
 A 40000 500 - >50 0 1          # ch1 sweep target 500 Hz, then vol ramp to 0 (targets at 45 s)

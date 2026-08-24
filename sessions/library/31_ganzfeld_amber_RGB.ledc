@@ -12,23 +12,23 @@
 0 0 100 >0 255 40 0 6            # outer: same amber-red (uniform Ganzfeld field)
 A 0 200 0 >0 0 1 0 5              # ch1 pink-noise Ganzfeld field; vol fade-in
 A 0 253 0 >0 0 2 260 0           # ch2 binaural 253 / R260 = 7 Hz theta underlay; vol fade-in
-S 3000 default 20 "Eyes closed, gaze soft. Rest in the warm, even glow and the steady wash of sound."
+S 3000 default 10 "Eyes closed, gaze soft. Rest in the warm, even glow and the steady wash of sound."
 15000 0 100 25 255 40 0 9        # inner: 25% cap
 15000 0 100 25 255 40 0 6        # outer
 A 60000 200 0 90 0 1 0 5          # ch1 pink field settled
 A 60000 253 0 50 0 2 260 0        # ch2 theta underlay settled
 
 # --- Stable hold: homogeneous field, no change ---
-S 300000 default 20 "Let your eyes relax into the uniform field. Shapes and colours may begin to drift."
-S 720000 default 20 "Nothing to seek. Just watch whatever arises in the glow."
-S 1080000 default 20 "At ease, open, resting in the even light."
+S 300000 default 10 "Let your eyes relax into the uniform field. Shapes and colours may begin to drift."
+S 720000 default 10 "Nothing to seek. Just watch whatever arises in the glow."
+S 1080000 default 10 "At ease, open, resting in the even light."
 
 # --- Fade out: field + pink + underlay fade to 0 ---
 1200000 0 100 >25 255 40 0 9     # inner: brightness ramp-out
 1200000 0 100 >25 255 40 0 6     # outer
 A 1200000 200 0 *90 0 1 0 5       # ch1 pink quad fade
 A 1200000 253 0 *50 0 2 260 0     # ch2 theta quad fade
-S 1200000 default 20 "Gently returning now. Let the glow and the sound fade away."
+S 1200000 default 10 "Gently returning now. Let the glow and the sound fade away."
 1320000 0 100 0 255 40 0 9       # inner off
 1320000 0 100 0 255 40 0 6       # outer off
 A 1320000 200 0 0 0 1 0 5         # pink 0

@@ -28,7 +28,7 @@
 0 >10 50 >0 255 100 0 15   # LED all-ch: 10 Hz flicker, bright 0-> (10 s ramp-in), amber
 A 0     240 0 >0 0 1 250 0                     # ch1 binaural: carrier 240 / R250 = 10 Hz beat; vol fade-in
 A 0     0 0 >0 0 3 0 5                          # ch3 pink-noise bed (wave 5); vol fade-in
-S 3000 default 20 "Beginning at ten hertz, in alpha. Let your breath slow and your body grow heavy."
+S 3000 default 10 "Beginning at ten hertz, in alpha. Let your breath slow and your body grow heavy."
 
 # t=0:10  Brightness reached the breathing band -> breathing LFO (sine 25<->30% over
 #         10 s ~ 6 breaths/min). Induction only.
@@ -45,7 +45,7 @@ A 45000 240 0 55 0 1 250 0                      # ch1 vol 55, beat holds 10 Hz
 #         plain brightness descent 25->8; color glides amber -> deep red.
 120000 >10 50 >25 >255 >100 >0 15   # LED freq 10->2; bright 25->8; color 255,100,0 -> 180,30,0
 A 120000 >240 0 55 0 1 250 0                    # carrier 240->248 => beat 10->2 over 18 min
-S 120000 default 20 "Drifting down now. Sinking through theta toward deep, slow delta."
+S 120000 default 10 "Drifting down now. Sinking through theta toward deep, slow delta."
 
 # ---------------------------------------------------------------------------
 # t=20:00  Beat 2 Hz reached -> Soft Off begins. Brightness 8->0; quadratic volume
@@ -53,11 +53,11 @@ S 120000 default 20 "Drifting down now. Sinking through theta toward deep, slow 
 1200000 >2 50 >8 >180 >30 >0 15   # LED 2 Hz; bright 8->0; color 180,30,0 -> 150,20,0
 A 1200000 248 0 *55 0 1 250 0                  # beat 2 Hz held; quad vol fade 55->0
 A 1200000 0 0 *16 0 3 0 5                      # pink-noise quad fade 16->0
-S 1200000 default 20 "Falling into deep delta, two hertz. The sound and light are fading. Sleep now."
+S 1200000 default 10 "Falling into deep delta, two hertz. The sound and light are fading. Sleep now."
 
 # ---------------------------------------------------------------------------
 # t=25:00  Soft Off complete: brightness 0 AND volume 0 together -> silent + dark. No loop.
 1500000 2 50 0 150 20 0 15   # 2 Hz, bright 0, dim deep-red (off)
 A 1500000 248 0 0 0 1 250 0                    # ch1 beat 2 Hz, vol 0
 A 1500000 0 0 0 0 3 0 5                        # ch3 pink-noise vol 0
-S 1500000 default 20 "Two hertz, deep sleep. Rest."
+S 1500000 default 10 "Two hertz, deep sleep. Rest."

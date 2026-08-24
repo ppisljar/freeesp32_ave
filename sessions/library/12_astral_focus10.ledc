@@ -23,7 +23,7 @@
 # --- Induction: alpha 10 Hz (00:00-06:00): vol + light fade in ---
 0 0 50 >0 255 80 0 10            # LED steady amber (no flicker), brightness ramps 0->15% over 15 s
 A 0 136 0 >0 0 1 146 0           # ch1 binaural: carrier 136 / freq_r 146 => 10 Hz beat; vol fades 0->40 over 60 s; sine
-S 3000 default 20 "Relax completely. Let the body grow heavy and still, and simply rest."
+S 3000 default 10 "Relax completely. Let the body grow heavy and still, and simply rest."
 15000 0 50 15 255 80 0 10        # brightness reaches 15% (ramp-in >=10 s done)
 30000 0 50 ~6:12:12000 255 80 0 10   # breathing LFO engages: brightness sine 6<->12% over 12 s
 A 60000 136 0 80 0 1 146 0       # vol reaches 40; carrier held 136 => alpha 10 Hz through induction
@@ -31,22 +31,22 @@ A 60000 136 0 80 0 1 146 0       # vol reaches 40; carrier held 136 => alpha 10 
 # --- Descent to theta (06:00-12:00, beat 10->5 Hz) ---
 A 360000 >136 0 80 0 1 146 0     # carrier ramps 136->141 => beat 10->5 over 6 min (~0.83 Hz/min)
 360000 0 50 ~4:10:12000 255 80 0 10  # LED dims further, gentle breathing 4<->10%
-S 360000 default 20 "Let go now, drifting downward, deeper and deeper with every breath."
+S 360000 default 10 "Let go now, drifting downward, deeper and deeper with every breath."
 
 # --- Deep theta plateau: long flat hold (12:00-24:00 = 12 min, beat ~5 Hz) ---
 A 720000 141 0 80 0 1 146 0      # carrier fixed 141 => beat 5 Hz held flat (dwell >> 6 min); "mind awake, body asleep"
 720000 0 50 5 255 80 0 10        # near-dark: steady amber ember ~5%, no flicker, held still
-S 720000 default 20 "Mind awake, body asleep. Rest here at the threshold, quiet and open."
+S 720000 default 10 "Mind awake, body asleep. Rest here at the threshold, quiet and open."
 
 # --- Gentle return to alpha (24:00-29:00, beat 5->10 Hz) ---
 A 1440000 >141 0 80 0 1 146 0    # carrier ramps 141->136 => beat 5->10 over 5 min; resurface, not sleep
 1440000 0 50 >5 255 80 0 10      # brightness ramps 5->12% back up over the return
-S 1440000 default 20 "Gently now. Beginning to return, slowly rising toward the surface."
+S 1440000 default 10 "Gently now. Beginning to return, slowly rising toward the surface."
 
 # --- Soft close (29:00-30:00): vol + brightness fade out ---
 A 1740000 136 0 >80 0 1 146 0    # beat back at alpha 10 Hz; vol ramps 40->0 over final 60 s
 1740000 0 50 >12 255 80 0 10     # brightness fades 12->0 over 60 s (>=10 s), never abrupt
-S 1740000 default 20 "Coming back to the room now, calm, clear, and whole."
+S 1740000 default 10 "Coming back to the room now, calm, clear, and whole."
 A 1800000 136 0 0 0 1 146 0      # end: volume 0
 1800000 0 50 0 255 80 0 10       # end: brightness 0
 

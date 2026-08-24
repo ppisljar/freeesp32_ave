@@ -8,8 +8,8 @@
 # 8 audio channels max. Play via web app (S speech baked into BG).
 
 # ===== seg A @ 0 s — STEP 3: amplitude modulation (mod field, default env=4 sine tremolo) =====
-S 0 default 20 "this is a test"
-S 2000 default 20 "step three, amplitude modulation"
+S 0 default 10 "this is a test"
+S 2000 default 10 "step three, amplitude modulation"
 0 0 50 ~10:60:4000 0 200 255 1
 A 0 220 0 50 3 1                    # ch1 AM 3 Hz
 A 0 247 0 50 6 2                    # ch2 AM 6 Hz
@@ -21,8 +21,8 @@ A 0 220 0 50 0 7 0                  # ch7 mono
 A 0 330 0 50 8 8                    # ch8 AM 8 Hz
 
 # ===== seg B @ 15 s — STEP 6: hard stereo panning (pan -100/+100) =====
-S 15000 default 20 "this is a test"
-S 17000 default 20 "step six, hard panning"
+S 15000 default 10 "this is a test"
+S 17000 default 10 "step six, hard panning"
 15000 8 50 40 255 160 0 1 1 0
 15000 8 50 40 0 100 255 2 1 180
 A 15000 220 -100 50 0 1             # ch1 hard left (AM off: mod 0)
@@ -35,8 +35,8 @@ A 15000 220 0 50 0 7 0             # ch7 mono
 A 15000 440 100 45 0 8            # ch8 stereo pair R
 
 # ===== seg C @ 30 s — STEP 12 heavy state (3 noise + 2 binaural) — plays fine in test2 =====
-S 30000 default 20 "this is a test"
-S 32000 default 20 "step thirteen, the fade"
+S 30000 default 10 "this is a test"
+S 32000 default 10 "step thirteen, the fade"
 30000 4 50 40 0 0 255 1 0
 30000 40 50 40 255 0 0 8 0
 A 30000 120 -40 50 0 1 124         # ch1 binaural 4 Hz
@@ -69,8 +69,8 @@ A 45000 - - 0 - 8
 45000 4 50 0 0 0 255 1 0
 
 # ===== seg D @ 50 s — STEP 1 baseline AFTER the fade: if we hear this, step 13 didn't hang =====
-S 50000 default 20 "this is a test"
-S 52000 default 20 "step one again, recovery"
+S 50000 default 10 "this is a test"
+S 52000 default 10 "step one again, recovery"
 50000 0 50 40 255 160 0 1
 A 50000 220 -60 50 0 1 0 0         # ch1 sine
 A 50000 247 -20 50 0 2 0 1         # ch2 square
@@ -82,7 +82,7 @@ A 50000 0 -40 30 0 7 0 6           # ch7 brown noise
 A 50000 330 0 50 0 8 0 0           # ch8 sine
 
 # ===== 62 s — clean fade-out =====
-S 62000 default 20 "this is a test"
+S 62000 default 10 "this is a test"
 A 62000 - - >50 - 1
 A 62000 - - >50 - 2
 A 62000 - - >50 - 3

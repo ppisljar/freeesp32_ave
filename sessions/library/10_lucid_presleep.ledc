@@ -62,11 +62,11 @@ A 1440000 250 0 >30 40 2                  # t=24:00 SOFT OFF: gamma vol 15 -> 0
 A 1680000 250 0 0 40 2                    # t=28:00 silent
 
 # ---- Speech markers (sparse, calm, at phase transitions) ----------------------
-S 3000 default 20 "Settling into alpha. Let your body grow still while your awareness stays softly awake."
-S 360000 default 20 "Drifting down toward theta, the dream gateway."
-S 960000 default 20 "Resting in theta now. Hold one intention: tonight I will know that I am dreaming."
-S 1200000 default 20 "Let the images drift and form. Watch them, aware, as the body sleeps."
-S 1440000 default 20 "Let go now, and dream aware."
+S 3000 default 10 "Settling into alpha. Let your body grow still while your awareness stays softly awake."
+S 360000 default 10 "Drifting down toward theta, the dream gateway."
+S 960000 default 10 "Resting in theta now. Hold one intention: tonight I will know that I am dreaming."
+S 1200000 default 10 "Let the images drift and form. Watch them, aware, as the body sleeps."
+S 1440000 default 10 "Let go now, and dream aware."
 
 # Soft Off: 24:00-28:00 LED brightness and ALL audio volumes ramp to 0 together.
 # No alpha/SMR exit ramp — the user drifts into sleep primed for lucidity.
