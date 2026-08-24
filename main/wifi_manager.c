@@ -2,6 +2,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "esp_mac.h"
 #include "esp_event.h"
 #include "mdns.h"
 #include "settings.h"
@@ -9,15 +10,28 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include <string.h>
+#include <stdlib.h>
 
 static const char* TAG = "wifi_manager";
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+#define WIFI_STARTED_BIT   BIT2
 
 // Initial association attempts before we give up and fall back to SoftAP. Once
 // associated, reconnects after a drop are unlimited (handled separately).
 #define WIFI_MAX_RETRY     8
+
+// Associating is not the same as being on the network: an AP whose uplink is
+// down will happily accept us and then never answer DHCP. That state raises no
+// event at all, so a bare wait for GOT_IP blocks forever and every init step
+// below wifi_manager_connect() -- web server, mDNS, and the SoftAP fallback
+// itself -- never runs, leaving the device unreachable except over USB. Bound
+// the wait: give each association this long to produce a lease, then drop it
+// and try again, and after WIFI_IP_MAX_ROUNDS give up so the caller can fall
+// back to SoftAP.
+#define WIFI_IP_TIMEOUT_MS   15000
+#define WIFI_IP_MAX_ROUNDS   3
 
 static EventGroupHandle_t s_wifi_event_group;
 static wifi_state_t current_state = WIFI_STATE_DISCONNECTED;
@@ -26,6 +40,7 @@ static wifi_run_mode_t s_run_mode = WIFI_RUN_MODE_STA;
 static esp_netif_t *s_ap_netif = NULL;
 static int s_retry_num = 0;
 static bool s_ever_connected = false;  // got an IP at least once → keep retrying
+static bool s_defer_connect = false;   // hold off auto-connect during the boot scan
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data)
@@ -36,7 +51,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        xEventGroupSetBits(s_wifi_event_group, WIFI_STARTED_BIT);
+        // During the boot scan we drive the association by hand afterwards;
+        // connecting here would race the scan and make it fail.
+        if (!s_defer_connect) {
+            esp_wifi_connect();
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         current_state = WIFI_STATE_DISCONNECTED;
         // Reason code is invaluable for diagnosing flaky links (e.g. reason 8 =
@@ -125,6 +145,48 @@ esp_err_t wifi_manager_init(void)
     return ESP_OK;
 }
 
+/* Log every AP this antenna can hear, including hidden ones.
+ *
+ * A laptop sitting next to the device is not a reliable second opinion: its
+ * scan lists only APs that beacon their SSID, while our STA finds hidden ones
+ * too because it probes for the configured SSID by name. When several APs
+ * share one SSID and only some of them have a working uplink, that difference
+ * is exactly what makes the failure look impossible from the desk. Dump the
+ * radio's own view so BSSID, channel and RSSI are on the record. */
+static void wifi_scan_dump(void)
+{
+    wifi_scan_config_t scan_cfg = { .show_hidden = true };
+    esp_err_t err = esp_wifi_scan_start(&scan_cfg, true /* blocking */);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "boot scan failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    uint16_t num = 0;
+    if (esp_wifi_scan_get_ap_num(&num) != ESP_OK || num == 0) {
+        ESP_LOGW(TAG, "boot scan: no APs visible");
+        return;
+    }
+    if (num > 32) num = 32;
+
+    wifi_ap_record_t *recs = calloc(num, sizeof(*recs));
+    if (!recs) {
+        ESP_LOGW(TAG, "boot scan: out of memory for %u records", (unsigned)num);
+        return;
+    }
+    if (esp_wifi_scan_get_ap_records(&num, recs) == ESP_OK) {
+        ESP_LOGI(TAG, "boot scan: %u AP(s) visible from this antenna", (unsigned)num);
+        for (uint16_t i = 0; i < num; i++) {
+            const wifi_ap_record_t *r = &recs[i];
+            ESP_LOGI(TAG, "  ch%-3d %4d dBm  " MACSTR "  \"%s\"%s",
+                     (int)r->primary, (int)r->rssi, MAC2STR(r->bssid),
+                     (const char *)r->ssid,
+                     r->ssid[0] == '\0' ? "  <hidden>" : "");
+        }
+    }
+    free(recs);
+}
+
 esp_err_t wifi_manager_connect(const char* ssid, const char* password)
 {
     if (!ssid || ssid[0] == '\0') {
@@ -141,6 +203,13 @@ esp_err_t wifi_manager_connect(const char* ssid, const char* password)
         strncpy((char*)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
     }
 
+    // The default WIFI_FAST_SCAN associates with the first AP matching the SSID
+    // and sweeps channels in ascending order, so on a multi-AP network the
+    // low-channel AP always wins regardless of how weak or how broken it is.
+    // Sweep every channel and take the strongest instead.
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+
     s_run_mode = WIFI_RUN_MODE_STA;
     s_retry_num = 0;
     s_ever_connected = false;
@@ -148,14 +217,49 @@ esp_err_t wifi_manager_connect(const char* ssid, const char* password)
     current_state = WIFI_STATE_CONNECTING;
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Wait for connection or failure
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                                          WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                          pdFALSE,
-                                          pdFALSE,
-                                          portMAX_DELAY);
+    // Scan before associating. esp_wifi_start() makes the driver emit
+    // WIFI_EVENT_STA_START, whose handler would normally kick off the
+    // association immediately; defer that so the scan has the radio to itself.
+    s_defer_connect = true;
+    xEventGroupClearBits(s_wifi_event_group, WIFI_STARTED_BIT);
+    ESP_ERROR_CHECK(esp_wifi_start());
+    // esp_wifi_start() is asynchronous and scanning before the driver reports
+    // STA_START fails with ESP_ERR_WIFI_NOT_STARTED.
+    xEventGroupWaitBits(s_wifi_event_group, WIFI_STARTED_BIT,
+                        pdFALSE, pdFALSE, pdMS_TO_TICKS(5000));
+    wifi_scan_dump();
+    s_defer_connect = false;
+    esp_wifi_connect();
+
+    // Wait for an IP, for outright association failure, or for the DHCP budget
+    // to run out. A silent association to an AP with no working uplink lands in
+    // the third case; each round drops that association so the driver gets
+    // another chance to land somewhere useful.
+    EventBits_t bits = 0;
+    for (int round = 1; round <= WIFI_IP_MAX_ROUNDS; round++) {
+        bits = xEventGroupWaitBits(s_wifi_event_group,
+                                   WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                   pdFALSE,
+                                   pdFALSE,
+                                   pdMS_TO_TICKS(WIFI_IP_TIMEOUT_MS));
+        if (bits & (WIFI_CONNECTED_BIT | WIFI_FAIL_BIT)) {
+            break;
+        }
+
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            ESP_LOGW(TAG, "associated to " MACSTR " (ch%d, %d dBm) but no DHCP lease "
+                          "after %d ms - dropping it (round %d/%d)",
+                     MAC2STR(ap.bssid), (int)ap.primary, (int)ap.rssi,
+                     WIFI_IP_TIMEOUT_MS, round, WIFI_IP_MAX_ROUNDS);
+        } else {
+            ESP_LOGW(TAG, "no IP after %d ms and not associated - retrying (round %d/%d)",
+                     WIFI_IP_TIMEOUT_MS, round, WIFI_IP_MAX_ROUNDS);
+        }
+        // Triggers STA_DISCONNECTED, whose handler re-issues esp_wifi_connect().
+        esp_wifi_disconnect();
+    }
 
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connected to WiFi");
@@ -171,8 +275,14 @@ esp_err_t wifi_manager_connect(const char* ssid, const char* password)
             ESP_LOGI(TAG, "WiFi modem sleep disabled (WIFI_PS_NONE)");
         }
         return ESP_OK;
+    } else if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGE(TAG, "Failed to connect to WiFi (association rejected)");
+        current_state = WIFI_STATE_ERROR;
+        return ESP_FAIL;
     } else {
-        ESP_LOGE(TAG, "Failed to connect to WiFi");
+        ESP_LOGE(TAG, "Gave up: associated but never got a DHCP lease in %d rounds "
+                      "- check the AP's uplink. Falling back to SoftAP.",
+                 WIFI_IP_MAX_ROUNDS);
         current_state = WIFI_STATE_ERROR;
         return ESP_FAIL;
     }
