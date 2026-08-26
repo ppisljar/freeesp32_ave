@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    chipsToMask, maskToChips, parseTimeInput, formatTimeMs, computeTimeGroups, orderRowsForDisplay,
+    chipsToMask, maskToChips, parseTimeInput, formatTimeMs, computeTimeGroups, orderRowsForDisplay, computeChannelGroups, computeRowGroups,
 } from '../src/js/gen/views/table.js';
 import {
     cellTargetHint,
@@ -256,4 +256,52 @@ test('orderRowsForDisplay: chronological even when the file is not', () => {
 test('computeTimeGroups: a comment before a late-file row heads that row\'s time block', () => {
     // cmt sits before led(0); led(0) belongs to the t=0 block, so the comment does too.
     assert.deepEqual(computeTimeGroups([audio(0), audio(1000), cmt(), led(0)]), [1, 2, 1, 1]);
+});
+
+// ---- channel sort ----------------------------------------------------------
+
+const ledM  = (t, mask) => ({ kind: 'led',   time: t, mask });
+const audC  = (t, ch)   => ({ kind: 'audio', time: t, channel: ch });
+
+test('computeChannelGroups: speech first, then LED masks, then audio channels', () => {
+    const rows = [audC(0, 2), ledM(0, 4), speech(0), audC(0, 1), ledM(0, 1)];
+    // speech=1, led mask1=2, led mask4=3, audio ch1=4, audio ch2=5
+    assert.deepEqual(computeChannelGroups(rows), [5, 3, 1, 4, 2]);
+});
+
+test('computeChannelGroups: LED rows key on the exact mask, not the individual channels', () => {
+    // mask 3 (ch1+2) is its own lane — the row cannot belong to two groups.
+    const rows = [ledM(0, 1), ledM(0, 3), ledM(0, 1)];
+    assert.deepEqual(computeChannelGroups(rows), [1, 2, 1]);
+});
+
+test('computeChannelGroups: rows with no channel land in a trailing group', () => {
+    const rows = [ledM(0, 1), { kind: 'bg' }, cmt()];
+    const g = computeChannelGroups(rows);
+    assert.equal(g[0], 1);
+    assert.equal(g[1], g[2]);
+    assert.ok(g[1] > g[0]);
+});
+
+test('orderRowsForDisplay: channel mode gathers a lane and sorts it in time', () => {
+    const rows = [audC(1000, 1), ledM(0, 1), audC(0, 1), ledM(1000, 1)];
+    assert.deepEqual(
+        orderRowsForDisplay(rows, 'channel').map(i => rows[i].kind + '@' + rows[i].time),
+        ['led@0', 'led@1000', 'audio@0', 'audio@1000']);
+});
+
+test('orderRowsForDisplay: speech leads in channel mode', () => {
+    const rows = [audC(0, 1), ledM(0, 1), speech(500)];
+    assert.equal(orderRowsForDisplay(rows, 'channel').map(i => rows[i].kind)[0], 'speech');
+});
+
+test('orderRowsForDisplay: time mode is unchanged by the new argument', () => {
+    const rows = [audC(0, 1), ledM(0, 1), speech(0)];
+    assert.deepEqual(orderRowsForDisplay(rows), orderRowsForDisplay(rows, 'time'));
+});
+
+test('computeRowGroups: dispatches on mode', () => {
+    const rows = [ledM(0, 1), audC(500, 1)];
+    assert.deepEqual(computeRowGroups(rows, 'time'), computeTimeGroups(rows));
+    assert.deepEqual(computeRowGroups(rows, 'channel'), computeChannelGroups(rows));
 });

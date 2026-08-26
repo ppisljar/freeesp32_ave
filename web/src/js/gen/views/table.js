@@ -109,6 +109,41 @@ export function computeTimeGroups(rows) {
     return groups;
 }
 
+// Group row indices by CHANNEL, for the alternative sort. Order is speech,
+// then each LED mask, then each audio channel, then everything else (bg, raw).
+//
+// LED rows are grouped by their exact mask rather than by individual channel,
+// because a mask can name several channels at once and the row is still one row
+// — it cannot live in two groups. This is the same keying the Lanes view uses
+// (`ledGroups: mask -> rows[]`), so the two views agree on what "a channel"
+// means. Masks ascend, then audio channels ascend.
+//
+// Returns group ids parallel to `rows`, starting at 1.
+export function computeChannelGroups(rows) {
+    const ledMasks = [...new Set(rows.filter(r => r.kind === 'led').map(r => r.mask))]
+                     .sort((a, b) => a - b);
+    const audChans = [...new Set(rows.filter(r => r.kind === 'audio').map(r => r.channel))]
+                     .sort((a, b) => a - b);
+    const idOf = new Map();
+    let g = 0;
+    if (rows.some(r => r.kind === 'speech')) idOf.set('speech', ++g);
+    for (const m of ledMasks) idOf.set('led:' + m, ++g);
+    for (const c of audChans) idOf.set('audio:' + c, ++g);
+    const otherId = ++g;   // bg / raw / blank / comment — no channel of their own
+
+    return rows.map(r =>
+        r.kind === 'speech' ? idOf.get('speech')
+      : r.kind === 'led'    ? idOf.get('led:' + r.mask)
+      : r.kind === 'audio'  ? idOf.get('audio:' + r.channel)
+      :                       otherId);
+}
+
+// Group ids for whichever sort is active. The dividers key off this, so a
+// boundary always means "the thing you sorted by just changed".
+export function computeRowGroups(rows, mode) {
+    return mode === 'channel' ? computeChannelGroups(rows) : computeTimeGroups(rows);
+}
+
 // Display order within one instant: speech, then LED, then audio. Untimed rows
 // (comments, bg) lead the block they head. Model order breaks ties, so rows of
 // the same kind keep the order the file gave them.
@@ -120,7 +155,18 @@ const DISPLAY_KIND_RANK = { comment: 0, bg: 0, blank: 0, raw: 0, speech: 1, led:
 
 // Returns model-row indices in display order. The view reorders; `doc.rows` and
 // therefore the serialized file are untouched.
-export function orderRowsForDisplay(rows) {
+export function orderRowsForDisplay(rows, mode) {
+    if (mode === 'channel') {
+        const groups = computeChannelGroups(rows);
+        // Within a channel, chronological — a lane reads as its own timeline.
+        const at = r => (r.kind === 'led' || r.kind === 'audio' || r.kind === 'speech') ? r.time : 0;
+        return rows.map((_, i) => i).sort((a, b) => {
+            if (groups[a] !== groups[b]) return groups[a] - groups[b];
+            const ta = at(rows[a]), tb = at(rows[b]);
+            if (ta !== tb) return ta - tb;
+            return a - b;
+        });
+    }
     const groups = computeTimeGroups(rows);
     // Group ids ascend with time, so ordering on them puts the timeline in
     // chronological order and gathers each instant's scattered lines together.
@@ -198,6 +244,9 @@ export function initTableView(ctx) {
     // and there was no way to drop them, so the LED view was never actually
     // only LED. All on by default. bg/raw always show; blank rows never do.
     const shown = { led: true, audio: true, speech: true, comment: true };
+    // 'time' groups each instant together; 'channel' gathers each lane. The
+    // dividers and the row order both follow whichever is active.
+    let sortMode = 'time';
 
     // Build the static chrome (filter bar / scroller / cards / add bar) once.
     root.innerHTML = '';
@@ -799,6 +848,11 @@ export function initTableView(ctx) {
 
     // Should a row be shown given the current toggles?
     function passesFilter(row) {
+        // A comment annotates the line beneath it in the FILE. Sorting by
+        // channel scatters those lines across the grid, so the comment would sit
+        // above something it never described. Hide them rather than show them
+        // pointing at the wrong row.
+        if (sortMode === 'channel' && row.kind === 'comment') return false;
         if (Object.prototype.hasOwnProperty.call(shown, row.kind)) return shown[row.kind];
         // Blank lines are spacing for the text view; as grid rows they are just
         // empty bands, and filtering any kind out leaves a trail of them behind.
@@ -818,11 +872,38 @@ export function initTableView(ctx) {
         for (const [kind, txt] of [['led', 'LED'], ['audio', 'Audio'], ['speech', 'Speech'], ['comment', 'Comments']]) {
             const b = document.createElement('button');
             b.type = 'button';
-            b.className = 'gen-filter-chip' + (shown[kind] ? ' on' : '');
+            // Comments are force-hidden while sorting by channel; show the chip
+            // as off and disabled rather than lit-but-ineffective.
+            const forced = (kind === 'comment' && sortMode === 'channel');
+            const on = shown[kind] && !forced;
+            b.className = 'gen-filter-chip' + (on ? ' on' : '');
             b.textContent = txt;
-            b.setAttribute('aria-pressed', shown[kind] ? 'true' : 'false');
-            b.title = (shown[kind] ? 'Hide' : 'Show') + ' ' + txt.toLowerCase() + ' rows';
-            b.addEventListener('click', () => { shown[kind] = !shown[kind]; rebuild(ctx.getDoc()); });
+            b.disabled = forced;
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            b.title = forced
+                ? 'Comments are hidden while sorting by channel — they annotate the line below them in the file, which channel order breaks up'
+                : (on ? 'Hide' : 'Show') + ' ' + txt.toLowerCase() + ' rows';
+            if (!forced) {
+                b.addEventListener('click', () => { shown[kind] = !shown[kind]; rebuild(ctx.getDoc()); });
+            }
+            filterBar.appendChild(b);
+        }
+
+        const sortLabel = document.createElement('span');
+        sortLabel.className = 'gen-filter-label gen-filter-sep';
+        sortLabel.textContent = 'Sort:';
+        filterBar.appendChild(sortLabel);
+        for (const [mode, txt, tip] of [
+            ['time', 'Time', 'Group every row that shares a timestamp; dividers mark each instant'],
+            ['channel', 'Channel', 'Gather each lane: speech, then each LED mask, then each audio channel'],
+        ]) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'gen-filter-chip' + (sortMode === mode ? ' on' : '');
+            b.textContent = txt;
+            b.title = tip;
+            b.setAttribute('aria-pressed', sortMode === mode ? 'true' : 'false');
+            b.addEventListener('click', () => { sortMode = mode; rebuild(ctx.getDoc()); });
             filterBar.appendChild(b);
         }
     }
@@ -897,16 +978,16 @@ export function initTableView(ctx) {
 
         // Compared against the previous *rendered* row, so hiding a kind never
         // leaves a divider stranded or swallows one.
-        const timeGroups = computeTimeGroups(doc.rows);
+        const rowGroups = computeRowGroups(doc.rows, sortMode);
         let lastGroup = null;
 
-        orderRowsForDisplay(doc.rows).forEach(idx => {
+        orderRowsForDisplay(doc.rows, sortMode).forEach(idx => {
             const row = doc.rows[idx];
             if (!passesFilter(row)) return;
             const tr = document.createElement('tr');
             tr.className = 'gen-grid-row gen-grid-' + row.kind;
-            if (lastGroup !== null && timeGroups[idx] !== lastGroup) tr.classList.add('is-timebreak');
-            lastGroup = timeGroups[idx];
+            if (lastGroup !== null && rowGroups[idx] !== lastGroup) tr.classList.add('is-timebreak');
+            lastGroup = rowGroups[idx];
 
             const tdType = document.createElement('td');
             if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'speech' || row.kind === 'comment') {
@@ -1013,15 +1094,15 @@ export function initTableView(ctx) {
 
     function buildCards(doc) {
         cards.innerHTML = '';
-        const timeGroups = computeTimeGroups(doc.rows);
+        const rowGroups = computeRowGroups(doc.rows, sortMode);
         let lastGroup = null;
-        orderRowsForDisplay(doc.rows).forEach(idx => {
+        orderRowsForDisplay(doc.rows, sortMode).forEach(idx => {
             const row = doc.rows[idx];
             if (!passesFilter(row)) return;
             const card = document.createElement('div');
             card.className = 'gen-card gen-card-' + row.kind;
-            if (lastGroup !== null && timeGroups[idx] !== lastGroup) card.classList.add('is-timebreak');
-            lastGroup = timeGroups[idx];
+            if (lastGroup !== null && rowGroups[idx] !== lastGroup) card.classList.add('is-timebreak');
+            lastGroup = rowGroups[idx];
 
             const head = document.createElement('div');
             head.className = 'gen-card-head';
