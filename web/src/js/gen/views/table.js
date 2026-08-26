@@ -524,38 +524,26 @@ export function initTableView(ctx) {
 
     // phase / attack / audio duty.
     //
-    // These carry one more state than freq/bright/vol: they are optional, so
-    // "off" (omit the field) has to be expressible and a compound trigger has no
-    // way to say it. Hence the split — an unset field is an empty number box
-    // whose placeholder names the default, and typing a value promotes it to the
-    // same compound trigger the core fields use, ramps and all. Turning it back
-    // off lives in that trigger's popover.
+    // One control for every state. These carry one more state than
+    // freq/bright/vol — being optional they can be OFF — but splitting that
+    // across two widgets meant the cell changed shape when you typed in it, and
+    // the way back to off was buried in a popover you had no reason to open.
+    // The trigger now renders "off" as its greyed default, and emptying the
+    // value in the popover turns it off again.
     function pulseCellInput(row, idx, fieldName, title, resolve) {
-        // `-` (leave unchanged) reads as the same chip the main compound cells
-        // use. The grid cannot author `-` on any field yet; author it in the
-        // Text view.
+        // `-` (leave unchanged) is still a read-only chip; the grid cannot
+        // author it on ANY field yet. Author it in the Text view.
         if (row[fieldName] === null) return unchangedChip(title);
 
-        if (row[fieldName] === undefined) {
-            const def = PULSE_DEFAULTS[fieldName] || '';
-            const inp = numberInput(def, (title || fieldName) + ' — empty = default' + (def ? ' (' + def + ')' : ''));
-            inp.addEventListener('change', () => {
-                if (inp.value.trim() === '') return;          // still off — nothing to do
-                const n = parseFloat(inp.value);
-                row[fieldName] = cell(Number.isFinite(n) ? n : 0);
-                // Structural: the cell becomes a compound trigger, so the row
-                // has to be rebuilt rather than just re-serialised.
-                commitStructure();
-            });
-            return inp;
-        }
-
+        const def = PULSE_DEFAULTS[fieldName] || '';
         const t = createCompoundCell({
             title: title,
+            optional: true,
+            defaultLabel: def,
             getCell: () => row[fieldName],
             onChange: (c) => { row[fieldName] = c; commitValue(); },
             resolveTarget: resolve,
-            onClear: () => { row[fieldName] = undefined; commitStructure(); },
+            onClear: () => { row[fieldName] = undefined; commitValue(); },
         });
         cellTriggers.push(t);
         return t;

@@ -165,6 +165,9 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 .gen-cell-trigger.is-ramp .gen-cell-hint { color: #5b8fd6; }
 .gen-cell-trigger.is-ramp { border-color: #0a84ff; color: #0a5ad0; }
 .gen-cell-trigger.is-mod  { border-color: #a05cff; color: #6a2ed0; }
+/* Optional field currently omitted: shows the device default, greyed like a
+   placeholder, so "off" reads as deliberate rather than as an empty control. */
+.gen-cell-trigger.is-unset { color: #aaa; border-style: dashed; }
 .gen-swatch { width: 40px; height: 24px; min-height: 24px; padding: 0; border: 1px solid #999; border-radius: 4px; font-size: 10px; color: #fff; text-shadow: 0 0 2px #000; }
 .gen-swatch.is-ramp { outline: 2px dashed #0a84ff; }
 

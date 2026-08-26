@@ -156,6 +156,11 @@ export function buildCellEditor(initial, opts) {
     // fields cannot, so the Clear action is opt-in rather than always present.
     const onClear = opts.onClear || null;
 
+    // Optional fields (the pulse ones) may arrive with no cell at all: the field
+    // is omitted and the device uses its default. That is a real state the
+    // editor has to round-trip, not an empty value to coerce to 0.
+    const optional     = !!opts.optional;
+    const defaultLabel = opts.defaultLabel || '';
     let cur = cell(initial ? initial.value : 0,
                    initial ? initial.interp : 'none',
                    initial ? initial.modEnd : null,
@@ -170,7 +175,12 @@ export function buildCellEditor(initial, opts) {
     vRow.append('Value');
     const vIn = document.createElement('input');
     vIn.type = 'number';
-    vIn.value = cur.value;
+    vIn.value = (optional && !initial) ? '' : cur.value;
+    if (optional) {
+        vIn.placeholder = defaultLabel;
+        vIn.title = 'Empty = off (device uses its default' +
+                    (defaultLabel ? ': ' + defaultLabel : '') + ')';
+    }
     if (opts.step !== undefined) vIn.step = opts.step;
     vRow.appendChild(vIn);
     form.appendChild(vRow);
@@ -239,6 +249,12 @@ export function buildCellEditor(initial, opts) {
     }
 
     function emit() {
+        // Emptying the value on an optional field turns it off again — the
+        // inverse of typing, in the same place, so unsetting is never a hunt.
+        if (optional && vIn.value.trim() === '') {
+            onChange(undefined);
+            return;
+        }
         const v = parseFloat(vIn.value);
         cur = cell(Number.isFinite(v) ? v : 0, cur.interp);
         if (isModInterp(cur.interp)) {
@@ -256,6 +272,12 @@ export function buildCellEditor(initial, opts) {
     for (const kind in radioEls) {
         radioEls[kind].addEventListener('change', () => {
             cur.interp = kind;
+            // An off field has no value to interpolate: picking a curve is a
+            // clear statement of intent, so seed it with the device default
+            // rather than silently doing nothing.
+            if (optional && vIn.value.trim() === '' && kind !== 'none') {
+                vIn.value = defaultLabel !== '' ? defaultLabel : '0';
+            }
             // Seed sensible mod extras when switching into a periodic mod.
             if (isModInterp(kind)) {
                 if (cur.modEnd === null || cur.modEnd === undefined) eIn.value = cur.value;
@@ -308,12 +330,21 @@ export function createCompoundCell(opts) {
 
     function paint() {
         const c = opts.getCell();
-        main.textContent = cellLabel(c);
-        const h = cellTargetHint(c, opts.resolveTarget ? opts.resolveTarget() : null);
+        // An optional field with no cell shows its default, greyed — the cell
+        // keeps one shape for every state, so it never morphs under the cursor
+        // and the way back to "off" is always the same click.
+        // NB the !! on every toggle. classList.toggle(name, force) treats an
+        // `undefined` force as "no force argument given" and FLIPS the class
+        // instead of clearing it, so `opts.optional && ...` (undefined on the
+        // core fields) made every repaint alternate the state.
+        const unset = !!(opts.optional && (c === undefined || c === null));
+        main.textContent = unset ? (opts.defaultLabel || '—') : cellLabel(c);
+        const h = unset ? '' : cellTargetHint(c, opts.resolveTarget ? opts.resolveTarget() : null);
         hint.textContent = h;
         hint.style.display = h ? '' : 'none';
-        btn.classList.toggle('is-ramp', c && (c.interp === 'lin' || c.interp === 'quad'));
-        btn.classList.toggle('is-mod', c && isModInterp(c.interp));
+        btn.classList.toggle('is-unset', unset);
+        btn.classList.toggle('is-ramp', !!(!unset && c && (c.interp === 'lin' || c.interp === 'quad')));
+        btn.classList.toggle('is-mod', !!(!unset && c && isModInterp(c.interp)));
     }
     paint();
     // Let owners refresh a trigger whose ramp target changed elsewhere.
@@ -323,6 +354,8 @@ export function createCompoundCell(opts) {
         const form = buildCellEditor(opts.getCell(), {
             resolveTarget: opts.resolveTarget,
             step: opts.step,
+            optional: opts.optional,
+            defaultLabel: opts.defaultLabel,
             onChange: (c) => { opts.onChange(c); paint(); },
             onClear: opts.onClear,
         });
