@@ -21,8 +21,25 @@
 typedef enum {
     CONFIG_ENTRY_LED = 0,
     CONFIG_ENTRY_AUDIO,
-    CONFIG_ENTRY_BG          // Session-level background audio descriptor (not a timeline entry)
+    CONFIG_ENTRY_BG,         // Session-level background audio descriptor (not a timeline entry)
+    CONFIG_ENTRY_SPEECH      // `S` row: play a pre-rendered phrase from the SD card
 } config_entry_type_t;
+
+/**
+ * @brief Speech timeline entry (`S <time> <voice> <volume> "<text>"`).
+ *
+ * The device does NOT synthesize speech. The browser renders each phrase with
+ * its TTS engine and uploads it to the card; at playback the text is hashed to
+ * a filename (see speech_player_filename) and the file is played. Carrying the
+ * text rather than a filename keeps the .ledc format unchanged and human
+ * readable, and avoids a manifest that could drift from what is on the card.
+ */
+typedef struct {
+    uint32_t time_ms;
+    char     voice[24];
+    char     text[192];
+    float    volume;       // 0..100
+} config_speech_entry_t;
 
 typedef enum {
     CONFIG_INTERP_NONE = 0,
@@ -197,6 +214,7 @@ typedef struct {
     union {
         config_led_entry_t led;
         config_audio_entry_t audio;
+        config_speech_entry_t speech;
     } data;
 } config_entry_t;
 

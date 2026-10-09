@@ -5,6 +5,9 @@
 #include "led_matrix_example.h"
 #include "isr_profiling.h"
 #include "bg_player.h"
+#if CONFIG_BG_SDCARD_ENABLED
+#include "speech_player.h"
+#endif
 #include "settings.h"           // audio_max_volume (master output gain)
 #include "esp_log.h"
 #include "esp_cpu.h"            // esp_cpu_get_cycle_count() — fill_buffer profiling
@@ -179,6 +182,16 @@ void audio_test_output_task(void* pvParameters)
         if (bg_player_is_active()) {
             bg_player_mix_into(audio_buffer, stereo_samples);
         }
+
+        // Mix timed speech phrases (SD card) — the THIRD and final stage, so
+        // narration sits on top of both the entrainment tones and the
+        // background bed. Same post-mix position as BG: independent of the
+        // generator's inv_n_active headroom division.
+#if CONFIG_BG_SDCARD_ENABLED
+        if (speech_player_is_active()) {
+            speech_player_mix_into(audio_buffer, stereo_samples);
+        }
+#endif
 
         // Master output gain from the runtime "maximum volume" setting (0-100%).
         // Scales ALL audio (timeline channels, live control, noise, background)

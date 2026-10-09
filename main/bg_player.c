@@ -234,6 +234,8 @@ typedef struct {
 
     bg_producer_kind_t   producer_kind; /* PULL (url fetch) or PUSH (browser feed) */
 
+    StackType_t  *task_stack;           /* streamer stack, reserved at init        */
+    StaticTask_t  task_tcb;             /* its TCB (static alongside the stack)    */
     volatile bool active;               /* consumer gate: true → mix_into is live   */
     volatile bool streaming;            /* producer gate: true → keep producing      */
     volatile bool hold;                 /* prime gate: true → BUFFER but don't drain/
@@ -1293,6 +1295,20 @@ esp_err_t bg_player_init(void)
      * comment block for the full SD bring-up checklist.
      */
 
+    /* Reserve the streamer stack now — see bg_player_start() for why. Internal
+     * DRAM only: FreeRTOS stacks cannot live in PSRAM. */
+    s_bg.task_stack = heap_caps_malloc(BG_STREAMER_STACK_BYTES,
+                                       MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_bg.task_stack) {
+        ESP_LOGE(TAG, "bg_player_init: could not reserve the %u B streamer stack "
+                      "(largest free internal block = %u B) — BG audio disabled",
+                 (unsigned)BG_STREAMER_STACK_BYTES,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    } else {
+        ESP_LOGI(TAG, "bg_player_init: reserved %u B streamer stack",
+                 (unsigned)BG_STREAMER_STACK_BYTES);
+    }
+
     ESP_LOGI(TAG, "bg_player_init: OK");
     return ESP_OK;
 }
@@ -1399,21 +1415,37 @@ esp_err_t bg_player_start(const config_bg_entry_t *bg)
     /* Spawn producer task pinned to core BG_STREAMER_CORE.                   */
     ESP_LOGI(TAG, "bg_player_start: free heap before task spawn = %u bytes",
              (unsigned)esp_get_free_heap_size());
-    BaseType_t rc = xTaskCreatePinnedToCore(
-        bg_streamer_task,
-        "bg_stream",
-        BG_STREAMER_STACK_BYTES,
-        NULL,                       /* pvParameters — task reads s_bg directly */
-        BG_STREAMER_PRIORITY,
-        &s_bg.producer_task,
-        BG_STREAMER_CORE
-    );
+    /* STATIC task: the stack is reserved once at bg_player_init(), when the
+     * internal-DRAM heap is still unfragmented.
+     *
+     * Creating it dynamically here used to fail outright once the SD card
+     * support landed: WiFi and the web server carve internal DRAM into small
+     * blocks during boot, so by the time a session starts there can be 25 KB
+     * free but a largest contiguous block of only ~8.7 KB — not enough for a
+     * 12 KB stack. The failure reads as "no memory" while /api/state shows
+     * megabytes free, because that figure is dominated by PSRAM. Reserving
+     * early sidesteps the fragmentation entirely, and also removes the
+     * per-play task churn. See largest_free_internal in /api/state. */
+    BaseType_t rc = pdFAIL;
+    if (s_bg.task_stack) {
+        s_bg.producer_task = xTaskCreateStaticPinnedToCore(
+            bg_streamer_task,
+            "bg_stream",
+            BG_STREAMER_STACK_BYTES / sizeof(StackType_t),
+            NULL,
+            BG_STREAMER_PRIORITY,
+            s_bg.task_stack,
+            &s_bg.task_tcb,
+            BG_STREAMER_CORE
+        );
+        rc = s_bg.producer_task ? pdPASS : pdFAIL;
+    }
 
     if (rc != pdPASS) {
         ESP_LOGE(TAG,
-                 "bg_player_start: xTaskCreatePinnedToCore failed (stack=%u, free heap=%u)",
-                 BG_STREAMER_STACK_BYTES,
-                 (unsigned)esp_get_free_heap_size());
+                 "bg_player_start: streamer task create failed (stack=%u, "
+                 "reserved=%s) — BG audio unavailable this session",
+                 BG_STREAMER_STACK_BYTES, s_bg.task_stack ? "yes" : "NO");
         s_bg.streaming = false;
         /* Ring stays allocated for the next attempt. */
         xSemaphoreGive(s_bg.state_mutex);

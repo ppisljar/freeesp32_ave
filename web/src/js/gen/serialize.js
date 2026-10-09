@@ -143,10 +143,21 @@ export function serialize(doc) {
     return out.join('\n') + '\n';
 }
 
-// Serialize for the DEVICE: drop speech (`S`) rows — the firmware cannot parse
-// them (they're browser-only, mixed into the bounced WAV). Everything else,
-// including BG push:// lines, is kept. Use this for /api/play-config etc.
-export function serializeForDevice(doc) {
+// Serialize for the DEVICE.
+//
+// `S` rows are dropped by DEFAULT because historically the firmware could not
+// parse them: anything that was not an `A` line fell through to the LED parser
+// and an S row was silently mangled into an LED command. Speech was therefore
+// browser-only, mixed into the bounced WAV.
+//
+// With an SD card the firmware CAN play speech (it resolves each phrase to a
+// pre-uploaded file), so pass { keepSpeech: true } when every phrase this
+// session needs is already on the card — see gen/sdsync.js sessionIsOffline().
+// Getting that wrong in the "keep" direction is harmless on current firmware
+// (unknown rows are rejected with a parse warning, not executed), but getting
+// it wrong in the "drop" direction just means silent narration.
+export function serializeForDevice(doc, { keepSpeech = false } = {}) {
     if (!doc || !doc.rows) return '';
-    return serialize({ rows: doc.rows.filter(r => r.kind !== 'speech'), bg: doc.bg });
+    const rows = keepSpeech ? doc.rows : doc.rows.filter(r => r.kind !== 'speech');
+    return serialize({ rows, bg: doc.bg });
 }

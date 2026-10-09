@@ -10,6 +10,7 @@
 import { showMessage } from './util.js';
 import { getEngine, setEngine, connectPuter } from './gen/tts.js';
 import { preloadAllSpeech } from './gen/ttspreload.js';
+import { syncSpeechToCard, listCard } from './gen/sdsync.js';
 import { isSafetyAccepted, resetSafetyAccepted } from './safety.js';
 
 // Refresh the "Safety notice" status line + reset-button label to reflect
@@ -396,6 +397,44 @@ async function preloadSpeech() {
     }
 }
 
+// Upload every speech phrase the library needs to the device's SD card, so
+// sessions can run with the browser closed. Incremental: phrases already on the
+// card are skipped, and ones already in the browser's TTS cache upload without
+// re-synthesizing.
+async function sdSync() {
+    const btn = document.getElementById('btnSdSync');
+    const out = document.getElementById('sdSyncStatus');
+    const say = (msg, color) => { if (out) { out.textContent = msg; out.style.color = color || '#888'; } };
+    if (getEngine() === 'puter') connectPuter();   // off the click gesture — see tts.js
+    if (btn) btn.disabled = true;
+    say('Checking the card…');
+    try {
+        const card = await listCard();
+        if (!card.mounted) {
+            say('No SD card detected on the device. Insert one and reboot it.', '#dc3545');
+            return;
+        }
+        const freeMb = Math.round((card.free_bytes || 0) / 1048576);
+        say(`Card "${card.card}" — ${freeMb} MB free. Scanning sessions…`);
+
+        const r = await syncSpeechToCard(({ done, total, uploaded, skipped }) => {
+            say(`Syncing… ${done}/${total} (${uploaded} uploaded, ${skipped} already there)`);
+        });
+        if (r.failed === 0) {
+            say(`✓ Card ready — ${r.total} phrase(s) available offline `
+                + `(${r.uploaded} uploaded, ${r.skipped} already present).`, '#28a745');
+        } else {
+            say(`Finished with ${r.failed} failure(s): ${r.uploaded} uploaded, `
+                + `${r.skipped} already present. Sessions with missing phrases `
+                + `still play via the browser.`, '#dc3545');
+        }
+    } catch (e) {
+        say('Sync failed: ' + ((e && e.message) || e), '#dc3545');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 function bind(id, fn) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', fn);
@@ -409,6 +448,7 @@ export function settingsInit() {
     bind('btnSettingsExport', exportSettings);
     bind('btnSettingsImport', importSettings);
     bind('btnTtsPreload', preloadSpeech);
+    bind('btnSdSync', sdSync);
     const fileEl = document.getElementById('settingsImportFile');
     if (fileEl) fileEl.addEventListener('change', onImportFile);
 

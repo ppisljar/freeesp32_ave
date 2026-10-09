@@ -2575,12 +2575,21 @@ static esp_err_t state_handler(httpd_req_t *req)
     char health_buf[640];
     diagnostics_health_json(health_buf, sizeof(health_buf));
     APPEND("\"diag\":{\"reset_reason\":\"%s\",\"uptime_ms\":%llu,"
-           "\"free_heap\":%u,\"free_psram\":%u,\"log_bytes\":%u,"
+           "\"free_heap\":%u,\"free_psram\":%u,"
+           "\"free_internal\":%u,\"largest_free_internal\":%u,\"log_bytes\":%u,"
            "\"coredump\":{\"present\":%s,\"size\":%u},\"health\":%s}}",
            diagnostics_reset_reason_str(),
            (unsigned long long)(esp_timer_get_time() / 1000),
            (unsigned)esp_get_free_heap_size(),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+           /* Internal DRAM is the scarce pool: FreeRTOS task stacks and DMA
+            * buffers can ONLY come from here, and "free_heap" is dominated by
+            * PSRAM so it hides exhaustion. largest_free_internal is the number
+            * that actually decides whether a task can be created — a 12 KB
+            * stack fails at 20 KB free if the pool is fragmented, which reads
+            * as a baffling "no memory" with megabytes apparently available. */
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
            (unsigned)diagnostics_logs_size(),
            cd_present ? "true" : "false", (unsigned)cd_size, health_buf);
 

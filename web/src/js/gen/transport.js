@@ -6,11 +6,13 @@ import { NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS } from './model.js';
 import { clogI, clogW, clogE } from '../clientlog.js';
 
 // Serialize the model and POST it to /api/play-config (text/plain). Stops any
-// running timeline on the device and starts this one. Speech (`S`) rows are
-// stripped by serializeForDevice — the firmware can't parse them (they're
-// browser-only, mixed into the bounced WAV).
-export function playDoc(doc) {
-    const body = serializeForDevice(doc);
+// running timeline on the device and starts this one.
+//
+// Speech (`S`) rows are stripped by serializeForDevice unless the caller passes
+// { keepSpeech: true }, which play.js does when the session's phrases are all
+// on the device's SD card and it can therefore narrate on its own.
+export function playDoc(doc, opts) {
+    const body = serializeForDevice(doc, opts);
     clogI('http', 'POST /api/play-config (' + body.length + ' bytes)');
     return fetch('/api/play-config', {
         method: 'POST',

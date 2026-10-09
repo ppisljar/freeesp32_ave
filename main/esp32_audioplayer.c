@@ -21,6 +21,7 @@
 #include "bg_player.h"
 #ifdef CONFIG_BG_SDCARD_ENABLED
 #include "sdcard.h"
+#include "speech_player.h"
 #endif
 #include "settings.h"
 #include "log_ctrl.h"
@@ -364,6 +365,21 @@ void app_main(void)
                      esp_err_to_name(sderr));
             diagnostics_health_set("sdcard", false, esp_err_to_name(sderr));
         }
+    }
+#endif
+
+#ifdef CONFIG_BG_SDCARD_ENABLED
+    // Speech playback from the card. Allocates its phrase buffer up front, so
+    // a failure here is known at boot rather than mid-session. Non-fatal: a
+    // session's S rows are simply skipped.
+    {
+        esp_err_t sperr = speech_player_init();
+        if (sperr != ESP_OK) {
+            ESP_LOGW(TAG, "speech_player init failed: %s — S rows will be skipped",
+                     esp_err_to_name(sperr));
+        }
+        diagnostics_health_set("speech", sperr == ESP_OK,
+                               sperr == ESP_OK ? NULL : esp_err_to_name(sperr));
     }
 #endif
 

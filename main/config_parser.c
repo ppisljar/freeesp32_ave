@@ -8,6 +8,9 @@
 #include "lock_free_comm.h"
 #include "memory_pool.h"
 #include "bg_player.h"
+#if CONFIG_BG_SDCARD_ENABLED
+#include "speech_player.h"
+#endif
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -47,8 +50,26 @@ static uint64_t last_session_origin_us = 0;
 
 // Forward declarations
 static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t *entry);
+
+/* Scheduled time of any entry type.
+ *
+ * Previously each site did `type == LED ? data.led.time_ms : data.audio.time_ms`,
+ * which reads the WRONG union member for anything that is neither — it only
+ * appeared to work because time_ms happens to be first in each struct. Adding
+ * speech made that latent aliasing a real hazard, so it is centralised here. */
+static inline uint32_t entry_time_ms(const config_entry_t *e)
+{
+    switch (e->type) {
+        case CONFIG_ENTRY_LED:    return e->data.led.time_ms;
+        case CONFIG_ENTRY_AUDIO:  return e->data.audio.time_ms;
+        case CONFIG_ENTRY_SPEECH: return e->data.speech.time_ms;
+        default:                  return 0u;
+    }
+}
+
 static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config_led_entry_t *led_entry);
 static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, config_audio_entry_t *audio_entry);
+static esp_err_t parse_speech_line(const char *line, config_speech_entry_t *sp);
 static esp_err_t parse_bg_line(const char *tokens[], size_t token_count, config_bg_entry_t *bg_entry);
 static float parse_value_with_interpolation(const char *str, config_interpolation_t *interp);
 static void  parse_mod_extras(const char *str, float *out_end, float *out_period_ms);
@@ -421,13 +442,11 @@ esp_err_t config_parser_parse_content(const char *content, size_t content_length
      * order of entries that share a timestamp. */
     for (size_t i = 1; i < timeline->count; i++) {
         config_entry_t key = timeline->entries[i];
-        uint32_t key_t = (key.type == CONFIG_ENTRY_LED)   ? key.data.led.time_ms
-                       : (key.type == CONFIG_ENTRY_AUDIO) ? key.data.audio.time_ms : 0;
+        uint32_t key_t = entry_time_ms(&key);
         size_t j = i;
         while (j > 0) {
             const config_entry_t *p = &timeline->entries[j - 1];
-            uint32_t pt = (p->type == CONFIG_ENTRY_LED)   ? p->data.led.time_ms
-                        : (p->type == CONFIG_ENTRY_AUDIO) ? p->data.audio.time_ms : 0;
+            uint32_t pt = entry_time_ms(p);
             if (pt <= key_t) break;   // '<=' keeps equal-timestamp order stable
             timeline->entries[j] = timeline->entries[j - 1];
             j--;
@@ -674,9 +693,7 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 
     // Dispatch ALL entries at t=0 as one batch — use ctx variant so sweep wiring works too
     if (timeline->count > 0) {
-        uint32_t batch_timestamp = timeline->entries[0].type == CONFIG_ENTRY_LED ?
-                                   timeline->entries[0].data.led.time_ms :
-                                   timeline->entries[0].data.audio.time_ms;
+        uint32_t batch_timestamp = entry_time_ms(&timeline->entries[0]);
 
         const size_t MAX_BATCH_SIZE = 50;
         size_t entries_executed = 0;
@@ -686,9 +703,7 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
         // (or MAX_BATCH_SIZE cap, whichever comes first).
         size_t batch_end = 0;
         for (size_t i = 0; i < timeline->count && batch_end < MAX_BATCH_SIZE; i++) {
-            uint32_t entry_time = timeline->entries[i].type == CONFIG_ENTRY_LED ?
-                                  timeline->entries[i].data.led.time_ms :
-                                  timeline->entries[i].data.audio.time_ms;
+            uint32_t entry_time = entry_time_ms(&timeline->entries[i]);
             if (entry_time != batch_timestamp) break;
             batch_end = i + 1;
         }
@@ -775,9 +790,7 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
             size_t next_index = current_entry_index + 1;
 
             while (next_index < timeline->count) {
-                next_time = timeline->entries[next_index].type == CONFIG_ENTRY_LED ?
-                            timeline->entries[next_index].data.led.time_ms :
-                            timeline->entries[next_index].data.audio.time_ms;
+                next_time = entry_time_ms(&timeline->entries[next_index]);
 
                 if (next_time > batch_timestamp) {
                     break;
@@ -858,6 +871,9 @@ esp_err_t config_parser_stop_timeline(void)
     // stop-before-play return quickly. Worst case: a slow HTTP connection forces
     // a producer force-delete that leaks one socket — acceptable for snappy UX.
     bg_player_stop_async();
+#if CONFIG_BG_SDCARD_ENABLED
+    speech_player_stop();
+#endif
 
     // Cancel any pending timeline events in timing engine
     timing_engine_cancel_events_by_type(TIMING_EVENT_TIMELINE);
@@ -1305,6 +1321,7 @@ const char *config_parser_get_example(void)
 
 // Internal helper functions
 
+
 static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t *entry)
 {
     if (!line || !entry) {
@@ -1351,6 +1368,12 @@ static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t
     if (tokens[0][0] == 'A' || tokens[0][0] == 'a') {
         entry->type = CONFIG_ENTRY_AUDIO;
         return parse_audio_line(tokens + 1, token_count - 1, &entry->data.audio); // Skip 'A'
+    } else if ((tokens[0][0] == 'S' || tokens[0][0] == 's') && tokens[0][1] == '\0') {
+        // `S` row — speech. MUST be tested before the LED fallback below:
+        // historically anything that was not 'A' fell through to the LED
+        // parser, so an S row was silently mangled into an LED command.
+        entry->type = CONFIG_ENTRY_SPEECH;
+        return parse_speech_line(line, &entry->data.speech);
     } else {
         entry->type = CONFIG_ENTRY_LED;
         return parse_led_line(tokens, token_count, &entry->data.led);
@@ -1491,6 +1514,66 @@ static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config
         ESP_LOGW(TAG, "LED line at %u ms has channel_mask=0 — skipping", led_entry->time_ms);
         return ESP_ERR_INVALID_ARG;
     }
+
+    return ESP_OK;
+}
+
+/* Parse `S <time_ms> <voice> <volume> "<text>"`.
+ *
+ * Parsed from the RAW line rather than the token array because the text is
+ * quoted and may contain spaces (and '#', which is why comment stripping must
+ * not be applied before the closing quote). Everything after the closing quote
+ * is ignored, so a trailing comment is handled for free.
+ */
+static esp_err_t parse_speech_line(const char *line, config_speech_entry_t *sp)
+{
+    if (!line || !sp) return ESP_ERR_INVALID_ARG;
+    memset(sp, 0, sizeof(*sp));
+
+    const char *p = line;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p != 'S' && *p != 's') return ESP_ERR_INVALID_ARG;
+    p++;                                   /* past the 'S' */
+
+    char *end = NULL;
+    sp->time_ms = (uint32_t)strtoul(p, &end, 10);
+    if (end == p) {
+        ESP_LOGW(TAG, "S line: missing time");
+        return ESP_ERR_INVALID_ARG;
+    }
+    p = end;
+
+    /* voice token */
+    while (isspace((unsigned char)*p)) p++;
+    size_t vi = 0;
+    while (*p && !isspace((unsigned char)*p) && vi < sizeof(sp->voice) - 1) {
+        sp->voice[vi++] = *p++;
+    }
+    sp->voice[vi] = '\0';
+    if (vi == 0) strlcpy(sp->voice, "default", sizeof(sp->voice));
+
+    /* volume */
+    while (isspace((unsigned char)*p)) p++;
+    end = NULL;
+    float vol = strtof(p, &end);
+    sp->volume = (end == p) ? 80.0f : vol;   /* same default the browser uses */
+    if (end != p) p = end;
+
+    /* quoted text */
+    const char *q1 = strchr(p, '"');
+    if (!q1) {
+        ESP_LOGW(TAG, "S line at %ums: no quoted text", (unsigned)sp->time_ms);
+        return ESP_ERR_INVALID_ARG;
+    }
+    const char *q2 = strrchr(q1 + 1, '"');   /* last quote, so inner quotes survive */
+    if (!q2 || q2 <= q1) {
+        ESP_LOGW(TAG, "S line at %ums: unterminated text", (unsigned)sp->time_ms);
+        return ESP_ERR_INVALID_ARG;
+    }
+    size_t tlen = (size_t)(q2 - q1 - 1);
+    if (tlen >= sizeof(sp->text)) tlen = sizeof(sp->text) - 1;
+    memcpy(sp->text, q1 + 1, tlen);
+    sp->text[tlen] = '\0';
 
     return ESP_OK;
 }
@@ -2191,6 +2274,21 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
     }
 
     const config_entry_t *entry = &timeline->entries[entry_idx];
+
+#if CONFIG_BG_SDCARD_ENABLED
+    // ------------------------------------------------------------------
+    // SPEECH entry — hand the phrase to speech_player and return.
+    // Non-blocking: the file is loaded by speech_player's own task, so a slow
+    // SD read cannot stall the timeline executor (which holds audio_gen_mutex
+    // here and would otherwise starve fill_buffer into an audible underrun).
+    // A phrase missing from the card is logged and skipped, never fatal.
+    // ------------------------------------------------------------------
+    if (entry->type == CONFIG_ENTRY_SPEECH) {
+        const config_speech_entry_t *sp = &entry->data.speech;
+        speech_player_play(sp->voice, sp->text, sp->volume);
+        return ESP_OK;
+    }
+#endif
 
     if (entry->type != CONFIG_ENTRY_AUDIO && entry->type != CONFIG_ENTRY_LED) {
         ESP_LOGE(TAG, "execute_timeline_entry_ctx: invalid type %d", entry->type);

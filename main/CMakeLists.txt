@@ -1,4 +1,4 @@
-set(srcs "esp32_audioplayer.c" "audio_manager.c" "audio_generator.c" "led_strip.c" "audio_test.c" "config_parser.c" "web_server.c" "wifi_manager.c" "led_matrix_example.c" "timing_engine.c" "lock_free_comm.c" "isr_profiling.c" "memory_pool.c" "bg_player.c" "wav_parser.c" "mp3_decoder.c" "audio_driver.c" "audio_driver_ac101.c" "audio_driver_es8388.c" "audio_driver_tlv320dac3101.c" "sdcard.c" "mod_engine.c" "settings.c" "diagnostics.c" "log_ctrl.c")
+set(srcs "esp32_audioplayer.c" "audio_manager.c" "audio_generator.c" "led_strip.c" "audio_test.c" "config_parser.c" "web_server.c" "wifi_manager.c" "led_matrix_example.c" "timing_engine.c" "lock_free_comm.c" "isr_profiling.c" "memory_pool.c" "bg_player.c" "wav_parser.c" "mp3_decoder.c" "audio_driver.c" "audio_driver_ac101.c" "audio_driver_es8388.c" "audio_driver_tlv320dac3101.c" "sdcard.c" "speech_player.c" "mod_engine.c" "settings.c" "diagnostics.c" "log_ctrl.c")
 
 # Per-target modules. Where a chip can do something materially better than the
 # classic ESP32, we ship a separate implementation rather than making every

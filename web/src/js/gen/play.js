@@ -15,6 +15,7 @@ import { playDoc, pushBgWs } from './transport.js';
 import { startKeepAlive, stopKeepAlive } from './keepalive.js';
 import { bounceSession, pushSessionBg } from './bounce.js';
 import { getEngine, connectPuter } from './tts.js';
+import { sessionIsOffline } from './sdsync.js';
 import { serialize } from './serialize.js';
 import { showMessage } from '../util.js';
 import { ensureSafetyAccepted } from '../safety.js';
@@ -146,6 +147,31 @@ export async function playSession(doc, delaySec = 0) {
             showMessage('Play error: ' + err, 'error');
         }
         return;
+    }
+
+    // OFFLINE PATH: if every phrase this session needs is already on the
+    // device's SD card, the device can narrate by itself. Send the timeline
+    // WITH its S rows and stop there — no bounce, no WebSocket, and crucially
+    // nothing for the browser to keep doing, so the laptop can be closed.
+    //
+    // Deliberately falls back to the browser-streamed path on ANY doubt (no
+    // card, a phrase missing, /api/sd unreachable): a session that plays with
+    // the laptop open is much better than one that half-plays without it.
+    try {
+        if (await sessionIsOffline(doc)) {
+            clogI('play', 'offline path: all phrases on SD card, device narrates');
+            if (delaySec > 0) clogI('play', 'pre-roll ' + delaySec + 's');
+            await preRoll(delaySec);
+            const res = await playDoc(doc, { keepSpeech: true });
+            showMessage(res || 'Playing offline (speech from SD card)', 'success');
+            clogI('play', 'offline playback started — browser no longer needed');
+            return;
+        }
+    } catch (err) {
+        if (err && err.message === 'cancelled') {
+            clogI('play', 'cancelled during pre-roll'); showMessage('Playback cancelled', 'info'); return;
+        }
+        clogW('play', 'offline check failed, using browser streaming: ' + err);
     }
 
     // Speech present: bounce (cached) → rewrite BG to push:// → play → stream.
