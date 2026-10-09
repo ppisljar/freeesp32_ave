@@ -84,10 +84,12 @@ disagree with its own bit tables on class-D gain and de-pop time); the register
 - `sdkconfig.defaults.esp32` — classic-only symbols, including the 4 MB flash
   size that was previously only in the live sdkconfig (a regenerated classic
   config failed the partition step without it).
-- `partitions_16mb.csv` — ota_0/ota_1 **3 MB each** (app is 1.26 MB, and both
-  slots now hold a full app, so real A/B OTA works), **storage 2 MB**,
-  **cfgfs 6 MB**. Per user direction the bulk of the extra flash goes to the
-  filesystems, not the app slots.
+- `partitions_16mb.csv` — keeps the existing dual-boot model (ota_0 = main app
+  **3 MB**, ota_1 = the minimal OTA updater **704 KB**, unchanged from the 4 MB
+  table). Full A/B was considered and rejected: it would need a different OTA
+  mechanism for no real gain. The extra flash goes to the filesystems instead —
+  **storage 2 MB**, **cfgfs 8 MB**, ~2 MB left unallocated for a future
+  dedicated audio partition.
 - `switch_board.sh` learned `yb_s3_dac`, and its board detection was fixed — it
   tested `CONFIG_AUDIO_DRIVER_*`, which stopped existing after the runtime
   settings refactor, so detection always fell through to "glasses".

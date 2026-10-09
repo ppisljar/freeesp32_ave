@@ -2,20 +2,25 @@
 # Used by the ESP32-S3 boards (YB-ESP32-S3-DAC, ESP32-S3-WROOM-1 N16R8).
 # The 4 MB table (partitions.csv) is kept for the classic ESP32 boards.
 #
-# Sizing rationale (app is ~1.3 MB today):
-#   ota_0/ota_1  3 MB each — unlike the 4 MB table, ota_1 is a FULL app slot,
-#                so the main app fits in EITHER slot and real A/B OTA works.
-#                3 MB is >2x the current app, which is ample headroom; the
-#                flash increase deliberately goes to the filesystems instead.
-#   storage      2 MB — web UI assets (currently ~78 KB gzipped, so this is
-#                pure growing room).
-#   cfgfs        6 MB — .ledc session library, the bulk of the increase.
+# Same dual-boot MODEL as the 4 MB table — ota_0 = main app, ota_1 = the
+# standalone minimal OTA updater (esp32ota), NOT a second copy of the app.
+# Full A/B would need a different OTA mechanism, so the extra flash goes to the
+# filesystems instead of a second app slot.
 #
-# NOTE: both filesystems are SPIFFS, whose mount time grows with partition
-# size. 6 MB is about as large as SPIFFS stays comfortable; if cfgfs mount
-# time becomes noticeable at boot, migrate it to LittleFS rather than growing
-# it further. Bulk audio (speech samples, background music) belongs on the SD
-# card, not here.
+# Sizing (app is ~1.26 MB today):
+#   ota_0     3 MB    — main app, >2x current size
+#   ota_1     704 KB  — minimal OTA updater only, unchanged from the 4 MB table
+#   storage   2 MB    — web UI assets (~78 KB gzipped today; room to grow)
+#   cfgfs     8 MB    — .ledc session library; where the extra flash went
+#   ~2 MB tail left unallocated, for a future dedicated audio partition.
+#
+# Expect the same "Part 'ota_1' ... too small for binary" warning the 4 MB table
+# produces: ota_1 is deliberately sized for the updater, not the app. Harmless.
+#
+# NOTE: both filesystems are SPIFFS, whose mount time grows with partition size.
+# If cfgfs at 8 MB makes boot noticeably slower, migrate it to LittleFS rather
+# than shrinking it. Bulk audio (speech, background music) belongs on the SD
+# card or a dedicated FAT partition in the tail, not in cfgfs.
 #
 # Table at 0x8000; first partition at 0x9000.
 # Name,    Type, SubType, Offset,    Size,     Flags
@@ -23,7 +28,7 @@ nvs,       data, nvs,     0x9000,    0x4000,
 otadata,   data, ota,     0xd000,    0x2000,
 phy_init,  data, phy,     0xf000,    0x1000,
 ota_0,     app,  ota_0,   0x10000,   0x300000,
-ota_1,     app,  ota_1,   ,          0x300000,
+ota_1,     app,  ota_1,   ,          0xB0000,
 storage,   data, spiffs,  ,          0x200000,
-cfgfs,     data, spiffs,  ,          0x600000,
+cfgfs,     data, spiffs,  ,          0x800000,
 coredump,  data, coredump, ,         0x40000,

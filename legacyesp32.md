@@ -127,11 +127,15 @@ recorded here.
 
 **Files:** `partitions.csv`, `partitions_16mb.csv`, `sdkconfig.*`
 
-The 4 MB table is tight enough that `ota_1` (the minimal OTA updater) cannot
-hold the main app — `idf.py build` prints a standing
-`Part 'ota_1' ... too small` warning on classic targets. That warning is
-expected there and is *not* a sign of a broken build. The 16 MB table gives both
-OTA slots room for a full app, so the warning disappears on S3.
+Both tables use the same dual-boot model: `ota_0` = main app, `ota_1` = the
+standalone minimal OTA updater, *not* a second copy of the app. So `idf.py
+build` prints a standing `Part 'ota_1' ... too small for binary` warning on
+**both** targets — `ota_1` is deliberately sized for the updater. Expected, not
+a broken build.
+
+What the S3's extra flash buys is filesystem room rather than a second app
+slot: `storage` 0.5 → 2 MB and `cfgfs` 0.5 → 8 MB, with ~2 MB left unallocated
+for a future dedicated audio partition.
 
 ---
 
