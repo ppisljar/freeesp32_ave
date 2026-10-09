@@ -22,6 +22,27 @@ import { decodeFile, audioBufferToWav16, wavBlob, DEVICE_SAMPLE_RATE, DEVICE_CHA
 import { cacheGet, cachePut } from './bgstore.js';
 import { timeStretch } from './timestretch.js';
 
+// This device UI is normally served over plain http://<mdns-name>.local, which
+// browsers do NOT treat as a secure context (only https:// or localhost
+// qualify). Puter's SDK calls crypto.randomUUID() — a secure-context-only API
+// — as the unconditional first step of every sign-in attempt. Off a secure
+// context that throws synchronously, before Puter's own code ever reaches its
+// userActivation check or its window.open() call — so every Puter sign-in
+// fails instantly with no popup, no dialog and no network request, looking
+// exactly like a browser-level block even though neither Chrome nor Puter's
+// server is involved. crypto.getRandomValues() is NOT secure-context-gated,
+// so build a UUID v4 from that instead.
+if (typeof window !== 'undefined' && window.crypto && !window.crypto.randomUUID) {
+    window.crypto.randomUUID = function randomUUID() {
+        const bytes = new Uint8Array(16);
+        window.crypto.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = [...bytes].map(b => b.toString(16).padStart(2, '0'));
+        return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
+    };
+}
+
 const CHUNK_CHARS = 180;      // Google Translate ~200-char per-request cap
 const PUTER_CHUNK_CHARS = 2500; // Polly txt2speech ~3000-char cap
 
@@ -107,6 +128,27 @@ function ensurePuter() {
         document.head.appendChild(s);
     });
     return _puterLoading;
+}
+
+// Kick the (lazy, best-effort) script load off as soon as this module runs,
+// well before any Play/Preload click. Puter's sign-in popup is gated on
+// navigator.userActivation.isActive — true only for a brief window after a
+// real click — and the script's own onload is a macrotask that would burn
+// through that window if we only started loading it from inside the click
+// handler. Preloading here means ensurePuter() is already resolved (a plain
+// `window.puter.ai` check, no await-across-a-task) by the time a click comes
+// in, so the only thing left to do synchronously-ish in the handler is the
+// actual auth call. Errors are ignored here; a real synth attempt will retry.
+if (typeof window !== 'undefined') ensurePuter().catch(() => {});
+
+// Call this as the FIRST line of a click handler (before any other await) —
+// see the comment on the preload above for why. No-op once already signed in,
+// and safe to call speculatively (Puter queues concurrent auth calls and
+// resolves them together, so a later synthSpeech() call for the 'google'
+// engine, or one that races this, doesn't open a second popup).
+export function connectPuter() {
+    if (typeof window === 'undefined' || !window.puter || !window.puter.ui) return;
+    window.puter.ui.authenticateWithPuter().catch(() => {});
 }
 
 async function synthViaPuter(text, voice) {

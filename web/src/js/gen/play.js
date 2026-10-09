@@ -14,7 +14,7 @@
 import { playDoc, pushBgWs } from './transport.js';
 import { startKeepAlive, stopKeepAlive } from './keepalive.js';
 import { bounceSession, pushSessionBg } from './bounce.js';
-import { getEngine } from './tts.js';
+import { getEngine, connectPuter } from './tts.js';
 import { serialize } from './serialize.js';
 import { showMessage } from '../util.js';
 import { ensureSafetyAccepted } from '../safety.js';
@@ -111,6 +111,13 @@ export async function playSession(doc, delaySec = 0) {
         showMessage('Nothing to play', 'error');
         return;
     }
+
+    // Fire the Puter sign-in popup (if needed) off the live click gesture,
+    // before any of the awaits below (safety prompt, bounce's IndexedDB scans,
+    // …) burn through navigator.userActivation and make Puter refuse to open
+    // it later — see the comment in tts.js. Not awaited: synthSpeech() awaits
+    // the same underlying auth call when it gets there.
+    if (doc.rows.some(r => r.kind === 'speech') && getEngine() === 'puter') connectPuter();
 
     // One-time epilepsy/photosensitivity opt-in before the FIRST flicker
     // session this browser plays. Declining aborts the play; audio-only

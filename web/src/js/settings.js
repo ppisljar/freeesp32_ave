@@ -8,7 +8,7 @@
 // info icon (ⓘ) with hover help. The LED-backend / audio-codec selectors are
 // capability-driven: options not compiled into this firmware are greyed out.
 import { showMessage } from './util.js';
-import { getEngine, setEngine } from './gen/tts.js';
+import { getEngine, setEngine, connectPuter } from './gen/tts.js';
 import { preloadAllSpeech } from './gen/ttspreload.js';
 import { isSafetyAccepted, resetSafetyAccepted } from './safety.js';
 
@@ -368,6 +368,9 @@ function onImportFile(ev) {
 // Preload TTS for every session's S rows into the browser cache so speech works
 // offline later. Disables the button while running and streams progress.
 async function preloadSpeech() {
+    // Fire the Puter sign-in popup (if needed) off this click's live gesture,
+    // before the scan below spends it on IndexedDB reads — see tts.js.
+    if (getEngine() === 'puter') connectPuter();
     const btn = document.getElementById('btnTtsPreload');
     const out = document.getElementById('ttsPreloadStatus');
     const say = (msg, color) => { if (out) { out.textContent = msg; out.style.color = color || '#888'; } };
