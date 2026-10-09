@@ -343,9 +343,17 @@ esp_err_t tlv320dac3101_init(uint32_t sample_rate)
         return err;
     }
 
-    /* I2S format, 16-bit, BCLK/WCLK as INPUTS => codec is the I2S slave,
-     * which is what we want with the ESP32 as master. */
-    tlv_write(0, P0_CODEC_IF_CTRL1, 0x00);
+    /* Interface format, 16-bit, BCLK/WCLK as INPUTS => codec is the I2S slave,
+     * which is what we want with the ESP32 as master.
+     *
+     * LEFT-JUSTIFIED (bits7:6 = 11), NOT I2S (00), because audio_manager.c
+     * configures the ESP32 side with I2S_STD_MSB_SLOT_DEFAULT_CONFIG — "MSB"
+     * in ESP-IDF means left-justified, i.e. NO one-bit delay after the frame
+     * edge, whereas I2S format has one. Set this to 0x00 and every sample
+     * arrives shifted by a bit, which corrupts the sign bit and turns a clean
+     * tone into harsh noise. (The classic boards' AC101/ES8388 drivers are
+     * configured for the same left-justified framing.) */
+    tlv_write(0, P0_CODEC_IF_CTRL1, 0xC0);
     /* Processing block PRB_P11 — the datasheet example's choice for stereo
      * playback with the standard interpolation filter. */
     tlv_write(0, P0_DAC_PRB, 0x0B);

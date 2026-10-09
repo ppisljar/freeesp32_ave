@@ -62,17 +62,26 @@ CONFIG_BG_SDCARD_MOSI_GPIO=11
 CONFIG_BG_SDCARD_CLK_GPIO=12
 CONFIG_BG_SDCARD_MISO_GPIO=13
 
-# WS2812/SK6812 strip, same 48-LED 12x4 four-channel layout as the glasses
-# board. GPIO14 — clear of I2S (4-7), codec I2C (8/9), SD (10-13), native USB
-# (19/20), flash+OPI PSRAM (26-37) and the strapping pins (0/3/45/46).
+# LEDs: TWO M5Stack NeoHEX boards (37 x WS2812 each), one per eye, chained in
+# series off GPIO18 — 74 pixels total.
 #
-# NOT GPIO21: on this board GPIO21 is the codec's ~RESET line (the 3-pad
-# jumper's default-closed side; EN is the optional side). The codec driver
-# pulses it to bring the codec out of reset, so it is not free for other use.
-# NOT GPIO12 (the glasses data pin): that is the SD card clock here.
+# NeoHEX geometry: 37 = 1 centre + rings of 6, 12 and 18, laid out as hex rows
+# of 4-5-6-7-6-5-4 with the centre at index 18. Four logical channels, matching
+# the convention the other boards use (ch0/ch1 = left eye, ch2/ch3 = right):
+#
+#   ch0 = left  inner  (centre + rings 1-2, 19 px)
+#   ch1 = left  outer  (ring 3,             18 px)
+#   ch2 = right inner  (19 px)
+#   ch3 = right outer  (18 px)
+#
+# The ring pattern is symmetric within every row, so this split holds whether a
+# board is wired left-to-right or serpentine.
+#
+# Pin note: NOT GPIO21 (codec ~RESET — the driver pulses it) and NOT GPIO12
+# (SD card clock on this board).
 CONFIG_LED_DEFAULT_BACKEND_NEOPIXEL=y
-CONFIG_LED_DATA_PIN=14
-CONFIG_LED_COUNT=48
-CONFIG_LED_CHANNEL_MAP="1,1,1,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,2,2,2,2,2,3,3,2,2,3,3,2,2,3,3,2,2,3,3,2,2,2,2,2"
-CONFIG_LED_GRID_WIDTH=12
-CONFIG_LED_GRID_HEIGHT=4
+CONFIG_LED_DATA_PIN=18
+CONFIG_LED_COUNT=74
+CONFIG_LED_CHANNEL_MAP="1,1,1,1,1,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,1,1,1,1,1,3,3,3,3,3,2,2,2,3,3,2,2,2,2,3,3,2,2,2,2,2,3,3,2,2,2,2,3,3,2,2,2,3,3,3,3,3"
+CONFIG_LED_GRID_WIDTH=37
+CONFIG_LED_GRID_HEIGHT=2
