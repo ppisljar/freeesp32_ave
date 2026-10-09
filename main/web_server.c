@@ -20,7 +20,12 @@
 #include "esp_http_server.h"
 #if CONFIG_BG_SUPPORT_PUSH
 #include "esp_http_client.h"     // GET /api/tts — outbound proxy to Google Translate TTS
-#include "esp_crt_bundle.h"      // TLS CA bundle for the TTS proxy HTTPS GET
+#include "esp_crt_bundle.h"
+#ifdef CONFIG_BG_SDCARD_ENABLED
+#include "sdcard.h"
+#include <sys/stat.h>
+#include <dirent.h>
+#endif      // TLS CA bundle for the TTS proxy HTTPS GET
 #include "freertos/FreeRTOS.h"   // async worker pool for long-running handlers
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -87,6 +92,12 @@ static esp_err_t iso_env_handler(httpd_req_t *req);
 static esp_err_t beat_jitter_handler(httpd_req_t *req);
 static esp_err_t audio_phase_handler(httpd_req_t *req);
 static esp_err_t codecreg_handler(httpd_req_t *req);  // bring-up: peek/poke codec regs
+#ifdef CONFIG_BG_SDCARD_ENABLED
+static esp_err_t sd_list_handler(httpd_req_t *req);
+static esp_err_t sd_get_handler(httpd_req_t *req);
+static esp_err_t sd_put_handler(httpd_req_t *req);
+static esp_err_t sd_delete_handler(httpd_req_t *req);
+#endif
 #if CONFIG_BG_SUPPORT_PUSH
 static esp_err_t bg_stream_handler(httpd_req_t *req);   // thin async entry
 #if CONFIG_HTTPD_WS_SUPPORT
@@ -389,6 +400,19 @@ esp_err_t web_server_init(void)
 
     httpd_uri_t codecreg_uri = { .uri = "/api/codecreg", .method = HTTP_GET, .handler = codecreg_handler, .user_ctx = NULL };
     httpd_register_uri_handler(g_server_state.server, &codecreg_uri);
+
+#ifdef CONFIG_BG_SDCARD_ENABLED
+    /* SD card file transfer — same shape as /api/configs, but the payloads are
+     * audio files, so uploads stream and the size cap is much larger. */
+    httpd_uri_t sd_list_uri   = { .uri = "/api/sd",   .method = HTTP_GET,    .handler = sd_list_handler,   .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &sd_list_uri);
+    httpd_uri_t sd_get_uri    = { .uri = "/api/sd/*", .method = HTTP_GET,    .handler = sd_get_handler,    .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &sd_get_uri);
+    httpd_uri_t sd_put_uri    = { .uri = "/api/sd/*", .method = HTTP_PUT,    .handler = sd_put_handler,    .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &sd_put_uri);
+    httpd_uri_t sd_del_uri    = { .uri = "/api/sd/*", .method = HTTP_DELETE, .handler = sd_delete_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &sd_del_uri);
+#endif
 
 #if CONFIG_BG_SUPPORT_PUSH
     httpd_uri_t bg_stream_uri = {
@@ -1656,6 +1680,212 @@ static esp_err_t flicker_jitter_handler(httpd_req_t *req)
 }
 
 // GET /api/audio-phase?ch=<0..15>&deg=<0..359>  — audio pulse phase offset (complement 4).
+#ifdef CONFIG_BG_SDCARD_ENABLED
+/* ===========================================================================
+ * /api/sd — file transfer to and from the microSD card.
+ *
+ * Mirrors the /api/configs handlers above, with three differences that matter:
+ *   - names may contain ONE subdirectory ("speech/sp_1a2b3c4d.wav"), because
+ *     the card is organised into speech/ and bg/;
+ *   - uploads are audio, so the cap is megabytes, not 32 KB. The body is
+ *     streamed to the card in small chunks and never buffered whole — a
+ *     background track is far larger than available heap;
+ *   - the listing reports free/total space, so the web UI can tell the user
+ *     whether a sync will fit before starting it.
+ * =========================================================================== */
+
+#define WEB_SD_BASE     "/sdcard"
+#define WEB_SD_MAX_SIZE (64 * 1024 * 1024)   /* 64 MB per file */
+
+/* Like cfg_name_from_uri, but tolerates a single '/' so "bg/rain.wav" works.
+ * Still rejects "..", absolute paths, and anything outside [A-Za-z0-9._-/]. */
+static bool sd_name_from_uri(httpd_req_t *req, char *out, size_t cap)
+{
+    const char *prefix = "/api/sd/";
+    const char *uri = req->uri;
+    size_t plen = strlen(prefix);
+    if (strncmp(uri, prefix, plen) != 0) return false;
+    const char *name = uri + plen;
+
+    size_t len = 0;
+    while (name[len] && name[len] != '?') len++;
+    if (len == 0 || len >= cap) return false;
+    if (name[0] == '/') return false;
+
+    int slashes = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = name[i];
+        if (c == '/') { slashes++; if (slashes > 1) return false; continue; }
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    if (strstr(name, "..")) return false;
+    memcpy(out, name, len);
+    out[len] = '\0';
+    return true;
+}
+
+/* Create the parent directory of a path, ignoring "already exists". */
+static void sd_mkdir_parent(const char *path)
+{
+    char tmp[192];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    char *slash = strrchr(tmp, '/');
+    if (!slash || slash == tmp) return;
+    *slash = '\0';
+    mkdir(tmp, 0775);
+}
+
+/* Append the files in one directory to the chunked JSON response. */
+static void sd_list_dir(httpd_req_t *req, const char *subdir, bool *first)
+{
+    char dirpath[128];
+    if (subdir && *subdir) snprintf(dirpath, sizeof(dirpath), WEB_SD_BASE "/%s", subdir);
+    else                   snprintf(dirpath, sizeof(dirpath), WEB_SD_BASE);
+
+    DIR *d = opendir(dirpath);
+    if (!d) return;
+    struct dirent *e;
+    char item[420];
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '\0' || e->d_name[0] == '.') continue;
+        if (e->d_type == DT_DIR) continue;        /* recursed explicitly below */
+        /* d_name can be up to 255 chars with long filenames enabled, so these
+         * buffers are sized for the worst case rather than the typical one. */
+        char full[320];
+        if (subdir && *subdir) snprintf(full, sizeof(full), "%s/%s", subdir, e->d_name);
+        else                   snprintf(full, sizeof(full), "%s", e->d_name);
+
+        char statpath[400];
+        snprintf(statpath, sizeof(statpath), WEB_SD_BASE "/%s", full);
+        struct stat st;
+        long sz = (stat(statpath, &st) == 0) ? (long)st.st_size : -1;
+
+        int n = snprintf(item, sizeof(item), "%s{\"name\":\"%s\",\"size\":%ld}",
+                         *first ? "" : ",", full, sz);
+        if (n > 0 && n < (int)sizeof(item)) httpd_resp_sendstr_chunk(req, item);
+        *first = false;
+    }
+    closedir(d);
+}
+
+// GET /api/sd — list files (root + speech/ + bg/) and report space.
+static esp_err_t sd_list_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    if (!sdcard_is_mounted()) {
+        httpd_resp_sendstr(req, "{\"mounted\":false,\"files\":[]}");
+        return ESP_OK;
+    }
+    httpd_resp_sendstr_chunk(req, "{\"mounted\":true,\"files\":[");
+    bool first = true;
+    sd_list_dir(req, NULL,     &first);
+    sd_list_dir(req, "speech", &first);
+    sd_list_dir(req, "bg",     &first);
+    httpd_resp_sendstr_chunk(req, "]");
+
+    uint64_t total = 0, freeb = 0;
+    if (sdcard_get_space(&total, &freeb) == ESP_OK) {
+        char tail[128];
+        int n = snprintf(tail, sizeof(tail),
+                         ",\"total_bytes\":%llu,\"free_bytes\":%llu,\"card\":\"%s\"",
+                         total, freeb, sdcard_name());
+        if (n > 0 && n < (int)sizeof(tail)) httpd_resp_sendstr_chunk(req, tail);
+    }
+    httpd_resp_sendstr_chunk(req, "}");
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+// GET /api/sd/<name> — download a file.
+static esp_err_t sd_get_handler(httpd_req_t *req)
+{
+    char name[160];
+    if (!sdcard_is_mounted()) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no SD card mounted"); return ESP_FAIL; }
+    if (!sd_name_from_uri(req, name, sizeof(name))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name"); return ESP_FAIL;
+    }
+    char path[224];
+    snprintf(path, sizeof(path), WEB_SD_BASE "/%s", name);
+    FILE *f = fopen(path, "rb");
+    if (!f) { httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found"); return ESP_FAIL; }
+
+    httpd_resp_set_type(req, "application/octet-stream");
+    char buf[1024];
+    size_t r;
+    while ((r = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (httpd_resp_send_chunk(req, buf, r) != ESP_OK) { fclose(f); return ESP_FAIL; }
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+// PUT /api/sd/<name> — upload, streamed straight to the card.
+static esp_err_t sd_put_handler(httpd_req_t *req)
+{
+    char name[160];
+    if (!sdcard_is_mounted()) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no SD card mounted"); return ESP_FAIL; }
+    if (!sd_name_from_uri(req, name, sizeof(name))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name"); return ESP_FAIL;
+    }
+    int remaining = req->content_len;
+    if (remaining <= 0 || remaining > WEB_SD_MAX_SIZE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty or too large"); return ESP_FAIL;
+    }
+
+    char path[224];
+    snprintf(path, sizeof(path), WEB_SD_BASE "/%s", name);
+    sd_mkdir_parent(path);
+
+    FILE *f = fopen(path, "wb");
+    if (!f) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "open failed"); return ESP_FAIL; }
+
+    /* Stream in small chunks: an audio file does not fit in heap. */
+    char buf[1024];
+    int received = 0;
+    while (received < remaining) {
+        int chunk = remaining - received;
+        if (chunk > (int)sizeof(buf)) chunk = sizeof(buf);
+        int r = httpd_req_recv(req, buf, chunk);
+        if (r <= 0) {
+            fclose(f); remove(path);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "recv failed"); return ESP_FAIL;
+        }
+        if (fwrite(buf, 1, r, f) != (size_t)r) {
+            fclose(f); remove(path);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write failed (card full?)"); return ESP_FAIL;
+        }
+        received += r;
+    }
+    fclose(f);
+    ESP_LOGI(TAG, "SD upload: %s (%d bytes)", name, received);
+
+    httpd_resp_set_type(req, "application/json");
+    char out[224];
+    int n = snprintf(out, sizeof(out), "{\"saved\":\"%s\",\"bytes\":%d}", name, received);
+    httpd_resp_send(req, out, (n > 0 && n < (int)sizeof(out)) ? n : HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// DELETE /api/sd/<name>
+static esp_err_t sd_delete_handler(httpd_req_t *req)
+{
+    char name[160];
+    if (!sdcard_is_mounted()) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no SD card mounted"); return ESP_FAIL; }
+    if (!sd_name_from_uri(req, name, sizeof(name))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad name"); return ESP_FAIL;
+    }
+    char path[224];
+    snprintf(path, sizeof(path), WEB_SD_BASE "/%s", name);
+    if (remove(path) != 0) { httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found"); return ESP_FAIL; }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"deleted\":true}");
+    return ESP_OK;
+}
+#endif /* CONFIG_BG_SDCARD_ENABLED */
+
 // GET /api/codecreg?page=<n>&reg=<n>[&val=<n>]  — read, or write-then-read, one
 // audio-codec register. BRING-UP TOOL: analog routing/gain on these codecs is
 // tuned by trial, and a rebuild+flash per guess is a ~3 minute loop. All values
