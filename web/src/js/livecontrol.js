@@ -5,9 +5,12 @@
 // ===========================================================
 import { showMessage } from './util.js';
 
+import { startPolling } from './poll.js';
+import { deviceFetch } from './devicefetch.js';
 const CTRL_ANIMATE_MS = 1000;   // patch animation duration
 const CTRL_THROTTLE_MS = 250;   // min gap between patches per control
-const CTRL_POLL_MS = 1000;      // /api/state polling interval
+const CTRL_POLL_MS = 1000;      // gap between /api/state polls (not a deadline)
+let ctrlStopPoll = null;        // startPolling handle, so a re-init cannot double up
 const CTRL_LOCK_AFTER_MS = 1000; // after last input, how long to keep poll-paused
 let ctrlState = null;           // most recent /api/state response
 let ctrlPrevTlRunning = false;  // prior timeline.running, for edge detection
@@ -90,7 +93,7 @@ function ctrlOnLockChange(domain, idx, sel) {
 }
 
 function ctrlPatch(line) {
-    return fetch('/api/patch-config', {
+    return deviceFetch('/api/patch-config', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: line,
@@ -130,7 +133,7 @@ function ctrlFieldValue(domain, idx, field) {
 }
 
 function ctrlSendMod(body) {
-    return fetch('/api/mod', {
+    return deviceFetch('/api/mod', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
       .catch(err => showMessage('Modulation failed: ' + err, 'error'));
@@ -421,7 +424,7 @@ function ctrlBindNumber(numEl, sliderEl, key, onChange) {
 // First-paint: fetch capabilities, render channel rows, attach handlers.
 export async function ctrlInit() {
     let st;
-    try { st = await fetch('/api/state').then(r => r.json()); }
+    try { st = await deviceFetch('/api/state').then(r => r.json()); }
     catch (e) { document.getElementById('ctrl-status').textContent = '(state unavailable)'; return; }
     ctrlState = st;
     ctrlLoadLocks();
@@ -547,8 +550,12 @@ export async function ctrlInit() {
     }
 
     // Now that DOM is built, run the first poll to populate slider positions.
-    ctrlPoll();
-    setInterval(ctrlPoll, CTRL_POLL_MS);
+    // startPolling (not setInterval) so a slow device cannot stack /api/state
+    // requests until they exhaust Chrome's 6-per-host connection pool and the
+    // whole UI wedges — see poll.js. Kept running for the page's lifetime by
+    // design: other views listen for the 'sessionended' event it raises.
+    if (ctrlStopPoll) ctrlStopPoll();
+    ctrlStopPoll = startPolling(ctrlPoll, CTRL_POLL_MS);
 }
 
 function ctrlSetSliderIfNotInteracting(id, key, value, fmt) {
@@ -567,7 +574,7 @@ function ctrlSetSliderIfNotInteracting(id, key, value, fmt) {
 // Poll /api/state and update every slider not currently being dragged.
 async function ctrlPoll() {
     let st;
-    try { st = await fetch('/api/state').then(r => r.json()); }
+    try { st = await deviceFetch('/api/state', { cache: 'no-store' }).then(r => r.json()); }
     catch (e) { return; }
     ctrlState = st;
     const stat = document.getElementById('ctrl-status');

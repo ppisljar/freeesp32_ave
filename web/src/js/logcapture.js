@@ -10,6 +10,8 @@
 
 import { startClientLog, stopClientLog, getClientLogText } from './clientlog.js';
 
+import { startPolling } from './poll.js';
+import { deviceFetch } from './devicefetch.js';
 const POLL_MS = 3000;
 const DB_NAME = 'ave-logs';
 const DB_VERSION = 1;
@@ -56,13 +58,13 @@ let s_acc = '';
 let s_active = false;
 
 function stopTimer() {
-    if (s_timer) { clearInterval(s_timer); s_timer = null; }
+    if (s_timer) { s_timer(); s_timer = null; }   // s_timer is startPolling's stop()
     s_active = false;
 }
 
 async function pollOnce() {
     try {
-        const r = await fetch('/api/logs', { cache: 'no-store' });
+        const r = await deviceFetch('/api/logs', { cache: 'no-store' });
         const txt = r.ok ? await r.text() : '';
         if (txt) s_acc = mergeLogSnapshots(s_acc, txt);
     } catch (e) { /* transient (busy httpd / network) — retry next tick */ }
@@ -75,8 +77,8 @@ export function startLogCapture() {
     s_acc = '';
     s_active = true;
     startClientLog();                        // browser-side log for the same window
-    pollOnce();                              // immediate first sample
-    s_timer = setInterval(pollOnce, POLL_MS);
+    // startPolling runs it immediately and never overlaps — see poll.js.
+    s_timer = startPolling(pollOnce, POLL_MS);
 }
 
 export function isCapturing() { return s_active; }

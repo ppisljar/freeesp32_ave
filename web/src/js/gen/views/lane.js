@@ -26,6 +26,7 @@ import {
 } from '../pulse.js';
 import { getState } from '../transport.js';
 
+import { startPolling } from '../../poll.js';
 function fakeAnchor(x, y) {
     return { getBoundingClientRect: () => ({ left: x, top: y, bottom: y, right: x, width: 0, height: 0 }) };
 }
@@ -363,14 +364,13 @@ export function initLaneView(ctx) {
         renderToolbar();
         lc.fitToContent();
         rerender();
-        pollPlayhead();
-        if (!pollTimer) pollTimer = setInterval(pollPlayhead, 1000);
+        if (!pollTimer) pollTimer = startPolling(pollPlayhead, 1000);
     }
     function hide() {
         visible = false;
         root.style.display = 'none';
         closeOpenPopover();
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        if (pollTimer) { pollTimer(); pollTimer = null; }
     }
 
     return { refresh, show, hide };

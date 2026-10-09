@@ -5,6 +5,7 @@ import { serializeForDevice } from './serialize.js';
 import { NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS } from './model.js';
 import { clogI, clogW, clogE } from '../clientlog.js';
 
+import { deviceFetch } from '../devicefetch.js';
 // Serialize the model and POST it to /api/play-config (text/plain). Stops any
 // running timeline on the device and starts this one.
 //
@@ -14,7 +15,7 @@ import { clogI, clogW, clogE } from '../clientlog.js';
 export function playDoc(doc, opts) {
     const body = serializeForDevice(doc, opts);
     clogI('http', 'POST /api/play-config (' + body.length + ' bytes)');
-    return fetch('/api/play-config', {
+    return deviceFetch('/api/play-config', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body,
@@ -28,7 +29,7 @@ export function playDoc(doc, opts) {
 // POST raw .ledc text to /api/play-config (caller has already filtered it, e.g.
 // dropped A + S rows for a "bounce all" play where the device only runs LEDs).
 export function playConfigText(text) {
-    return fetch('/api/play-config', {
+    return deviceFetch('/api/play-config', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: text,
@@ -38,14 +39,14 @@ export function playConfigText(text) {
 // Stop all audio + LED (drops the running timeline).
 export function stop() {
     clogI('http', 'POST /api/stop');
-    return fetch('/api/stop', { method: 'POST' }).then(r => r.text())
+    return deviceFetch('/api/stop', { method: 'POST' }).then(r => r.text())
         .catch(err => { clogE('http', '/api/stop failed:', err); throw err; });
 }
 
 // Apply a single live-patch line (additive; does not restart the timeline).
 // `line` is one .ledc-format line of text.
 export function patchLine(line) {
-    return fetch('/api/patch-config', {
+    return deviceFetch('/api/patch-config', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: line,
@@ -54,7 +55,7 @@ export function patchLine(line) {
 
 // Snapshot of current per-channel engine state (JSON).
 export function getState() {
-    return fetch('/api/state').then(r => {
+    return deviceFetch('/api/state').then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
     });
@@ -123,11 +124,12 @@ export function pushBg(wavBlob, { pan = 0, loudness = 50 } = {}) {
     const ctl = new AbortController();
     s_pushAbort = ctl;
     clogI('bg-http', 'POST /api/bg-stream (' + (wavBlob.size || '?') + ' bytes, pan=' + pan + ' loudness=' + loudness + ')');
-    return fetch('/api/bg-stream' + q, {
+    return deviceFetch('/api/bg-stream' + q, {
         method: 'POST',
         headers: { 'Content-Type': 'audio/wav' },
         body: wavBlob,
-        signal: ctl.signal,
+        signal: ctl.signal,     // caller-owned abort; deviceFetch adds no deadline
+        gate: false,            // minutes-long upload — must not hold a gate slot
     }).then(r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         clogI('bg-http', '/api/bg-stream done → ' + r.status);
@@ -291,7 +293,7 @@ export function stopBgWs() {
 export function stopBg() {
     if (s_pushAbort) { try { s_pushAbort.abort(); } catch (e) { /* ignore */ } s_pushAbort = null; }
     if (s_bgWs) { try { s_bgWs.close(1000, 'stop'); clogI('ws', 'closed by stopBg'); } catch (e) { /* ignore */ } s_bgWs = null; }
-    return fetch('/api/bg-stream?stop=1', { method: 'POST' })
+    return deviceFetch('/api/bg-stream?stop=1', { method: 'POST' })
         .then(r => r.json())
         .catch(() => ({ ok: false }));
 }

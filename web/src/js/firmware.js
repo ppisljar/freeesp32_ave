@@ -24,6 +24,7 @@
 
 import { showMessage } from './util.js';
 
+import { deviceFetch } from './devicefetch.js';
 // ---- pure helpers (exported for unit testing) ------------------------------
 
 // Lowercase hex string of an ArrayBuffer / TypedArray of bytes.
@@ -263,7 +264,8 @@ async function runFromTrigger() {
     banner('Requesting reboot into the updater…', 'working');
     let ack;
     try {
-        const r = await fetch('/api/ota', { method: 'POST' });
+        // The device writes flash before replying; well past the default deadline.
+        const r = await deviceFetch('/api/ota', { method: 'POST', timeoutMs: 30000 });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         ack = await r.json();
     } catch (e) {
@@ -425,7 +427,7 @@ async function loadVersion() {
     const el = $('fwVersion');
     if (!el) return;
     try {
-        const r = await fetch('/api/version', { cache: 'no-store' });
+        const r = await deviceFetch('/api/version', { cache: 'no-store' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const v = await r.json();
         const ver = v.version || 'unknown';

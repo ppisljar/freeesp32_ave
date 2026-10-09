@@ -18,6 +18,7 @@
 import { showMessage } from './util.js';
 import { getStoredLog, deleteStoredLog } from './logcapture.js';
 
+import { deviceFetch } from './devicefetch.js';
 const LOCAL_PREFIX = 'report:';
 const SRC_LABEL = { spiffs: 'Device (SPIFFS)', local: 'Browser (local)' };
 const lastLists = { spiffs: [], local: [] };
@@ -172,7 +173,7 @@ function showEditor(meta) {
 // Low-level save of a fully-composed report to the destination configured in
 // Settings, under `name`. Returns the name on success, null otherwise.
 function persist(name, text) {
-    return fetch('/api/settings')
+    return deviceFetch('/api/settings')
         .then(r => r.ok ? r.json() : {})
         .then(s => {
             const dest = (s && s.report_storage) || 'none';
@@ -186,7 +187,7 @@ function persist(name, text) {
                 return name;
             }
             // spiffs
-            return fetch('/api/reports/' + encodeURIComponent(name),
+            return deviceFetch('/api/reports/' + encodeURIComponent(name),
                 { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: text })
                 .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })
                 .then(() => {
@@ -333,7 +334,7 @@ export function saveReportEdits() {
 
 // ---- listing / viewing ---------------------------------------------------
 function listSpiffs() {
-    return fetch('/api/reports')
+    return deviceFetch('/api/reports')
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(d => d.files || []);
 }
@@ -471,7 +472,7 @@ export function refreshReportList() {
 
 function loadReport(src, name) {
     if (src === 'spiffs') {
-        return fetch('/api/reports/' + encodeURIComponent(name))
+        return deviceFetch('/api/reports/' + encodeURIComponent(name))
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
     }
     const v = localStorage.getItem(LOCAL_PREFIX + name);
@@ -560,7 +561,7 @@ export function deleteReport() {
         refreshReportList();
     };
     if (sel.src === 'spiffs') {
-        fetch('/api/reports/' + encodeURIComponent(sel.name), { method: 'DELETE' })
+        deviceFetch('/api/reports/' + encodeURIComponent(sel.name), { method: 'DELETE' })
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); done(); })
             .catch(err => showMessage('Delete failed: ' + err, 'error'));
     } else {

@@ -13,6 +13,7 @@ import { preloadAllSpeech } from './gen/ttspreload.js';
 import { syncSpeechToCard, listCard } from './gen/sdsync.js';
 import { isSafetyAccepted, resetSafetyAccepted } from './safety.js';
 
+import { deviceFetch } from './devicefetch.js';
 // Refresh the "Safety notice" status line + reset-button label to reflect
 // whether this browser has already acknowledged the epilepsy/photosensitivity
 // notice. Browser-local only (no device setting).
@@ -273,7 +274,7 @@ function collect() {
 }
 
 export function loadSettings() {
-    return fetch('/api/settings')
+    return deviceFetch('/api/settings')
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(render)
         .catch(err => showMessage('Settings load failed: ' + err, 'error'));
@@ -281,7 +282,7 @@ export function loadSettings() {
 
 function postSettings() {
     const body = JSON.stringify(collect());
-    return fetch('/api/settings', {
+    return deviceFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -296,14 +297,14 @@ function saveSettings() {
 
 function saveAndReboot() {
     postSettings()
-        .then(() => fetch('/api/reboot', { method: 'POST' }))
+        .then(() => deviceFetch('/api/reboot', { method: 'POST' }))
         .then(() => showMessage('Settings saved — device is rebooting…', 'success'))
         .catch(err => showMessage('Save & Reboot failed: ' + err, 'error'));
 }
 
 function restoreDefaults() {
     if (!confirm('Restore all settings to firmware defaults?')) return;
-    fetch('/api/settings/reset', { method: 'POST' })
+    deviceFetch('/api/settings/reset', { method: 'POST' })
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(s => { render(s); showMessage('Settings restored to defaults', 'success'); })
         .catch(err => showMessage('Restore failed: ' + err, 'error'));
@@ -319,7 +320,7 @@ function fileTimestamp(d) {
 // Export the fresh canonical settings (from GET, so no password) as a
 // pretty-printed .json file downloaded by the browser.
 function exportSettings() {
-    fetch('/api/settings')
+    deviceFetch('/api/settings')
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(obj => {
             const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });

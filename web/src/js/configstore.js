@@ -7,6 +7,7 @@
 //  dropdown while an unreachable generatorUrl timed out.)
 import { showMessage } from './util.js';
 
+import { deviceFetch } from './devicefetch.js';
 const LOCAL_PREFIX = 'ledc:';
 const NAME_RE = /^[A-Za-z0-9._-]+\.ledc$/;
 
@@ -23,7 +24,7 @@ export function getCurrentConfigName() { return currentName; }
 
 // ---- per-source list/load/save -------------------------------------------
 function listSpiffs() {
-    return fetch('/api/configs')
+    return deviceFetch('/api/configs')
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(d => d.files || []);
 }
@@ -38,7 +39,7 @@ function listLocal() {
 
 function loadFromSource(src, name) {
     if (src === 'spiffs') {
-        return fetch('/api/configs/' + encodeURIComponent(name))
+        return deviceFetch('/api/configs/' + encodeURIComponent(name))
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
     }
     // local
@@ -48,7 +49,7 @@ function loadFromSource(src, name) {
 
 function saveToSource(src, name, body) {
     if (src === 'spiffs') {
-        return fetch('/api/configs/' + encodeURIComponent(name),
+        return deviceFetch('/api/configs/' + encodeURIComponent(name),
             { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body })
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json().catch(() => ({ saved: name })); });
     }

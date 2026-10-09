@@ -11,6 +11,7 @@ import { setText } from './generator.js';
 import { saveConfigText } from '../configstore.js';
 import { showMessage } from '../util.js';
 
+import { deviceFetch } from '../devicefetch.js';
 const REPO   = 'ppisljar/freeesp32_ave';
 const BRANCH = 'main';
 // Fully-qualified `refs/heads/<branch>` form (what GitHub's "Raw" button emits).
@@ -47,7 +48,7 @@ function setBadge(root, file, cls, text) {
 async function refreshStatus(sessions, path, root) {
     let devSet = new Set();
     try {
-        const j = await fetch('/api/configs').then(r => r.json());
+        const j = await deviceFetch('/api/configs').then(r => r.json());
         devSet = new Set(j.files || []);
     } catch (e) { return; }   // device unreachable → leave badges neutral
     for (const s of sessions) {
@@ -56,7 +57,7 @@ async function refreshStatus(sessions, path, root) {
         if (!s.hash) { setBadge(root, s.file, 'comm-badge-ondev', 'on device'); continue; }
         setBadge(root, s.file, 'comm-badge-check', 'checking…');
         try {
-            const devTxt = await fetch('/api/configs/' + encodeURIComponent(s.file)).then(r => r.text());
+            const devTxt = await deviceFetch('/api/configs/' + encodeURIComponent(s.file)).then(r => r.text());
             const same = contentHash(devTxt) === s.hash;
             setBadge(root, s.file, same ? 'comm-badge-ok' : 'comm-badge-update',
                      same ? '✓ on device' : '⬆ update available');

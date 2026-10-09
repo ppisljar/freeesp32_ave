@@ -18,6 +18,7 @@ import { collectPhrases } from './ttspreload.js';
 import { audioBufferToWav16 } from './bgaudio.js';
 import { clogI, clogW, clogE } from '../clientlog.js';
 
+import { deviceFetch } from '../devicefetch.js';
 // FNV-1a 32-bit. Must match main/speech_player.c exactly.
 // `| 0` then `>>> 0` keeps JS in 32-bit unsigned space; Math.imul does the
 // 32-bit multiply C does natively (a plain `*` loses precision past 2^53).
@@ -43,13 +44,17 @@ export function speechFilename(voice, text) {
 // ---- device file list ------------------------------------------------------
 
 export async function listCard() {
-    const r = await fetch('/api/sd', { cache: 'no-store' });
+    const r = await deviceFetch('/api/sd', { cache: 'no-store' });
     if (!r.ok) throw new Error('/api/sd HTTP ' + r.status);
     return r.json();   // { mounted, files:[{name,size}], total_bytes, free_bytes, card }
 }
 
 async function uploadFile(name, blob) {
-    const r = await fetch('/api/sd/' + name, { method: 'PUT', body: blob });
+    // A phrase WAV is a few hundred KB over wifi to a microcontroller writing
+    // it to an SD card — comfortably past deviceFetch's default deadline.
+    const r = await deviceFetch('/api/sd/' + name, {
+        method: 'PUT', body: blob, timeoutMs: 60000,
+    });
     if (!r.ok) throw new Error('upload ' + name + ' failed: HTTP ' + r.status);
     return r.json();
 }

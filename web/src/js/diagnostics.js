@@ -10,6 +10,8 @@
 
 import { showMessage } from './util.js';
 
+import { startPolling } from './poll.js';
+import { deviceFetch } from './devicefetch.js';
 const POLL_MS = 3000;
 let autoTimer = null;
 
@@ -42,7 +44,7 @@ const CRASH_REASONS = new Set(['PANIC', 'INT_WDT', 'TASK_WDT', 'WDT', 'BROWNOUT'
 async function loadState() {
     let st;
     try {
-        st = await fetch('/api/state', { cache: 'no-store' }).then(r => r.json());
+        st = await deviceFetch('/api/state', { cache: 'no-store' }).then(r => r.json());
     } catch (e) {
         $('diagHealth').textContent = '(device unreachable)';
         return;
@@ -118,7 +120,7 @@ function esc(x) {
 async function loadLogs() {
     const pre = $('diagLog');
     try {
-        const txt = await fetch('/api/logs', { cache: 'no-store' }).then(r => r.text());
+        const txt = await deviceFetch('/api/logs', { cache: 'no-store' }).then(r => r.text());
         // Preserve the user's scroll position unless they were already at the bottom.
         const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
         pre.textContent = txt || '(log buffer empty)';
@@ -135,7 +137,7 @@ const AUDIO_BUDGET_US = 1024 / 44100 * 1e6;   // ~23220 µs per fill
 async function loadAudioStats() {
     let a;
     try {
-        a = await fetch('/api/audiostats', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+        a = await deviceFetch('/api/audiostats', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
     } catch (e) { a = null; }
     if (!a) { $('diagAudioNote').textContent = '(unavailable)'; return; }
     $('diagAudioNote').textContent = '';
@@ -158,7 +160,7 @@ async function loadAudioStats() {
 async function refreshAll() { await Promise.all([loadState(), loadLogs(), loadAudioStats()]); }
 
 async function clearLogs() {
-    try { await fetch('/api/logs?clear=1', { cache: 'no-store' }); } catch (e) { /* ignore */ }
+    try { await deviceFetch('/api/logs?clear=1', { cache: 'no-store' }); } catch (e) { /* ignore */ }
     await loadLogs();
     showMessage('Log buffer cleared.', 'success');
 }
@@ -174,7 +176,7 @@ function copyLogs() {
 async function eraseCoredump() {
     if (!confirm('Erase the stored crash core dump? Download it first if you still need it.')) return;
     try {
-        const r = await fetch('/api/coredump/erase', { method: 'POST' });
+        const r = await deviceFetch('/api/coredump/erase', { method: 'POST' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         showMessage('Core dump erased.', 'success');
     } catch (e) {
@@ -186,7 +188,7 @@ async function eraseCoredump() {
 async function rebootDevice() {
     if (!confirm('Reboot the device now? Audio and LED output will stop for ~10 s.')) return;
     try {
-        await fetch('/api/reboot', { method: 'POST' });
+        await deviceFetch('/api/reboot', { method: 'POST' });
     } catch (e) { /* the reboot drops the connection — expected */ }
     showMessage('Rebooting…', 'info');
     $('diagHealth').textContent = 'Rebooting — waiting for the device to return…';
@@ -194,7 +196,7 @@ async function rebootDevice() {
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
         try {
-            const r = await fetch('/api/state', { cache: 'no-store' });
+            const r = await deviceFetch('/api/state', { cache: 'no-store' });
             if (r.ok) {
                 showMessage('Device back online.', 'success');
                 await refreshAll();
@@ -208,8 +210,10 @@ async function rebootDevice() {
 }
 
 function setAuto(on) {
-    if (on && !autoTimer) autoTimer = setInterval(refreshAll, POLL_MS);
-    if (!on && autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    // startPolling, not setInterval: refreshAll fans out to several endpoints,
+    // so a slow device stacks them fastest of all the pollers — see poll.js.
+    if (on && !autoTimer) autoTimer = startPolling(refreshAll, POLL_MS);
+    if (!on && autoTimer) { autoTimer(); autoTimer = null; }
 }
 
 // --- runtime log levels (GET/POST /api/loglevels) --------------------------
@@ -221,7 +225,7 @@ async function loadLogLevels() {
     if (!box) return;
     let data;
     try {
-        data = await fetch('/api/loglevels', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+        data = await deviceFetch('/api/loglevels', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
     } catch (e) { box.textContent = '(log levels unavailable)'; return; }
     if (!data || !Array.isArray(data.categories)) { box.textContent = '(log levels unavailable)'; return; }
     const levels = data.levels || ['none', 'error', 'warn', 'info', 'debug', 'verbose'];
@@ -243,7 +247,7 @@ async function loadLogLevels() {
 async function setLogLevel(cat, level) {
     try {
         const body = {}; body[cat] = level;
-        const r = await fetch('/api/loglevels', {
+        const r = await deviceFetch('/api/loglevels', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });

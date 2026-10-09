@@ -17,6 +17,7 @@ import { parse } from './gen/parse.js';
 import { playSession, cancelPendingPlay } from './gen/play.js';
 import { stopBg } from './gen/transport.js';
 
+import { deviceFetch } from './devicefetch.js';
 // Report-on-session-end. Rather than guessing when a session finishes, we
 // fetch the report when the live-control poll detects the timeline's
 // running→stopped edge (fired as a 'sessionended' window event). A generous
@@ -49,7 +50,7 @@ window.addEventListener('sessionended', () => {
 });
 
 export function loadExample() {
-    fetch('/api/example')
+    deviceFetch('/api/example')
         .then(response => response.text())
         .then(data => {
             document.getElementById('exampleConfig').value = data;
@@ -65,7 +66,7 @@ export function stopConfig() {
     // Abort any in-flight browser BG push FIRST, else it keeps uploading and the
     // device keeps playing the background track after the timeline is stopped.
     stopBg();
-    fetch('/api/stop', { method: 'POST' })
+    deviceFetch('/api/stop', { method: 'POST' })
         .then(response => response.text())
         .then(result => {
             showMessage(result + ' — report when the session ends', 'success');
@@ -169,7 +170,7 @@ function formatPressSnapshot(parsed, tMs) {
 }
 
 function fetchReport() {
-    fetch('/api/report')
+    deviceFetch('/api/report')
         .then(r => r.json())
         .then(rep => {
             const sessSec = rep.session_origin_us > 0

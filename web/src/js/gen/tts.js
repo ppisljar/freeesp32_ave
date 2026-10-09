@@ -22,6 +22,7 @@ import { decodeFile, audioBufferToWav16, wavBlob, DEVICE_SAMPLE_RATE, DEVICE_CHA
 import { cacheGet, cachePut } from './bgstore.js';
 import { timeStretch } from './timestretch.js';
 
+import { deviceFetch } from '../devicefetch.js';
 // This device UI is normally served over plain http://<mdns-name>.local, which
 // browsers do NOT treat as a secure context (only https:// or localhost
 // qualify). Puter's SDK calls crypto.randomUUID() — a secure-context-only API
@@ -80,7 +81,8 @@ export function chunkText(text, maxLen = CHUNK_CHARS) {
 // Fetch + decode + conform one text chunk to a 44100/stereo AudioBuffer.
 async function fetchChunk(chunk, voice) {
     const q = '?tl=' + encodeURIComponent(voice || 'en') + '&q=' + encodeURIComponent(chunk);
-    const r = await fetch('/api/tts' + q);
+    // Device-proxied TTS reaches out to the internet — slower than any local route.
+    const r = await deviceFetch('/api/tts' + q, { timeoutMs: 30000 });
     if (!r.ok) throw new Error('TTS HTTP ' + r.status);
     const ab = await r.arrayBuffer();
     return decodeFile(ab);   // decodeAudioData(mp3) -> conform to 44100/stereo

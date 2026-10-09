@@ -13,6 +13,7 @@ import { generatorInit } from './gen/generator.js';
 import { firmwareInit } from './firmware.js';
 import { diagnosticsInit } from './diagnostics.js';
 
+import { deviceFetch } from './devicefetch.js';
 function bind(id, fn) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('click', fn);
@@ -22,7 +23,7 @@ async function boot() {
     // Generator base URL is injected by the firmware (CONFIG_GENERATOR_SERVER_URL)
     // via /api/appconfig, so the static assets stay device-independent.
     try {
-        const cfg = await fetch('/api/appconfig').then(r => r.json());
+        const cfg = await deviceFetch('/api/appconfig').then(r => r.json());
         appConfig.generatorUrl = (cfg && cfg.generator_url) || '';
     } catch (e) {
         appConfig.generatorUrl = '';
