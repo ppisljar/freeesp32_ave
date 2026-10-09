@@ -12,6 +12,7 @@
 
 #include "settings.h"
 #include "sdkconfig.h"
+#include "driver/gpio.h"   /* GPIO_IS_VALID_GPIO — per-target GPIO validity mask */
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -172,6 +173,8 @@ static void settings_seed_defaults(device_settings_t *s)
     s->audio_codec = AUDIO_CODEC_AC101;
 #elif defined(CONFIG_AUDIO_DEFAULT_CODEC_ES8388)
     s->audio_codec = AUDIO_CODEC_ES8388;
+#elif defined(CONFIG_AUDIO_DEFAULT_CODEC_TLV320DAC3101)
+    s->audio_codec = AUDIO_CODEC_TLV320DAC3101;
 #else
     s->audio_codec = AUDIO_CODEC_NONE;
 #endif
@@ -330,18 +333,28 @@ const device_settings_t *settings_get(void)
 
 /* ------------------------------------------------------------- JSON apply --- */
 
-static int clamp_pin(int v)
+/* Validate against the SoC's real GPIO map rather than a hardcoded ceiling.
+ * GPIO_IS_VALID_GPIO also rejects the holes in a target's numbering (the S3
+ * has no GPIO22-25), which a numeric clamp cannot express. Clamping is the
+ * wrong remedy for an out-of-range pin anyway: silently turning a requested
+ * GPIO47 into GPIO39 drives a completely different pin. -1 stays the "not
+ * wired" sentinel. Returns false and leaves the caller's field untouched. */
+static bool pin_is_valid(int v)
 {
-    if (v < -1) return -1;
-    if (v > 39) return 39;
-    return v;
+    return v == -1 || (v >= 0 && GPIO_IS_VALID_GPIO(v));
 }
 
 static void apply_pin(const cJSON *root, const char *key, int *field)
 {
     const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
     if (cJSON_IsNumber(it)) {
-        *field = clamp_pin((int)it->valuedouble);
+        int v = (int)it->valuedouble;
+        if (!pin_is_valid(v)) {
+            ESP_LOGW(TAG, "%s: GPIO %d is not valid on this chip — keeping %d",
+                     key, v, *field);
+            return;
+        }
+        *field = v;
     }
 }
 
@@ -417,7 +430,14 @@ esp_err_t settings_apply_json(const char *body, int len)
         if (n > SETTINGS_LED_DIRECT_CHANNELS) n = SETTINGS_LED_DIRECT_CHANNELS;
         for (int i = 0; i < n; i++) {
             const cJSON *e = cJSON_GetArrayItem(dp, i);
-            if (cJSON_IsNumber(e)) cur.led_direct_pins[i] = clamp_pin((int)e->valuedouble);
+            if (!cJSON_IsNumber(e)) continue;
+            int v = (int)e->valuedouble;
+            if (!pin_is_valid(v)) {
+                ESP_LOGW(TAG, "led_direct_pins[%d]: GPIO %d is not valid on this "
+                         "chip — keeping %d", i, v, cur.led_direct_pins[i]);
+                continue;
+            }
+            cur.led_direct_pins[i] = v;
         }
     }
     apply_int(root, "led_direct_active_low_mask", &cur.led_direct_active_low_mask, 0, 255);
@@ -447,6 +467,12 @@ esp_err_t settings_apply_json(const char *body, int len)
             cur.audio_codec = AUDIO_CODEC_ES8388;
 #else
             ESP_LOGW(TAG, "audio_codec 'es8388' not compiled in — ignoring");
+#endif
+        } else if (!strcmp(cd->valuestring, "tlv320dac3101")) {
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+            cur.audio_codec = AUDIO_CODEC_TLV320DAC3101;
+#else
+            ESP_LOGW(TAG, "audio_codec 'tlv320dac3101' not compiled in — ignoring");
 #endif
         }
     }
@@ -535,10 +561,11 @@ static const char *led_backend_str(led_backend_t b)
 static const char *audio_codec_str(audio_codec_t c)
 {
     switch (c) {
-        case AUDIO_CODEC_AC101:  return "ac101";
-        case AUDIO_CODEC_ES8388: return "es8388";
+        case AUDIO_CODEC_AC101:          return "ac101";
+        case AUDIO_CODEC_ES8388:         return "es8388";
+        case AUDIO_CODEC_TLV320DAC3101:  return "tlv320dac3101";
         case AUDIO_CODEC_NONE:
-        default:                 return "none";
+        default:                         return "none";
     }
 }
 
@@ -624,6 +651,9 @@ int settings_to_json(char *buf, int cap)
 #endif
 #if CONFIG_AUDIO_SUPPORT_ES8388
             cJSON_AddItemToArray(codec, cJSON_CreateString("es8388"));
+#endif
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+            cJSON_AddItemToArray(codec, cJSON_CreateString("tlv320dac3101"));
 #endif
         }
         // SD card support is a compile-time feature (CONFIG_BG_SDCARD_ENABLED);

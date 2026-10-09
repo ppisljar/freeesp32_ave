@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "driver/i2s_std.h"
+#include "soc/soc_caps.h"   /* SOC_I2S_SUPPORTS_APLL — classic ESP32 only */
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -60,18 +61,24 @@ esp_err_t audio_manager_init(void)
     // I2S_GPIO_UNUSED (-1) when the matching CONFIG_AUDIO_I2S_*_GPIO is -1,
     // so the same struct works whether or not MCLK/DIN are wired.
     //
-    // Clock source: use APLL when we need a precise MCLK output (most I2C
-    // codecs derive their internal state-machine clock from MCLK and will
-    // misbehave if MCLK is missing or has poor jitter). The default 160 MHz
-    // PLL cannot integer-divide to standard audio rates × 256 — for
-    // 44100 × 256 = 11.2896 MHz, you'd get ~11.43 MHz from PLL_160M.
-    // APLL has fractional-N synthesis and produces audio rates exactly.
-    // squeezelite-esp32 and ESP-ADF both unconditionally use APLL for the
-    // same reason.
+    // Clock source: on the classic ESP32, use APLL when we need a precise MCLK
+    // output (most I2C codecs derive their internal state-machine clock from
+    // MCLK and will misbehave if MCLK is missing or has poor jitter). That
+    // chip's default 160 MHz PLL cannot integer-divide to standard audio rates
+    // × 256 — for 44100 × 256 = 11.2896 MHz you'd get ~11.43 MHz from PLL_160M
+    // — whereas APLL has fractional-N synthesis and hits audio rates exactly.
+    // squeezelite-esp32 and ESP-ADF both use APLL for the same reason.
+    //
+    // The ESP32-S3 has no APLL on I2S at all (SOC_I2S_SUPPORTS_APLL undefined;
+    // its sources are PLL_F160M / PLL_D2 / XTAL). It does not need one: its I2S
+    // clock divider does true fractional division, so the driver synthesises
+    // exact audio rates from PLL_F160M on its own. See legacyesp32.md.
     i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_SAMPLE_RATE);
+#if SOC_I2S_SUPPORTS_APLL
     if (cfg->i2s_mclk_pin != GPIO_NUM_NC) {
         clk_cfg.clk_src = I2S_CLK_SRC_APLL;
     }
+#endif
     i2s_std_config_t std_cfg = {
         .clk_cfg = clk_cfg,
         .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),

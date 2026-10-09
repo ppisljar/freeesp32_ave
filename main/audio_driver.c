@@ -28,6 +28,13 @@ esp_err_t es8388_set_volume(float volume);
 esp_err_t es8388_deinit(void);
 #endif
 
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+esp_err_t tlv320dac3101_init(uint32_t sample_rate);
+esp_err_t tlv320dac3101_set_sample_rate(uint32_t sample_rate);
+esp_err_t tlv320dac3101_set_volume(float volume);
+esp_err_t tlv320dac3101_deinit(void);
+#endif
+
 esp_err_t audio_driver_init(uint32_t sample_rate)
 {
     switch (settings_get()->audio_codec) {
@@ -40,6 +47,11 @@ esp_err_t audio_driver_init(uint32_t sample_rate)
     case AUDIO_CODEC_ES8388:
         ESP_LOGI(TAG, "Initializing ES8388 codec @ %u Hz", (unsigned)sample_rate);
         return es8388_init(sample_rate);
+#endif
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+    case AUDIO_CODEC_TLV320DAC3101:
+        ESP_LOGI(TAG, "Initializing TLV320DAC3101 codec @ %u Hz", (unsigned)sample_rate);
+        return tlv320dac3101_init(sample_rate);
 #endif
     case AUDIO_CODEC_NONE:
     default:
@@ -60,6 +72,10 @@ esp_err_t audio_driver_set_sample_rate(uint32_t sample_rate)
     case AUDIO_CODEC_ES8388:
         return es8388_set_sample_rate(sample_rate);
 #endif
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+    case AUDIO_CODEC_TLV320DAC3101:
+        return tlv320dac3101_set_sample_rate(sample_rate);
+#endif
     case AUDIO_CODEC_NONE:
     default:
         (void)sample_rate;
@@ -77,6 +93,10 @@ esp_err_t audio_driver_set_volume(float volume)
 #if CONFIG_AUDIO_SUPPORT_ES8388
     case AUDIO_CODEC_ES8388:
         return es8388_set_volume(volume);
+#endif
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+    case AUDIO_CODEC_TLV320DAC3101:
+        return tlv320dac3101_set_volume(volume);
 #endif
     case AUDIO_CODEC_NONE:
     default:
@@ -96,6 +116,10 @@ esp_err_t audio_driver_deinit(void)
     case AUDIO_CODEC_ES8388:
         return es8388_deinit();
 #endif
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+    case AUDIO_CODEC_TLV320DAC3101:
+        return tlv320dac3101_deinit();
+#endif
     case AUDIO_CODEC_NONE:
     default:
         return ESP_OK;
@@ -106,7 +130,7 @@ static const char *i2c_addr_hint(uint8_t addr)
 {
     switch (addr) {
         case 0x10: case 0x11: return " (ES8388 / ES8311 class)";
-        case 0x18:            return " (TAS5713)";
+        case 0x18:            return " (TLV320DAC3101 / TAS5713)";
         case 0x1A:            return " (AC101)";
         case 0x20: case 0x21: case 0x22: case 0x23:
         case 0x24: case 0x25: case 0x26: case 0x27:

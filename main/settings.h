@@ -31,9 +31,10 @@ typedef enum {
 } led_backend_t;
 
 typedef enum {
-    AUDIO_CODEC_NONE   = 0,
-    AUDIO_CODEC_AC101  = 1,
-    AUDIO_CODEC_ES8388 = 2,
+    AUDIO_CODEC_NONE           = 0,
+    AUDIO_CODEC_AC101          = 1,
+    AUDIO_CODEC_ES8388         = 2,
+    AUDIO_CODEC_TLV320DAC3101  = 3,
 } audio_codec_t;
 
 typedef struct {

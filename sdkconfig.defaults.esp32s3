@@ -1,0 +1,68 @@
+# ESP32-S3 target defaults — applied on top of sdkconfig.defaults whenever
+# IDF_TARGET is esp32s3 (ESP-IDF auto-loads sdkconfig.defaults.<target>).
+#
+# Board: YelloByte YB-ESP32-S3-DAC (ESP32-S3-WROOM-1 N16R8)
+#   - 16 MB flash, 8 MB octal PSRAM
+#   - TI TLV320DAC3101 codec on I2C 0x18
+#   - headphone jack + 1.3 W/8R class-D speaker outputs
+#   - microSD on SPI, onboard status LED on GPIO47
+# See legacyesp32.md for where this target deliberately diverges from classic.
+
+# ---- Flash / PSRAM -------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# 16 MB layout: both OTA slots are full size, so the main app fits in either
+# one (the 4 MB classic table cannot do this — see legacyesp32.md).
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16mb.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_16mb.csv"
+
+# ---- Board pin defaults (first-boot seed for the runtime settings store) --
+# These only seed NVS on first boot; everything here is changeable at runtime
+# from the web UI Settings page.
+
+# I2S to the TLV320DAC3101.
+#
+# MCLK is deliberately -1 (unused). GPIO4 reaches the codec's MCLK pin only
+# through solder bridge JP2, which ships OPEN — so out of the box the codec has
+# no MCLK at all. The driver therefore clocks its PLL from BCLK, which is the
+# configuration the board vendor's own shipping example uses. If you close JP2,
+# set this to 4 and the driver will use the MCLK=256xFs clock tree instead.
+CONFIG_AUDIO_I2S_MCLK_GPIO=-1
+CONFIG_AUDIO_I2S_BCK_GPIO=5
+CONFIG_AUDIO_I2S_WS_GPIO=6
+CONFIG_AUDIO_I2S_DATA_GPIO=7
+CONFIG_AUDIO_I2S_DIN_GPIO=-1
+CONFIG_AUDIO_AMP_ENABLE_GPIO=-1
+
+# Codec control bus.
+CONFIG_AUDIO_CODEC_I2C_PORT=0
+CONFIG_AUDIO_CODEC_I2C_SDA_GPIO=8
+CONFIG_AUDIO_CODEC_I2C_SCL_GPIO=9
+CONFIG_AUDIO_CODEC_I2C_FREQ_HZ=100000
+CONFIG_AUDIO_DEFAULT_CODEC_TLV320DAC3101=y
+
+# microSD (SPI). Not enabled by default; pins recorded so BG_SDCARD_ENABLED
+# works out of the box if it is turned on.
+CONFIG_BG_SDCARD_CS_GPIO=10
+CONFIG_BG_SDCARD_MOSI_GPIO=11
+CONFIG_BG_SDCARD_CLK_GPIO=12
+CONFIG_BG_SDCARD_MISO_GPIO=13
+
+# WS2812/SK6812 strip, same 48-LED 12x4 four-channel layout as the glasses
+# board. GPIO14 — clear of I2S (4-7), codec I2C (8/9), SD (10-13), native USB
+# (19/20), flash+OPI PSRAM (26-37) and the strapping pins (0/3/45/46).
+#
+# NOT GPIO21: on this board GPIO21 is the codec's ~RESET line, and it ships
+# tied to the ESP32's own EN pin through a normally-connected (cuttable) trace.
+# Driving it as an LED data line would continuously reset the codec.
+# NOT GPIO12 (the glasses data pin): that is the SD card clock here.
+CONFIG_LED_DEFAULT_BACKEND_NEOPIXEL=y
+CONFIG_LED_DATA_PIN=14
+CONFIG_LED_COUNT=48
+CONFIG_LED_CHANNEL_MAP="1,1,1,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,1,1,1,2,2,2,2,2,3,3,2,2,3,3,2,2,3,3,2,2,3,3,2,2,2,2,2"
+CONFIG_LED_GRID_WIDTH=12
+CONFIG_LED_GRID_HEIGHT=4

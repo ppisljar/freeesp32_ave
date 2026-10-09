@@ -91,7 +91,7 @@ const GROUPS = [
         id: 'codec', title: 'Audio Codec',
         fields: [
             { key: 'audio_codec', label: 'Codec', type: 'select',
-              options: ['none', 'ac101', 'es8388'], capsKey: 'codec', note: 'reboot to apply',
+              options: ['none', 'ac101', 'es8388', 'tlv320dac3101'], capsKey: 'codec', note: 'reboot to apply',
               help: 'External I2C-controlled audio codec. None = passive DAC / raw I2S (no I2C control). Options not compiled in are greyed out.' },
             { key: 'codec_i2c_port', label: 'I2C port (0/1)', type: 'num', show: hasCodec,
               help: 'ESP32 I2C peripheral (0 or 1) used to configure the codec.' },

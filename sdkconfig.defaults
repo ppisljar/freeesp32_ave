@@ -18,8 +18,12 @@ CONFIG_LED_SUPPORT_DIRECT=y
 CONFIG_LED_DEFAULT_BACKEND_DIRECT=y
 CONFIG_AUDIO_SUPPORT_AC101=y
 CONFIG_AUDIO_SUPPORT_ES8388=y
+CONFIG_AUDIO_SUPPORT_TLV320DAC3101=y
 CONFIG_AUDIO_DEFAULT_CODEC_ES8388=y
 
 # WebSocket server support (bg_websocket_pcm_push_plan.md — /api/bg-ws raw-PCM ingest)
 CONFIG_HTTPD_WS_SUPPORT=y
-CONFIG_ESP32_REV_MIN_3=y
+
+# Per-target defaults live in sdkconfig.defaults.<target> (auto-loaded by IDF
+# on top of this file): sdkconfig.defaults.esp32 for the classic boards,
+# sdkconfig.defaults.esp32s3 for the YB-ESP32-S3-DAC. See legacyesp32.md.

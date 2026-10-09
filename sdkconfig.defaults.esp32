@@ -1,0 +1,15 @@
+# ESP32 classic target defaults — applied on top of sdkconfig.defaults whenever
+# IDF_TARGET is esp32 (ESP-IDF auto-loads sdkconfig.defaults.<target>).
+#
+# Boards: the "glasses" (WS2812 + passive I2S DAC) and the AI-Thinker A1S
+# variants (AC101 / ES8388). All are 4 MB flash — see partitions.csv and the
+# flash-size note in legacyesp32.md.
+
+# Classic-ESP32-only symbol; moved here so it does not warn on other targets.
+CONFIG_ESP32_REV_MIN_3=y
+
+# 4 MB flash. partitions.csv needs all 4 MB, and IDF's default is 2 MB — without
+# this a regenerated sdkconfig fails the partition-table step with "Partitions
+# tables occupies 4.0MB ... does not fit in configured flash size 2MB".
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"

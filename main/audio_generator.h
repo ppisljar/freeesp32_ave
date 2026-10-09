@@ -3,7 +3,6 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
-#include "dsps_tone_gen.h"
 #include <stdatomic.h>
 
 /**

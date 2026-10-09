@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "driver/rmt_tx.h"
 #include "driver/rmt_encoder.h"
+#include "led_rmt.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -30,8 +31,14 @@ static const char* TAG = "led_strip";
 // random-color flicker across all LEDs.
 #define WS2812_RESET_NS  280000
 
-// Convert nanoseconds to RMT ticks (10MHz RMT clock: 1 tick = 100ns)
-#define NS_TO_RMT_TICKS(ns) ((ns) / 100)
+// RMT tick rate. Passed to the per-target channel setup (led_rmt.h) AND used
+// to convert the timings above, so the two can't drift apart.
+#define RMT_RESOLUTION_HZ 10000000UL           // 10 MHz -> 1 tick = 100 ns
+#define RMT_NS_PER_TICK   (1000000000UL / RMT_RESOLUTION_HZ)
+
+// Convert nanoseconds to RMT ticks. Divides rather than multiplies so the
+// 280 us reset time can't overflow a 32-bit intermediate.
+#define NS_TO_RMT_TICKS(ns) ((ns) / RMT_NS_PER_TICK)
 
 // Number of RMT symbols per LED (24 bits for RGB)
 #define SYMBOLS_PER_LED 24
@@ -1509,34 +1516,11 @@ bool led_strip_supports_pixel_addressing(const led_strip_handle_t *handle)
 
 static esp_err_t s_neopixel_setup_rmt(led_strip_handle_t *handle)
 {
-    ESP_LOGI(TAG, "Setting up RMT TX channel for GPIO %d", handle->gpio_pin);
-
-    rmt_tx_channel_config_t tx_chan_config = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .gpio_num = handle->gpio_pin,
-        // Claim all 8 ESP32 RMT memory blocks for this channel (8 x 64 = 512).
-        // For a 48-LED strip we need 1152+1 symbols per frame; bigger FIFO drops
-        // the CPU-driven refill count from ~18 to ~2 per frame, with each refill
-        // window now ~320 us (was ~40 us) -- comfortably above WiFi interrupt
-        // bursts. No other channel uses RMT in this project, so claiming the
-        // whole pool is free. ESP32 classic doesn't support `with_dma = true`
-        // (lacks GDMA hardware); this is the strongest software-only mitigation.
-        .mem_block_symbols = 512,
-        .resolution_hz = 10000000, // 10MHz resolution (100ns per tick)
-        .trans_queue_depth = 4,
-        .flags.invert_out = false,
-        .flags.with_dma = false,
-    };
-
-    esp_err_t ret = rmt_new_tx_channel(&tx_chan_config, &handle->rmt_tx_channel);
+    /* Channel creation differs per target (CPU-refilled FIFO on the classic
+     * ESP32 vs GDMA on the S3) and lives in led_rmt_<target>.c — see led_rmt.h. */
+    esp_err_t ret = led_rmt_create_tx_channel(handle->gpio_pin, RMT_RESOLUTION_HZ,
+                                              &handle->rmt_tx_channel);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create RMT TX channel: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    ret = rmt_enable(handle->rmt_tx_channel);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to enable RMT channel: %s", esp_err_to_name(ret));
         return ret;
     }
 
