@@ -255,11 +255,18 @@ esp_err_t web_server_init(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
     // Must be >= the number of httpd_register_uri_handler() calls below. When
-    // this is too small, the LAST handlers to register (incl. the catch-all "/*"
-    // static file handler) silently fail, and every unmatched path — including
-    // "/" — returns 404. Keep headroom above the current count (39 with PUSH+WS
-    // on: +2 for GET/POST /api/loglevels).
-    config.max_uri_handlers = 44;
+    // this is too small the LAST handlers to register fail — and the last one
+    // is the catch-all "/*" static handler, so the symptom is that every API
+    // route works perfectly while the entire web UI 404s ("Nothing matches the
+    // given URI" for "/"). That looks like a broken SPIFFS mount and sends you
+    // hunting in completely the wrong place.
+    //
+    // It has now happened twice. Do NOT track the handler count in a comment
+    // here — it went stale the moment /api/sd was added (comment said 39,
+    // reality was 45 against a cap of 44). Instead the cap carries real
+    // headroom and the "/*" registration below is checked, so an overflow is a
+    // loud ESP_LOGE at boot naming this line.
+    config.max_uri_handlers = 56;
     // Bigger httpd task stack (default 4096). The /api/patch-config path — hit
     // rapidly by the Live Control sliders — runs config_parser_apply_patch →
     // parse_content → parse_line → parse_audio/led_line on THIS task's stack,
@@ -625,7 +632,16 @@ esp_err_t web_server_init(void)
         .handler = static_file_handler,
         .user_ctx = NULL
     };
-    httpd_register_uri_handler(g_server_state.server, &static_uri);
+    // CHECKED, unlike the routes above: this is the one whose silent failure is
+    // indistinguishable from a filesystem problem. If it ever fails again the
+    // log says exactly what to change.
+    esp_err_t wret = httpd_register_uri_handler(g_server_state.server, &static_uri);
+    if (wret != ESP_OK) {
+        ESP_LOGE(TAG, "could not register the \"/*\" static handler: %s. The web "
+                      "UI will 404 while the API still works. Raise "
+                      "config.max_uri_handlers (now %d) in web_server.c.",
+                 esp_err_to_name(wret), (int)config.max_uri_handlers);
+    }
 
     ESP_LOGI(TAG, "Web server started on port %d", WEB_SERVER_PORT);
     return ESP_OK;
