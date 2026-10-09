@@ -12,12 +12,48 @@ the session stops. That is the gap this plan closes.
 
 ## Decisions taken (user, 2026-10-09)
 
-1. **Speech: pre-render in the browser, store on the card.** Keep using Puter
-   TTS while online; bounce a session's speech to a WAV once and save it to the
-   SD card. The device just plays files — **no on-device TTS**.
+1. **Speech: pre-render in the browser, store PER PHRASE on the card.** Keep
+   using Puter TTS while online; the device just plays files — **no on-device
+   TTS**.
+
+   NOT one mixed WAV per session. The user's model: *"every speech line we have
+   should be uploaded to the sd card and few sample background music files. the
+   logic in the webapp should be to upload any missing speech files and bg files
+   to the sd card."* So the card holds a **library**, synced incrementally:
+
+   ```
+   /sdcard/speech/sp_<hash>.wav   one file per unique phrase
+   /sdcard/bg/<name>.wav          a handful of shared background tracks
+   ```
+
+   Phrases are shared across sessions, so this costs far less space than a mixed
+   WAV per session and makes adding a session nearly free.
+
+   **Filename derivation.** `sp_<8 hex>.wav` where the hash is FNV-1a 32 over
+   `voice + "|" + text`. Both the browser and the firmware compute it from the
+   same inputs, so no manifest file and no `.ledc` format change is needed — the
+   device resolves an `S` row to a filename on its own. The two implementations
+   MUST stay byte-identical; a unit test should pin several known strings.
+
+   **Architectural consequence — the one real cost of this model.** Speech and
+   background are now separate streams, so the DEVICE has to mix them, where
+   previously the browser delivered a single pre-mixed WAV. The output task in
+   `main/audio_test.c` already mixes in stages:
+
+   ```
+   audio_generator_fill_buffer()   16 tone channels
+   bg_player_mix_into()            background stream
+   speech_player_mix_into()        <-- NEW, third stage
+   ```
+
+   A `speech_player` mirroring `bg_player` (ring buffer, prime gate, gain/pan)
+   is the clean way in; it is additive and does not disturb the existing paths.
+   This is the largest single piece of work in the plan.
 2. **Transfer: both web upload and direct card access.** Upload over WiFi from
    the web UI for convenience; pull the card out for bulk background music.
-3. Written now; implementation waits on the codec bring-up (there is no point
+3. **Fall back silently to the browser** when a session's audio is not on the
+   card, so nothing breaks if a session was never prepared.
+4. Written now; implementation waits on the codec bring-up (there is no point
    testing an audio path while the codec is silent — see
    `esp32s3_yb_dac_port_plan.md`).
 
@@ -60,19 +96,25 @@ second pipeline.
 
 Turn `CONFIG_BG_SDCARD_ENABLED` on for the S3 board only.
 
-### 3. Store a session's speech as a file
-The browser already renders speech to a WAV in `bounceSession()`
-(`web/src/js/gen/bounce.js`). Add a "save for offline" path that writes that
-bounce to the card instead of streaming it, and rewrites the session's BG line
-to `sdcard://<name>.wav`.
+### 3. Speech player on the device (the big one)
+Speech and BG are separate files now, so the device must mix them. Add
+`main/speech_player.c/.h` mirroring `bg_player`: open `/sdcard/speech/sp_<hash>.wav`,
+decode into a ring buffer, and expose `speech_player_mix_into()` as a THIRD mix
+stage in `main/audio_test.c`, after `bg_player_mix_into()`.
 
-Decide and document one convention — proposal:
-`/sdcard/sessions/<session-name>.wav` for the baked speech+BG mix, and
-`/sdcard/bg/<name>.wav|.mp3` for reusable background music.
+The timeline executor triggers it: an `S` row at time T calls
+`speech_player_play(voice, text)`, which derives the filename by hash and starts
+playback. Short phrases, so a modest ring is fine — but the prime-gate pattern
+from `bg_player` still applies so the first samples aren't ragged.
 
-A session saved this way is self-contained: the device reads the WAV from the
-card, synthesizes the A-channel tones itself, and runs the LED timeline — no
-browser, no WiFi.
+If the file is missing, log and continue: a missing phrase must never abort a
+session.
+
+### 3b. Filename hash, shared by both sides
+FNV-1a 32 over `voice + "|" + text`, rendered `sp_%08x.wav`. Implement in
+`main/speech_player.c` and in `web/src/js/gen/sdsync.js`, and pin the two
+together with a unit test over known strings — a silent divergence here means
+the device looks for files the browser never uploaded.
 
 ### 4. File transfer over WiFi
 Mirror the existing `/api/configs` REST shape (`main/web_server.c:557-570`),
@@ -90,14 +132,20 @@ rather than inventing a third one.
 Web UI: a simple file manager (list / upload / delete / free space) next to the
 existing Background-audio panel.
 
-### 5. Offline playback path
-Teach the Play flow that a session whose BG is `sdcard://` needs **no browser
-involvement**: send the timeline to the device and let it pull audio from the
-card, instead of bouncing and WebSocket-streaming. This is the step that
-actually delivers "close the laptop and it keeps playing".
+### 5. Incremental sync from the browser
+New `web/src/js/gen/sdsync.js`:
+1. `GET /api/sd` to list what the card already has.
+2. Walk every session (reuse `collectPhrases()` from `gen/ttspreload.js`, which
+   already dedups speech across the whole library) to build the needed set.
+3. Upload only what is missing — speech from the existing IndexedDB phrase cache
+   when present, synthesizing only genuine gaps; plus any referenced BG tracks.
+4. Report progress like the existing "Preload all speech" button does.
 
-Also worth having: start a stored session from the device itself (the snapshot
-button already exists on a GPIO) so a session can run with no client at all.
+Then teach `playSession()` (`web/src/js/gen/play.js`) that when every phrase a
+session needs is already on the card, it should skip the bounce and the
+WebSocket push entirely and just send the timeline — that is what delivers
+"close the laptop and it keeps playing". **Fall back silently** to the current
+browser-streamed path when anything is missing.
 
 ### 6. Verification
 1. Card absent → device boots normally, SD marked degraded, everything else works.

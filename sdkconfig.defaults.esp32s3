@@ -81,8 +81,14 @@ CONFIG_BUTTON_GPIO=-1
 #
 #   ch0 = left  inner  (centre + rings 1-2, 19 px)
 #   ch1 = left  outer  (ring 3,             18 px)
-#   ch2 = right inner  (19 px)
-#   ch3 = right outer  (18 px)
+#   ch2 = right OUTER  (18 px)
+#   ch3 = right INNER  (19 px)
+#
+# Note ch2/ch3 are MIRRORED, not continued. That is the convention the whole
+# .ledc library is authored against: mask 9 (ch0+ch3) addresses BOTH inners and
+# mask 6 (ch1+ch2) BOTH outers, which is how sessions drive the two rings in
+# antiphase. Numbering ch2=inner instead makes left and right behave opposite
+# to each other - see 17_nondual_awareness_RGB, whose comments name the masks.
 #
 # The ring pattern is symmetric within every row, so this split holds whether a
 # board is wired left-to-right or serpentine.
@@ -92,6 +98,16 @@ CONFIG_BUTTON_GPIO=-1
 CONFIG_LED_DEFAULT_BACKEND_NEOPIXEL=y
 CONFIG_LED_DATA_PIN=18
 CONFIG_LED_COUNT=74
-CONFIG_LED_CHANNEL_MAP="1,1,1,1,1,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,1,1,1,1,1,3,3,3,3,3,2,2,2,3,3,2,2,2,2,3,3,2,2,2,2,2,3,3,2,2,2,2,3,3,2,2,2,3,3,3,3,3"
+CONFIG_LED_CHANNEL_MAP="1,1,1,1,1,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,1,1,1,1,1,2,2,2,2,2,3,3,3,2,2,3,3,3,3,2,2,3,3,3,3,3,2,2,3,3,3,3,2,2,3,3,3,2,2,2,2,2"
 CONFIG_LED_GRID_WIDTH=37
 CONFIG_LED_GRID_HEIGHT=2
+
+# ---- microSD: offline session audio --------------------------------------
+# Enabled on this board (it has a microSD slot wired to the pins above).
+CONFIG_BG_SDCARD_ENABLED=y
+
+# Long filenames. The default (LFN_NONE) restricts the card to 8.3 names,
+# which would mangle background-music filenames. Heap-allocated LFN buffers
+# keep it off the stack; there is 8 MB of PSRAM here.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255

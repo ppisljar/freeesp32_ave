@@ -19,6 +19,9 @@
 #include "isr_profiling.h"
 #include "memory_pool.h"
 #include "bg_player.h"
+#ifdef CONFIG_BG_SDCARD_ENABLED
+#include "sdcard.h"
+#endif
 #include "settings.h"
 #include "log_ctrl.h"
 
@@ -341,6 +344,28 @@ void app_main(void)
         ESP_LOGW(TAG, "mod_engine_init failed: %s — timeline modulation prefixes "
                  "will be no-ops", esp_err_to_name(ret));
     }
+
+#ifdef CONFIG_BG_SDCARD_ENABLED
+    // Mount the microSD card BEFORE bg_player, so an sdcard:// BG entry in the
+    // very first session already has a filesystem. Removable media: a missing
+    // or unreadable card is reported as a degraded subsystem and the device
+    // boots normally — never block startup on a card the user may not have in.
+    {
+        esp_err_t sderr = sdcard_mount();
+        if (sderr == ESP_OK) {
+            uint64_t total = 0, freeb = 0;
+            sdcard_get_space(&total, &freeb);
+            ESP_LOGI(TAG, "SD card ready: %llu MB free of %llu MB",
+                     freeb / (1024ULL * 1024ULL), total / (1024ULL * 1024ULL));
+            diagnostics_health_set("sdcard", true, NULL);
+        } else {
+            ESP_LOGW(TAG, "SD card unavailable (%s) — offline audio disabled, "
+                          "sessions fall back to browser streaming",
+                     esp_err_to_name(sderr));
+            diagnostics_health_set("sdcard", false, esp_err_to_name(sderr));
+        }
+    }
+#endif
 
     // Initialize background audio player (Plan 006).
     // Ring buffer is in static .bss — no heap impact, no ordering constraints.

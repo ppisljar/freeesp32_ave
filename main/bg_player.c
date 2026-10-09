@@ -116,6 +116,10 @@
 
 #include "bg_player.h"
 #include "wav_parser.h"
+#ifdef CONFIG_BG_SDCARD_ENABLED
+#include "sdcard.h"
+#include <stdio.h>
+#endif
 #include "wifi_manager.h"
 #include "audio_generator.h"    /* AUDIO_GEN_BUFFER_SIZE */
 #include "esp_http_client.h"
@@ -275,10 +279,40 @@ static float *s_bg_push_scratch = NULL;   /* BG_PUSH_BATCH_FRAMES*4 floats, PSRA
 
 static void bg_streamer_task(void *pvParameters);
 
+/* ---------------------------------------------------------------------------
+ * Byte source abstraction.
+ *
+ * The WAV and MP3 decode loops below are long and carefully tuned (ring
+ * watermarks, carry buffers for frame-straddling reads, underrun diagnostics).
+ * They were coupled to the network by exactly ONE esp_http_client_read() call
+ * each. Rather than clone them for the SD card, both now pull bytes through a
+ * read callback, so a file source reuses the identical pipeline.
+ *
+ * read() contract is deliberately byte-for-byte that of esp_http_client_read,
+ * because both loops already branch on all three cases:
+ *     > 0  bytes read
+ *     = 0  clean EOF
+ *     < 0  error
+ *
+ * chunk_bytes and buf_caps travel WITH the source: the network reads big
+ * chunks into PSRAM, but an SD read into PSRAM makes the sdmmc driver fall
+ * back to 512-byte single-block transfers, so the card source must use
+ * DMA-capable internal RAM.
+ */
+typedef int (*bg_read_fn)(void *ctx, uint8_t *buf, size_t len);
+
+typedef struct {
+    bg_read_fn read;
+    void      *ctx;
+    size_t     chunk_bytes;   /* per-read size                                */
+    uint32_t   buf_caps;      /* heap_caps_malloc flags for the read buffer   */
+    uint64_t   max_bytes;     /* stop after N bytes of payload; 0 = until EOF */
+} bg_source_t;
+
 static esp_err_t bg_stream_from_http(const char *url);
-static void      bg_stream_http_wav(esp_http_client_handle_t client,
-                                    const wav_format_t *fmt,
-                                    const uint8_t *leftover, size_t leftover_len);
+static void      bg_stream_wav(const bg_source_t *src,
+                               const wav_format_t *fmt,
+                               const uint8_t *leftover, size_t leftover_len);
 
 /* Shared int16 -> 44.1 kHz stereo float conversion used by every BG decoder
  * (WAV today, MP3 below). Returns the number of stereo output frames written. */
@@ -288,12 +322,12 @@ static size_t    bg_convert_to_stereo_float(const int16_t *pcm, size_t frames,
 
 #if CONFIG_BG_SUPPORT_MP3
 static bool      bg_looks_like_mp3(const uint8_t *buf, size_t len);
-static void      bg_stream_http_mp3(esp_http_client_handle_t client,
-                                    const uint8_t *seed, size_t seed_len);
+static void      bg_stream_mp3(const bg_source_t *src,
+                               const uint8_t *seed, size_t seed_len);
 #endif
 
 #ifdef CONFIG_BG_SDCARD_ENABLED
-static void __attribute__((unused)) bg_stream_from_sdcard(const char *path);
+static esp_err_t bg_stream_from_sdcard(const char *path);
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -335,9 +369,7 @@ static esp_err_t bg_dispatch_url(const char *url)
 #ifdef CONFIG_BG_SDCARD_ENABLED
         /* SD card streaming (CONFIG_BG_SDCARD_ENABLED=y).
          * TODO: see bg_stream_from_sdcard() SD bring-up checklist below.      */
-        ESP_LOGI(TAG, "BG dispatch: sdcard:// '%s' (stub)", url);
-        bg_stream_from_sdcard(url + 9);
-        return ESP_OK;
+        return bg_stream_from_sdcard(url + 9);
 #else
         ESP_LOGE(TAG,
                  "BG: SD card support not enabled in this build "
@@ -401,7 +433,7 @@ static size_t bg_convert_to_stereo_float(const int16_t *pcm, size_t frames,
  * Returns when esp_http_client_read returns 0 / negative, or when
  * s_bg.streaming goes false.
  * --------------------------------------------------------------------------- */
-static void bg_stream_http_wav(esp_http_client_handle_t client,
+static void bg_stream_wav(const bg_source_t *src,
                                 const wav_format_t *fmt,
                                 const uint8_t *leftover,
                                 size_t leftover_len)
@@ -411,10 +443,10 @@ static void bg_stream_http_wav(esp_http_client_handle_t client,
      * diagnostics) and this 16 KB alloc was failing outright after long uptime,
      * killing all BG. PSRAM is plenty fast here — the convert loop runs at ~24%
      * producer-busy with headroom to spare — and never fails. */
-    uint8_t *raw_buf = heap_caps_malloc(BG_HTTP_CHUNK_BYTES,
+    uint8_t *raw_buf = heap_caps_malloc(src->chunk_bytes,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     const size_t frame_bytes  = (size_t)(fmt->channels) * (fmt->bits_per_sample / 8u);
-    const size_t max_frames   = BG_HTTP_CHUNK_BYTES / frame_bytes;
+    const size_t max_frames   = src->chunk_bytes / frame_bytes;
 
     /* The output is always 44100 Hz stereo float. When the source is 22050
      * Hz, each input frame becomes TWO output frames (sample-and-hold
@@ -474,6 +506,7 @@ static void bg_stream_http_wav(esp_http_client_handle_t client,
      * ----------------------------------------------------------------------- */
     /* Per-stage timing accumulators (microseconds). */
     uint64_t total_http_us = 0, total_conv_us = 0, total_send_us = 0;
+    uint64_t payload_consumed = 0;  /* bytes of WAV `data` consumed so far */
     uint32_t chunk_count = 0;
     uint64_t last_report_us = esp_timer_get_time();
 
@@ -507,16 +540,32 @@ static void bg_stream_http_wav(esp_http_client_handle_t client,
          * events — the documented "stable degraded after ~80 s" pattern.
          * Reserve 4 chunk-outputs of headroom so the producer can read
          * multiple back-to-back chunks before the watermark fires once. */
-        const size_t WATERMARK_FREE_BYTES = BG_HTTP_CHUNK_BYTES * 16u;  /* 256 KB = 4 chunk-outputs */
+        /* ABSOLUTE, not a multiple of chunk_bytes: the SD source reads in much
+         * smaller chunks than HTTP, and scaling this with it would quietly
+         * shrink how full the ring is kept and invite underruns. */
+        const size_t WATERMARK_FREE_BYTES = 262144u;  /* 256 KB */
         size_t free_space = xStreamBufferSpacesAvailable(s_bg.ring);
         if (free_space < WATERMARK_FREE_BYTES) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
+        /* Clamp the request to the WAV data-chunk length when the source knows
+         * it: bytes after `data` (LIST/id3 trailers) are metadata, and decoding
+         * them as PCM is audible noise. remaining == 0 is a clean end-of-payload
+         * and falls into the same path as EOF below. */
+        size_t want_bytes = src->chunk_bytes;
+        if (src->max_bytes) {
+            uint64_t remaining = (src->max_bytes > payload_consumed)
+                                 ? src->max_bytes - payload_consumed : 0u;
+            if (remaining < (uint64_t)want_bytes) want_bytes = (size_t)remaining;
+        }
+
         uint64_t t0 = esp_timer_get_time();
-        int bytes_read = esp_http_client_read(client, (char *)raw_buf,
-                                              (int)BG_HTTP_CHUNK_BYTES);
+        int bytes_read = (want_bytes == 0)
+                         ? 0                                  /* payload done */
+                         : src->read(src->ctx, raw_buf, want_bytes);
+        if (bytes_read > 0) payload_consumed += (uint64_t)bytes_read;
         uint64_t t1 = esp_timer_get_time();
         total_http_us += (t1 - t0);
         if (bytes_read <= 0) {
@@ -654,7 +703,7 @@ static bool bg_looks_like_mp3(const uint8_t *buf, size_t len)
  *   seed     — header bytes already read for detection (fed into the carry buf).
  *   seed_len — count of seed bytes (may be 0).
  * --------------------------------------------------------------------------- */
-static void bg_stream_http_mp3(esp_http_client_handle_t client,
+static void bg_stream_mp3(const bg_source_t *src,
                                const uint8_t *seed, size_t seed_len)
 {
     /* ALL decode buffers live in PSRAM. Internal DRAM is scarce (WiFi/LWIP) and
@@ -706,7 +755,7 @@ static void bg_stream_http_mp3(esp_http_client_handle_t client,
         /* Producer pacing — identical rationale to the WAV loop: never let a
          * full ring block esp_http_client_read (avoids the TCP zero-window
          * cascade documented in bg_stream_http_wav).                          */
-        const size_t WATERMARK_FREE_BYTES = BG_HTTP_CHUNK_BYTES * 16u;
+        const size_t WATERMARK_FREE_BYTES = 262144u;  /* absolute - see bg_stream_wav */
         if (xStreamBufferSpacesAvailable(s_bg.ring) < WATERMARK_FREE_BYTES) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
@@ -715,7 +764,7 @@ static void bg_stream_http_mp3(esp_http_client_handle_t client,
         /* 1. Refill: read into the free tail of the carry buffer. */
         if (!eof && carry_len < BG_MP3_CARRY_BYTES) {
             int want = (int)(BG_MP3_CARRY_BYTES - carry_len);
-            int n = esp_http_client_read(client, (char *)(carry + carry_len), want);
+            int n = src->read(src->ctx, carry + carry_len, (size_t)want);
             if (n > 0) {
                 carry_len += (size_t)n;
             } else {
@@ -832,6 +881,34 @@ mp3_done:
  *                         the failure counter.
  *   ESP_ERR_INVALID_ARG — URL is NULL.
  * --------------------------------------------------------------------------- */
+/* --- byte sources ------------------------------------------------------- */
+
+static int bg_read_http(void *ctx, uint8_t *buf, size_t len)
+{
+    return esp_http_client_read((esp_http_client_handle_t)ctx, (char *)buf, (int)len);
+}
+
+static bg_source_t bg_source_http(esp_http_client_handle_t client)
+{
+    return (bg_source_t){
+        .read        = bg_read_http,
+        .ctx         = client,
+        .chunk_bytes = BG_HTTP_CHUNK_BYTES,
+        /* PSRAM is fine for a socket read and keeps internal RAM free. */
+        .buf_caps    = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+        .max_bytes   = 0,              /* HTTP streams until the server closes */
+    };
+}
+
+#ifdef CONFIG_BG_SDCARD_ENABLED
+static int bg_read_file(void *ctx, uint8_t *buf, size_t len)
+{
+    size_t n = fread(buf, 1, len, (FILE *)ctx);
+    if (n > 0) return (int)n;
+    return ferror((FILE *)ctx) ? -1 : 0;   /* 0 = clean EOF, matches HTTP */
+}
+#endif
+
 static esp_err_t bg_stream_from_http(const char *url)
 {
     if (!url) {
@@ -894,7 +971,8 @@ static esp_err_t bg_stream_from_http(const char *url)
 #if CONFIG_BG_SUPPORT_MP3
     if (bg_looks_like_mp3(hdr_buf, (size_t)hdr_bytes)) {
         ESP_LOGI(TAG, "BG HTTP: detected MP3 stream for '%s'", url);
-        bg_stream_http_mp3(client, hdr_buf, (size_t)hdr_bytes);
+        bg_source_t http_src = bg_source_http(client);
+        bg_stream_mp3(&http_src, hdr_buf, (size_t)hdr_bytes);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         ESP_LOGI(TAG,
@@ -929,7 +1007,8 @@ static esp_err_t bg_stream_from_http(const char *url)
                                   ? (size_t)hdr_bytes - consumed_bytes
                                   : 0u;
 
-    bg_stream_http_wav(client, &fmt, leftover, leftover_len);
+    bg_source_t http_src = bg_source_http(client);
+    bg_stream_wav(&http_src, &fmt, leftover, leftover_len);
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -942,53 +1021,117 @@ static esp_err_t bg_stream_from_http(const char *url)
 }
 
 /* ---------------------------------------------------------------------------
- * bg_stream_from_sdcard — SD card streaming stub (CONFIG_BG_SDCARD_ENABLED=y)
+ * bg_stream_from_sdcard — play a BG clip from the microSD card.
  *
- * SD bring-up checklist (see Plan 006, Section 2.4 for full detail):
+ * Deliberately a thin reader on top of the SAME decode loops the network path
+ * uses: open the file, sniff the container from its first bytes, hand a
+ * bg_source_t to bg_stream_mp3 / bg_stream_wav. No second pipeline, no second
+ * ring buffer, and MP3 support comes for free because the sniff is pure buffer
+ * inspection.
  *
- *  1. Wire SD card to ESP32 via SDMMC or SPI-to-SD.
- *       SDMMC (4-bit):  CLK=GPIO14, CMD=GPIO15, D0=GPIO2, D1=GPIO4,
- *                       D2=GPIO12, D3=GPIO13 (classic ESP32 SDMMC mapping).
- *       SDSPI:          CLK=GPIO18, MOSI=GPIO23, MISO=GPIO19, CS=GPIO5
- *                       (adjust to the actual board layout).
+ * Two deliberate differences from the HTTP source:
+ *   - Reads into DMA-capable INTERNAL RAM. An sdmmc read into PSRAM makes the
+ *     driver fall back to 512-byte single-block transfers, which is far slower
+ *     than it looks and risks ring underrun.
+ *   - A file can seek, so after parsing the header we fseek() to the data
+ *     offset and set max_bytes to the data-chunk length. That skips the HTTP
+ *     path's leftover bookkeeping AND stops trailing LIST/id3 metadata being
+ *     decoded as PCM (audible noise at the end of a clip).
  *
- *  2. Enable the SD host driver in sdkconfig / menuconfig:
- *       SDMMC host:  Component config → SD/MMC → CONFIG_SDMMC_HOST_SLOT1
- *       SDSPI host:  Component config → SPI → CONFIG_SPI_MASTER_ISR_IN_IRAM
- *       Also set CONFIG_FATFS_VOLUME_COUNT >= 2 (already set in this project).
+ * Return contract matters to bg_streamer_task's retry loop:
+ *   ESP_OK                 clean EOF -> caller may re-open (seamless loop)
+ *   ESP_ERR_INVALID_STATE  no card mounted  } both are permanent, so the
+ *   ESP_ERR_NOT_FOUND      file missing     } retry loop gives up instead of
+ *   ESP_FAIL               unreadable       } spinning on a missing file
  *
- *  3. Add the required headers to this file:
- *       #include "driver/sdmmc_host.h"   // or driver/sdspi_host.h
- *       #include "esp_vfs_fat.h"
- *       #include "sdmmc_cmd.h"
- *
- *  4. Implement bg_player_sdcard_mount() and call it from bg_player_init():
- *       sdmmc_host_t host = SDMMC_HOST_DEFAULT();
- *       sdmmc_slot_config_t slot_cfg = SDMMC_SLOT_CONFIG_DEFAULT();
- *       esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
- *           .format_if_mount_failed = false, .max_files = 4,
- *           .allocation_unit_size = 16 * 1024,
- *       };
- *       sdmmc_card_t *card;
- *       esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_cfg, &mount_cfg, &card);
- *       (For SDSPI: use esp_vfs_fat_sdspi_mount() with sdspi_device_config_t.)
- *
- *  5. Translate "sdcard://path.wav" → "/sdcard/path.wav":
- *       The `path` argument here is the part AFTER "sdcard://", so prepend
- *       "/sdcard/" to get the VFS path.  Open with fopen, pass to the WAV
- *       parser (Step 4), then stream into the ring buffer — identical to the
- *       HTTP path.  Call fclose() when done or on error.
- *
- * @param path  File path after "sdcard://" prefix (e.g. "rain.wav").
+ * @param path  the part AFTER "sdcard://", e.g. "rain.wav".
  * --------------------------------------------------------------------------- */
 #ifdef CONFIG_BG_SDCARD_ENABLED
-static void __attribute__((unused)) bg_stream_from_sdcard(const char *path)
+
+#define BG_SD_CHUNK_BYTES 4096u   /* multiple of the 512 B SD block size */
+
+static esp_err_t bg_stream_from_sdcard(const char *path)
 {
-    ESP_LOGW(TAG,
-             "BG: bg_stream_from_sdcard('%s') — SD streaming not yet implemented. "
-             "See bg_player.c SD bring-up checklist (Plan 006 Section 2.4).",
-             path);
-    (void)path;
+    if (!path || !*path) return ESP_ERR_INVALID_ARG;
+
+    if (!sdcard_is_mounted()) {
+        ESP_LOGW(TAG, "BG SD: no card mounted — cannot play '%s'", path);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char fs_path[160];
+    int n = snprintf(fs_path, sizeof(fs_path), "/sdcard/%s", path);
+    if (n < 0 || n >= (int)sizeof(fs_path)) {
+        ESP_LOGE(TAG, "BG SD: path too long: '%s'", path);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    FILE *f = fopen(fs_path, "rb");
+    if (!f) {
+        ESP_LOGW(TAG, "BG SD: cannot open '%s'", fs_path);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    uint8_t hdr_buf[BG_HTTP_HDR_BUF_BYTES];
+    size_t hdr_bytes = fread(hdr_buf, 1, sizeof(hdr_buf), f);
+    if (hdr_bytes < 44u) {
+        ESP_LOGE(TAG, "BG SD: '%s' too short for a WAV header (%zu bytes)",
+                 fs_path, hdr_bytes);
+        fclose(f);
+        return ESP_FAIL;
+    }
+
+    bg_source_t src = {
+        .read        = bg_read_file,
+        .ctx         = f,
+        .chunk_bytes = BG_SD_CHUNK_BYTES,
+        .buf_caps    = MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT,
+        .max_bytes   = 0,
+    };
+
+#if CONFIG_BG_SUPPORT_MP3
+    if (bg_looks_like_mp3(hdr_buf, hdr_bytes)) {
+        ESP_LOGI(TAG, "BG SD: '%s' detected as MP3", fs_path);
+        bg_stream_mp3(&src, hdr_buf, hdr_bytes);
+        fclose(f);
+        ESP_LOGI(TAG, "BG SD: stream ended for '%s' (bytes_streamed=%u)",
+                 fs_path, s_bg.bytes_streamed);
+        return ESP_OK;
+    }
+#endif
+
+    wav_format_t fmt;
+    size_t consumed = 0u;
+    esp_err_t werr = wav_parse_header(hdr_buf, hdr_bytes, &fmt, &consumed);
+    if (werr != ESP_OK) {
+        ESP_LOGE(TAG, "BG SD: '%s' is neither MP3 nor a parseable WAV (%s)",
+                 fs_path, esp_err_to_name(werr));
+        fclose(f);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "BG SD: '%s' WAV — %u ch / %u Hz / %u-bit, data@%u size=%u",
+             fs_path, (unsigned)fmt.channels, (unsigned)fmt.sample_rate,
+             (unsigned)fmt.bits_per_sample, (unsigned)fmt.data_offset,
+             (unsigned)fmt.data_size_bytes);
+
+    /* Seek rather than carrying leftovers: this is a file, not a socket. */
+    if (fseek(f, (long)fmt.data_offset, SEEK_SET) != 0) {
+        ESP_LOGE(TAG, "BG SD: seek to data offset %u failed",
+                 (unsigned)fmt.data_offset);
+        fclose(f);
+        return ESP_FAIL;
+    }
+    if (fmt.data_size_bytes != 0u && fmt.data_size_bytes != 0xFFFFFFFFu) {
+        src.max_bytes = (uint64_t)fmt.data_size_bytes;
+    }
+
+    bg_stream_wav(&src, &fmt, NULL, 0u);
+    fclose(f);
+
+    ESP_LOGI(TAG, "BG SD: stream ended for '%s' (bytes_streamed=%u)",
+             fs_path, s_bg.bytes_streamed);
+    return ESP_OK;
 }
 #endif /* CONFIG_BG_SDCARD_ENABLED */
 
