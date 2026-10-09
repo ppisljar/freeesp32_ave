@@ -86,6 +86,20 @@ static const char *TAG = "tlv320dac3101";
  * headroom; fine-grained level control is done digitally in set_volume(). */
 #define ANALOG_VOL_MINUS_9DB    0x92
 
+/* Headphone driver PGA: 0 dB, unmuted (bit2). */
+#define HP_DRIVER_0DB_UNMUTE    0x06
+
+/* Class-D speaker driver: bits4:3 are a coarse gain (00=6, 01=12, 10=18,
+ * 11=24 dB), bit2 unmutes.
+ *
+ * DELIBERATELY the MINIMUM 6 dB, not the 24 dB of TI's datasheet example.
+ * This board's class-D can deliver 1.3 W into 8R, which will destroy the small
+ * speakers typically wired to the JST connectors. Start quiet: the digital DAC
+ * volume (-6 dB at the default 0.5 setting) and the -9 dB analog stage are the
+ * intended places to set listening level, and both are reversible from the web
+ * UI. Raise this only after confirming what the speakers can take. */
+#define SPK_DRIVER_6DB_UNMUTE   0x04
+
 /* Digital DAC volume limits, in half-dB steps (the register unit). */
 #define DAC_VOL_MIN_HALF_DB     (-127)  /* -63.5 dB */
 #define DAC_VOL_MAX_HALF_DB     (0)     /* 0 dB — we never apply digital boost */
@@ -302,6 +316,54 @@ static esp_err_t tlv_apply_clocks(uint32_t sample_rate)
     return ESP_OK;
 }
 
+/* ------------------------------------------------------------ diagnostic ---- */
+
+/* Read key registers back from the chip after init and log them.
+ *
+ * Writes to this codec are fire-and-forget: a value that never landed, or a
+ * clock tree that did not come up, is indistinguishable from a working part
+ * until you read it back. Page 0 / reg 0x25 (DAC_FLAG) is the important one —
+ * it reports whether the DAC channels and output drivers are ACTUALLY powered,
+ * as opposed to merely having been asked to power up. */
+static void tlv_dump_state(void)
+{
+    struct { uint8_t page, reg; const char *name; } probes[] = {
+        { 0, 0x04, "CLOCK_MUX1  (PLL in / codec in)" },
+        { 0, 0x05, "PLL_PR      (power|P|R)        " },
+        { 0, 0x06, "PLL_J                          " },
+        { 0, 0x0B, "NDAC        (power|divider)    " },
+        { 0, 0x0C, "MDAC        (power|divider)    " },
+        { 0, 0x0E, "DOSR_LSB                       " },
+        { 0, 0x1B, "CODEC_IF    (format|len|slave) " },
+        { 0, 0x25, "DAC_FLAG    (ACTUAL power sts) " },
+        { 0, 0x3F, "DAC_DATAPATH(power|routing)    " },
+        { 0, 0x40, "DAC_VOL_CTRL(mute bits)        " },
+        { 0, 0x41, "DAC_VOL_L                      " },
+        { 1, 0x1F, "HP_DRIVERS  (power)            " },
+        { 1, 0x20, "SPK_AMP     (class-D power)    " },
+        { 1, 0x23, "OUT_ROUTING (DAC -> outputs)   " },
+        { 1, 0x26, "SPKL_VOL    (route|gain)       " },
+        { 1, 0x27, "SPKR_VOL    (route|gain)       " },
+        { 1, 0x2A, "SPKL_DRIVER (gain|unmute)      " },
+        { 1, 0x2B, "SPKR_DRIVER (gain|unmute)      " },
+    };
+
+    ESP_LOGI(TAG, "---- codec register read-back ----");
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        uint8_t v = 0xFF;
+        if (tlv_set_page(probes[i].page) != ESP_OK ||
+            tlv_read_raw(probes[i].reg, &v) != ESP_OK) {
+            ESP_LOGW(TAG, "  p%u r0x%02X %s = <read failed>",
+                     probes[i].page, probes[i].reg, probes[i].name);
+            continue;
+        }
+        ESP_LOGI(TAG, "  p%u r0x%02X %s = 0x%02X",
+                 probes[i].page, probes[i].reg, probes[i].name, v);
+    }
+    tlv_set_page(0);
+    ESP_LOGI(TAG, "----------------------------------");
+}
+
 /* ----------------------------------------------------------- public API ------ */
 
 esp_err_t tlv320dac3101_init(uint32_t sample_rate)
@@ -343,17 +405,17 @@ esp_err_t tlv320dac3101_init(uint32_t sample_rate)
         return err;
     }
 
-    /* Interface format, 16-bit, BCLK/WCLK as INPUTS => codec is the I2S slave,
-     * which is what we want with the ESP32 as master.
+    /* I2S (Philips) format, 16-bit, BCLK/WCLK as INPUTS => codec is the I2S
+     * slave, which is what we want with the ESP32 as master.
      *
-     * LEFT-JUSTIFIED (bits7:6 = 11), NOT I2S (00), because audio_manager.c
-     * configures the ESP32 side with I2S_STD_MSB_SLOT_DEFAULT_CONFIG — "MSB"
-     * in ESP-IDF means left-justified, i.e. NO one-bit delay after the frame
-     * edge, whereas I2S format has one. Set this to 0x00 and every sample
-     * arrives shifted by a bit, which corrupts the sign bit and turns a clean
-     * tone into harsh noise. (The classic boards' AC101/ES8388 drivers are
-     * configured for the same left-justified framing.) */
-    tlv_write(0, P0_CODEC_IF_CTRL1, 0xC0);
+     * bits7:6 = 00 (I2S). audio_manager.c pairs this with the ESP32's PHILIPS
+     * slot config for this codec specifically — the combination the board
+     * vendor's own working example uses (ESP_I2S I2S_MODE_STD "Philips
+     * standard" + the library's default TLV320DAC3100_FORMAT_I2S). Do not
+     * "fix" this to left-justified (0xC0) without changing the ESP32 side to
+     * match: a one-bit framing mismatch corrupts the sign bit of every sample
+     * and sounds like harsh noise. */
+    tlv_write(0, P0_CODEC_IF_CTRL1, 0x00);
     /* Processing block PRB_P11 — the datasheet example's choice for stereo
      * playback with the standard interpolation filter. */
     tlv_write(0, P0_DAC_PRB, 0x0B);
@@ -363,15 +425,12 @@ esp_err_t tlv320dac3101_init(uint32_t sample_rate)
     tlv_write(1, P1_HP_POP,     0x4E);   /* headphone de-pop ramp timing */
     tlv_write(1, P1_OUT_ROUTING, 0x44);  /* DAC L->HPL, DAC R->HPR */
 
-    /* Output driver gain + unmute. 0x06 = 0 dB PGA, unmuted (bit2).
-     * 0x1C on the class-D drivers is the datasheet example's value; note the
-     * datasheet's own prose labels it 18 dB while its bit-field table decodes
-     * the same byte as 24 dB. The byte to write is not in dispute, only the
-     * label, so we keep TI's value. */
-    tlv_write(1, P1_HPL_DRIVER,  0x06);
-    tlv_write(1, P1_HPR_DRIVER,  0x06);
-    tlv_write(1, P1_SPKL_DRIVER, 0x1C);
-    tlv_write(1, P1_SPKR_DRIVER, 0x1C);  /* 3101 stereo amp; absent on the 3100 */
+    /* Output driver gain + unmute. See the macro comments — the class-D gain
+     * is deliberately the minimum, NOT the datasheet example's maximum. */
+    tlv_write(1, P1_HPL_DRIVER,  HP_DRIVER_0DB_UNMUTE);
+    tlv_write(1, P1_HPR_DRIVER,  HP_DRIVER_0DB_UNMUTE);
+    tlv_write(1, P1_SPKL_DRIVER, SPK_DRIVER_6DB_UNMUTE);
+    tlv_write(1, P1_SPKR_DRIVER, SPK_DRIVER_6DB_UNMUTE);  /* 3101 stereo; absent on 3100 */
 
     /* Power the output drivers. HP: bits7:6. Speaker: bit7 left + bit6 right
      * (the mono DAC3100 only has the left bit, which is why a 3100 driver
@@ -402,6 +461,8 @@ esp_err_t tlv320dac3101_init(uint32_t sample_rate)
      * reset default. */
     const device_settings_t *cfg = settings_get();
     tlv320dac3101_set_volume(cfg->default_volume);
+
+    tlv_dump_state();
 
     ESP_LOGI(TAG, "TLV320DAC3101 init complete (%u Hz, headphone + stereo speaker)",
              (unsigned)sample_rate);
@@ -439,6 +500,29 @@ esp_err_t tlv320dac3101_set_volume(float volume)
     esp_err_t err = tlv_write(0, P0_DAC_VOL_L, reg);
     if (err != ESP_OK) return err;
     return tlv_write(0, P0_DAC_VOL_R, reg);
+}
+
+/* Runtime register peek/poke, used by GET /api/codecreg during board bring-up.
+ *
+ * Tuning analog routing by rebuilding and reflashing is a ~3 minute loop per
+ * guess; this makes it instant. Reads back after writing so the caller always
+ * sees what the chip actually holds — several of these registers have
+ * hardware-set status bits that differ from what was written.
+ *
+ * @param val  0..255 to write, or <0 to only read.
+ */
+esp_err_t tlv320dac3101_reg_rw(int page, int reg, int val, uint8_t *out)
+{
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    if (page < 0 || page > 255 || reg < 0 || reg > 255) return ESP_ERR_INVALID_ARG;
+
+    esp_err_t err = tlv_set_page((uint8_t)page);
+    if (err != ESP_OK) return err;
+    if (val >= 0) {
+        err = tlv_write_raw((uint8_t)reg, (uint8_t)val);
+        if (err != ESP_OK) return err;
+    }
+    return tlv_read_raw((uint8_t)reg, out);
 }
 
 esp_err_t tlv320dac3101_deinit(void)

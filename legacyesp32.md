@@ -139,7 +139,39 @@ for a future dedicated audio partition.
 
 ---
 
-## 6. Dropped: `components/esp-dsp`
+## 6. GPIO defaults that collide on a different board
+
+**Files:** `main/Kconfig.projbuild` (`BUTTON_GPIO`, `BG_SDCARD_*_GPIO`),
+`main/settings.c` (`settings_warn_pin_conflicts`)
+
+Pin defaults written for the classic boards are not inert on another board —
+they are claims on real pins, and a claim on a pin some peripheral is already
+using does not fail loudly, it degrades that peripheral.
+
+This cost hours twice during S3 bring-up:
+
+- `button_gpio` defaulted to **5**, which on the YB-ESP32-S3-DAC is the I2S
+  **bit clock**. Configuring it as a button input degraded BCLK just enough
+  that the codec still locked its PLL (a PLL averages over many cycles) but
+  could never latch a sample. It presented as perfect clocks, a working
+  internal beep, a verified data line — and total silence.
+- `sd_cs` defaulted to **5** as well, because the `BG_SDCARD_*_GPIO` Kconfig
+  symbols were gated `depends on BG_SDCARD_ENABLED`. With SD off the symbols
+  did not exist, so the seed fell through to hardcoded classic-board pins.
+  Those gates are now removed: the pins must be seedable even when the feature
+  is off.
+
+Both are now per-target Kconfig values, and `settings_init()` runs
+`settings_warn_pin_conflicts()`, which logs an ERROR naming both claimants of
+any shared GPIO. It only warns — an inactive backend's pins are harmless — but
+it turns this failure mode into one line in the boot log.
+
+**If classic support is dropped:** keep the conflict check; it is not
+legacy-specific. The per-target defaults collapse to the S3 values.
+
+---
+
+## 7. Dropped: `components/esp-dsp`
 
 **File:** `CMakeLists.txt` (`EXCLUDE_COMPONENTS esp-dsp`)
 

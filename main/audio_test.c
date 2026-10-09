@@ -27,6 +27,11 @@ static bool audio_output_running = false;
 // This is purely additive: it never changes audio samples or timing.
 static volatile uint32_t s_audio_buffers_written = 0;
 static volatile uint32_t s_audio_write_errors    = 0;
+/* Peak |sample| of the last buffer handed to I2S. Answers the one question the
+ * other counters cannot: the buffer counters tick happily while writing pure
+ * silence, so "I2S is running" does not mean "audio is leaving the chip". */
+static volatile uint16_t s_audio_peak = 0;
+
 static volatile uint32_t s_audio_short_writes    = 0;
 static volatile uint32_t s_audio_gen_fail        = 0;
 // fill_buffer cycle-count profile (min/max/sum/count → min/avg/max).
@@ -40,6 +45,7 @@ void audio_test_get_stats(audio_stats_t *out)
     if (!out) return;
     out->buffers_written = s_audio_buffers_written;
     out->write_errors    = s_audio_write_errors;
+    out->peak            = s_audio_peak;
     out->short_writes    = s_audio_short_writes;
     out->gen_fail        = s_audio_gen_fail;
     uint32_t cnt = s_fill_count;
@@ -182,6 +188,7 @@ void audio_test_output_task(void* pvParameters)
         const float master_gain = settings_get()->audio_max_volume / 100.0f;
 
         // Convert float samples to int16 for I2S output
+        uint16_t peak = 0;
         for (size_t i = 0; i < stereo_samples * 2; i++) {
             // Convert float (-1.0 to 1.0) to int16 (-32768 to 32767)
             float sample = audio_buffer[i] * master_gain;
@@ -191,7 +198,10 @@ void audio_test_output_task(void* pvParameters)
             if (sample < -1.0f) sample = -1.0f;
 
             i2s_buffer[i] = (int16_t)(sample * 32767.0f);
+            int32_t mag = i2s_buffer[i] < 0 ? -(int32_t)i2s_buffer[i] : i2s_buffer[i];
+            if (mag > peak) peak = (uint16_t)mag;
         }
+        s_audio_peak = peak;
 
         // Output to I2S
         if (tx_handle) {

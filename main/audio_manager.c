@@ -79,9 +79,32 @@ esp_err_t audio_manager_init(void)
         clk_cfg.clk_src = I2S_CLK_SRC_APLL;
     }
 #endif
+    /* Frame alignment must match what the active codec expects, and the two
+     * codec families here disagree:
+     *
+     *   MSB / left-justified — data starts on the frame edge. The AC101 and
+     *       ES8388 drivers are configured this way, so the classic boards keep
+     *       it.
+     *   Philips / I2S        — one BCLK of delay after the frame edge. The
+     *       TLV320DAC3101 driver configures the codec for I2S format, matching
+     *       the board vendor's own working example, which drives the ESP32 in
+     *       Philips mode.
+     *
+     * Get this wrong and every sample lands shifted by one bit, corrupting the
+     * sign bit — audibly harsh noise rather than the intended tone.
+     */
+    i2s_std_slot_config_t slot_cfg =
+        I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    const char *framing = "MSB/left-justified";
+    if (cfg->audio_codec == AUDIO_CODEC_TLV320DAC3101) {
+        framing = "Philips/I2S";
+        slot_cfg = (i2s_std_slot_config_t)
+            I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    }
+
     i2s_std_config_t std_cfg = {
         .clk_cfg = clk_cfg,
-        .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .slot_cfg = slot_cfg,
         .gpio_cfg = {
             .mclk = (gpio_num_t)cfg->i2s_mclk_pin,
             .bclk = (gpio_num_t)cfg->i2s_bck_pin,
@@ -200,6 +223,7 @@ esp_err_t audio_manager_init(void)
     }
 
     ESP_LOGI(TAG, "Audio Manager initialized successfully");
+    ESP_LOGI(TAG, "I2S framing: %s (codec=%d)", framing, (int)cfg->audio_codec);
     ESP_LOGI(TAG, "I2S pins - BCK: %d, WS: %d, DATA: %d, MCLK: %d, DIN: %d",
              cfg->i2s_bck_pin, cfg->i2s_ws_pin, cfg->i2s_data_pin,
              cfg->i2s_mclk_pin, cfg->i2s_din_pin);

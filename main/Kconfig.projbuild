@@ -36,7 +36,6 @@ config BG_SDCARD_CS_GPIO
     range -1 48 if IDF_TARGET_ESP32S3
     range -1 39
     default 5
-    depends on BG_SDCARD_ENABLED
     help
         SPI chip-select line for the SD card. Set to -1 if not wired.
         Common ESP32 dev-board default is GPIO 5; some integrated audio
@@ -48,7 +47,6 @@ config BG_SDCARD_MOSI_GPIO
     range -1 48 if IDF_TARGET_ESP32S3
     range -1 39
     default 23
-    depends on BG_SDCARD_ENABLED
     help
         SPI master-out / slave-in. Set to -1 if not wired.
 
@@ -57,7 +55,6 @@ config BG_SDCARD_MISO_GPIO
     range -1 48 if IDF_TARGET_ESP32S3
     range -1 39
     default 19
-    depends on BG_SDCARD_ENABLED
     help
         SPI master-in / slave-out. Set to -1 if not wired.
 
@@ -66,7 +63,6 @@ config BG_SDCARD_CLK_GPIO
     range -1 48 if IDF_TARGET_ESP32S3
     range -1 39
     default 18
-    depends on BG_SDCARD_ENABLED
     help
         SPI clock line for the SD card. Set to -1 if not wired.
 
@@ -513,6 +509,20 @@ config AUDIO_CODEC_I2C_FREQ_HZ
     help
         I2C clock speed for the codec bus. Standard mode (100kHz) is safe;
         fast mode (400kHz) is usually fine but increases EMI risk on long lines.
+
+config BUTTON_GPIO
+    int "Snapshot/stop button GPIO (-1 = none)"
+    range -1 48 if IDF_TARGET_ESP32S3
+    range -1 39
+    default 5
+    help
+        Momentary button that logs live state / stops playback. -1 disables it.
+
+        MUST NOT collide with a peripheral pin. On the YB-ESP32-S3-DAC the old
+        default of 5 is the I2S bit clock: configuring it as a button input
+        degraded BCLK enough that the codec could still lock its PLL but could
+        never latch a sample, which presents as perfect clocks and total
+        silence. Set -1 there.
 
 config AUDIO_CODEC_RESET_GPIO
     int "Audio codec hardware ~RESET GPIO (-1 = not wired)"

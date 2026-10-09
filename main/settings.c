@@ -232,7 +232,11 @@ static void settings_seed_defaults(device_settings_t *s)
     s->audio_max_volume = 100; // no attenuation by default (full scale)
 
     // ---- Controls: momentary snapshot/stop button (former #define GPIO 5).
+#ifdef CONFIG_BUTTON_GPIO
+    s->button_gpio = CONFIG_BUTTON_GPIO;
+#else
     s->button_gpio = 5;
+#endif
 
     // ---- Network
 #ifdef CONFIG_GENERATOR_SERVER_URL
@@ -293,6 +297,72 @@ static esp_err_t settings_persist(void)
 
 /* ------------------------------------------------------------------ init ---- */
 
+/* Warn at boot when two settings claim the same GPIO.
+ *
+ * This has bitten twice on the S3 board and both times presented as a baffling
+ * hardware fault rather than a config error:
+ *   - button_gpio defaulted to 5, which is the I2S BIT CLOCK there. Claiming it
+ *     as a button input degraded BCLK just enough that the codec still locked
+ *     its PLL but never latched a sample: perfect clocks, total silence.
+ *   - sd_cs defaulted to 5 as well, for the same reason (the SD pin Kconfig
+ *     symbols did not exist while the SD feature was off, so the seed fell back
+ *     to classic-board pins).
+ *
+ * A conflict is not always fatal — an inactive backend's pins are harmless — so
+ * this warns rather than refusing to boot. But it turns a multi-hour hardware
+ * hunt into one line in the log.
+ */
+static void settings_warn_pin_conflicts(void)
+{
+    const device_settings_t *s = &s_settings;
+    struct { const char *name; int pin; bool active; } claims[] = {
+        { "i2s_bck",      s->i2s_bck_pin,   true },
+        { "i2s_ws",       s->i2s_ws_pin,    true },
+        { "i2s_data",     s->i2s_data_pin,  true },
+        { "i2s_mclk",     s->i2s_mclk_pin,  true },
+        { "i2s_din",      s->i2s_din_pin,   true },
+        { "codec_i2c_sda",s->codec_i2c_sda, s->audio_codec != AUDIO_CODEC_NONE },
+        { "codec_i2c_scl",s->codec_i2c_scl, s->audio_codec != AUDIO_CODEC_NONE },
+        { "codec_reset",  s->codec_reset_pin, s->audio_codec != AUDIO_CODEC_NONE },
+        { "amp_enable",   s->amp_enable_pin, true },
+        { "button",       s->button_gpio,   true },
+        { "led_data",     s->led_data_pin,
+              s->led_backend == LED_BACKEND_NEOPIXEL || s->led_backend == LED_BACKEND_DOTSTAR },
+        { "led_clock",    s->led_clock_pin, s->led_backend == LED_BACKEND_DOTSTAR },
+#if CONFIG_BG_SDCARD_ENABLED
+        { "sd_cs",        s->sd_cs,   true },
+        { "sd_mosi",      s->sd_mosi, true },
+        { "sd_miso",      s->sd_miso, true },
+        { "sd_clk",       s->sd_clk,  true },
+#endif
+    };
+    const size_t n = sizeof(claims) / sizeof(claims[0]);
+
+    for (size_t i = 0; i < n; i++) {
+        if (!claims[i].active || claims[i].pin < 0) continue;
+        for (size_t j = i + 1; j < n; j++) {
+            if (!claims[j].active || claims[j].pin != claims[i].pin) continue;
+            ESP_LOGE(TAG, "GPIO %d claimed by BOTH '%s' and '%s' — peripherals "
+                     "will interfere; fix one in Settings",
+                     claims[i].pin, claims[i].name, claims[j].name);
+        }
+    }
+
+    /* DIRECT LED pins only matter when that backend is the active one. */
+    if (s->led_backend == LED_BACKEND_DIRECT) {
+        for (int k = 0; k < SETTINGS_LED_DIRECT_CHANNELS; k++) {
+            int p = s->led_direct_pins[k];
+            if (p < 0) continue;
+            for (size_t i = 0; i < n; i++) {
+                if (claims[i].active && claims[i].pin == p) {
+                    ESP_LOGE(TAG, "GPIO %d claimed by BOTH 'led_direct[%d]' and "
+                             "'%s'", p, k, claims[i].name);
+                }
+            }
+        }
+    }
+}
+
 esp_err_t settings_init(void)
 {
     bool loaded = false;
@@ -334,6 +404,8 @@ esp_err_t settings_init(void)
                      (unsigned)SETTINGS_VERSION);
         }
     }
+
+    settings_warn_pin_conflicts();
     return ESP_OK;
 }
 

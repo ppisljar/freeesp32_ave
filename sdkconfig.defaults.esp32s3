@@ -57,10 +57,20 @@ CONFIG_AUDIO_CODEC_RESET_GPIO=21
 
 # microSD (SPI). Not enabled by default; pins recorded so BG_SDCARD_ENABLED
 # works out of the box if it is turned on.
+#
+# These MUST be set even with SD disabled: the runtime settings store seeds
+# sd_* from them, and the fallback values are classic-board pins where
+# sd_cs = 5 — which is this board's I2S bit clock.
 CONFIG_BG_SDCARD_CS_GPIO=10
 CONFIG_BG_SDCARD_MOSI_GPIO=11
 CONFIG_BG_SDCARD_CLK_GPIO=12
 CONFIG_BG_SDCARD_MISO_GPIO=13
+
+# No snapshot button. The default of GPIO5 is the I2S BIT CLOCK on this board;
+# claiming it as a button input degraded BCLK enough that the codec locked its
+# PLL but never latched a sample — perfect clocks, total silence. The board's
+# own 'B' button is GPIO0 (also a strapping pin) if one is wanted later.
+CONFIG_BUTTON_GPIO=-1
 
 # LEDs: TWO M5Stack NeoHEX boards (37 x WS2812 each), one per eye, chained in
 # series off GPIO18 — 74 pixels total.

@@ -20,6 +20,7 @@ typedef struct {
     uint32_t fill_max_cycles;
     uint32_t fill_avg_cycles;
     uint32_t fill_count;        /**< number of fill_buffer samples accumulated */
+    uint16_t peak;            /**< Peak |sample| in the last I2S buffer (0 = silence) */
 } audio_stats_t;
 
 /**

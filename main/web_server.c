@@ -86,6 +86,7 @@ static esp_err_t flicker_jitter_handler(httpd_req_t *req);
 static esp_err_t iso_env_handler(httpd_req_t *req);
 static esp_err_t beat_jitter_handler(httpd_req_t *req);
 static esp_err_t audio_phase_handler(httpd_req_t *req);
+static esp_err_t codecreg_handler(httpd_req_t *req);  // bring-up: peek/poke codec regs
 #if CONFIG_BG_SUPPORT_PUSH
 static esp_err_t bg_stream_handler(httpd_req_t *req);   // thin async entry
 #if CONFIG_HTTPD_WS_SUPPORT
@@ -385,6 +386,9 @@ esp_err_t web_server_init(void)
     httpd_register_uri_handler(g_server_state.server, &flicker_jitter_uri);
     httpd_uri_t audio_phase_uri = { .uri = "/api/audio-phase", .method = HTTP_GET, .handler = audio_phase_handler, .user_ctx = NULL };
     httpd_register_uri_handler(g_server_state.server, &audio_phase_uri);
+
+    httpd_uri_t codecreg_uri = { .uri = "/api/codecreg", .method = HTTP_GET, .handler = codecreg_handler, .user_ctx = NULL };
+    httpd_register_uri_handler(g_server_state.server, &codecreg_uri);
 
 #if CONFIG_BG_SUPPORT_PUSH
     httpd_uri_t bg_stream_uri = {
@@ -1652,6 +1656,58 @@ static esp_err_t flicker_jitter_handler(httpd_req_t *req)
 }
 
 // GET /api/audio-phase?ch=<0..15>&deg=<0..359>  — audio pulse phase offset (complement 4).
+// GET /api/codecreg?page=<n>&reg=<n>[&val=<n>]  — read, or write-then-read, one
+// audio-codec register. BRING-UP TOOL: analog routing/gain on these codecs is
+// tuned by trial, and a rebuild+flash per guess is a ~3 minute loop. All values
+// are decimal. Always reports the value read back AFTER any write, because
+// several registers carry hardware-set status bits that differ from what was
+// written. Only meaningful when the TLV320DAC3101 is the active codec.
+static esp_err_t codecreg_handler(httpd_req_t *req)
+{
+#if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
+    extern esp_err_t tlv320dac3101_reg_rw(int page, int reg, int val, uint8_t *out);
+
+    char q[96];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need ?page=&reg=[&val=]");
+        return ESP_FAIL;
+    }
+    char buf[16];
+    int page = 0, reg = -1, val = -1;
+    if (httpd_query_key_value(q, "page", buf, sizeof(buf)) == ESP_OK) page = atoi(buf);
+    if (httpd_query_key_value(q, "reg",  buf, sizeof(buf)) == ESP_OK) reg  = atoi(buf);
+    if (httpd_query_key_value(q, "val",  buf, sizeof(buf)) == ESP_OK) val  = atoi(buf);
+    if (reg < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing reg");
+        return ESP_FAIL;
+    }
+
+    uint8_t out = 0xFF;
+    esp_err_t err = tlv320dac3101_reg_rw(page, reg, val, &out);
+    if (err != ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        char body[96];
+        snprintf(body, sizeof(body), "{\"ok\":false,\"err\":\"%s\"}", esp_err_to_name(err));
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    }
+    if (val >= 0) {
+        ESP_LOGW(TAG, "codecreg: wrote p%d r0x%02X = 0x%02X (read back 0x%02X)",
+                 page, reg, val, out);
+    }
+    httpd_resp_set_type(req, "application/json");
+    char body[128];
+    snprintf(body, sizeof(body),
+             "{\"ok\":true,\"page\":%d,\"reg\":%d,\"wrote\":%d,\"value\":%u}",
+             page, reg, val, (unsigned)out);
+    httpd_resp_sendstr(req, body);
+    return ESP_OK;
+#else
+    httpd_resp_send_err(req, HTTPD_501_METHOD_NOT_IMPLEMENTED, "codec not compiled in");
+    return ESP_FAIL;
+#endif
+}
+
 static esp_err_t audio_phase_handler(httpd_req_t *req)
 {
     int ch = -1, deg = 0;
@@ -2398,11 +2454,13 @@ static esp_err_t audiostats_handler(httpd_req_t *req)
     int n = snprintf(buf, sizeof(buf),
         "{\"cpu_mhz\":%d,"
         "\"buffers_written\":%u,\"write_errors\":%u,\"short_writes\":%u,\"gen_fail\":%u,"
+        "\"peak\":%u,"
         "\"fill_count\":%u,\"fill_min_cyc\":%u,\"fill_avg_cyc\":%u,\"fill_max_cyc\":%u,"
         "\"fill_avg_us\":%u,\"fill_max_us\":%u}",
         mhz,
         (unsigned)st.buffers_written, (unsigned)st.write_errors,
         (unsigned)st.short_writes, (unsigned)st.gen_fail,
+        (unsigned)st.peak,
         (unsigned)st.fill_count, (unsigned)st.fill_min_cycles,
         (unsigned)st.fill_avg_cycles, (unsigned)st.fill_max_cycles,
         (unsigned)(mhz ? st.fill_avg_cycles / (unsigned)mhz : 0u),
