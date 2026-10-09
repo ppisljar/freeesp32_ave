@@ -241,7 +241,13 @@ static void settings_seed_defaults(device_settings_t *s)
     strlcpy(s->wifi_password, DEFAULT_WIFI_PASSWORD, sizeof(s->wifi_password));
 
     // ---- mDNS hostname: reachable at http://<hostname>.local on any network.
+    // Seeded per board from CONFIG_MDNS_HOSTNAME so two devices on the same
+    // network don't both claim the same .local name and knock each other out.
+#ifdef CONFIG_MDNS_HOSTNAME
+    strlcpy(s->mdns_hostname, CONFIG_MDNS_HOSTNAME, sizeof(s->mdns_hostname));
+#else
     strlcpy(s->mdns_hostname, "esp32-ave", sizeof(s->mdns_hostname));
+#endif
 
     // ---- Reports: default to browser localStorage (no device flash writes).
     strlcpy(s->report_storage, "local", sizeof(s->report_storage));

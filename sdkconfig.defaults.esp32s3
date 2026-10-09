@@ -38,6 +38,10 @@ CONFIG_AUDIO_I2S_DATA_GPIO=7
 CONFIG_AUDIO_I2S_DIN_GPIO=-1
 CONFIG_AUDIO_AMP_ENABLE_GPIO=-1
 
+# Distinct from the classic boards' "esp32-ave" — both run on the same network
+# here, and two devices claiming one .local name knock each other offline.
+CONFIG_MDNS_HOSTNAME="esp32-ave-mobile"
+
 # Codec control bus.
 CONFIG_AUDIO_CODEC_I2C_PORT=0
 CONFIG_AUDIO_CODEC_I2C_SDA_GPIO=8

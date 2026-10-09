@@ -11,10 +11,19 @@
 # It:
 #   1. builds the web UI (web/ npm run build -> web/data/*.gz -> storage.bin)
 #   2. builds the main app   (idf.py build in freeesp32_ave/)
-#   3. builds the updater    (idf.py build in ../esp32ota/  -> esp32_minimal_ota.bin)
+#   3. builds the updater    (../esp32ota/, RE-TARGETED to match the main app)
 #   4. derives partition offsets at runtime from the flashed partition table
-#   5. reads flash mode/freq/size from build/flash_args (NOT hard-coded)
+#   5. reads chip, bootloader/partition offsets and flash mode/freq/size from
+#      sdkconfig + build/flash_args (NOT hard-coded)
 #   6. assembles ONE esptool write_flash call and (after confirmation) runs it
+#
+# MULTI-TARGET: works for both the classic ESP32 boards and the ESP32-S3
+# (YB-ESP32-S3-DAC). The chip comes from CONFIG_IDF_TARGET in sdkconfig, and the
+# bootloader offset differs by chip (0x1000 on classic ESP32, 0x0 on S3) so it is
+# read from build/flash_args rather than assumed. The esp32ota updater is a
+# separate project and is automatically re-targeted to the same chip — flashing
+# a wrong-chip updater to ota_1 would leave the device unable to recover over
+# the air. Switch boards with ./switch_board.sh first.
 #
 # Usage:
 #   ./flash_all.sh [--port /dev/tty.usbserial-XXXX] [--yes] [--dry-run]
@@ -22,14 +31,16 @@
 #     --yes     skip the interactive confirmation before flashing
 #     --dry-run build + verify + print the esptool command, but DO NOT flash
 #
-# Flash map (device table from Phase 1 of plans/ota_dual_boot_plan.md):
-#   0x1000    build/bootloader/bootloader.bin            2nd-stage bootloader
+# Flash map (every offset below is DERIVED at run time, shown here for the
+# classic 4 MB board as an example — the S3 16 MB layout differs):
+#   0x1000*   build/bootloader/bootloader.bin            2nd-stage bootloader
 #   0x8000    build/partition_table/partition-table.bin  the canonical table
 #   0xd000    build/ota_data_initial.bin                 otadata seed -> boot ota_0
 #   0x10000   build/esp32_audioplayer.bin                -> ota_0 (main app)
 #   0x210000  ../esp32ota/build/esp32_minimal_ota.bin    -> ota_1 (updater)
 #   0x2c0000  build/storage.bin                          -> storage (web SPIFFS)
 #   0x340000  build/cfgfs.bin                            -> cfgfs (session library)
+#   * 0x0 on ESP32-S3 — read from build/flash_args, never assumed.
 #
 # NOTE: cfgfs is seeded with the built-in session library (sessions/library/
 # *.ledc, packed by main/CMakeLists.txt). Because this is a FULL flash, it
@@ -84,10 +95,31 @@ idf.py build
 # and harmless — IDF checks the main app against ALL app slots, but the main app
 # is flashed to ota_0; the updater (which fits) goes to ota_1.
 
-# ---- 3. updater -------------------------------------------------------------
+# ---- resolve the chip target from the main app's config ---------------------
+# Everything below (updater target, bootloader offset, esptool --chip) follows
+# from this, so the S3 and classic boards share one script.
+CHIP=$(sed -n 's/^CONFIG_IDF_TARGET="\(.*\)"$/\1/p' "$SCRIPT_DIR/sdkconfig")
+if [ -z "$CHIP" ]; then
+  echo "Could not read CONFIG_IDF_TARGET from sdkconfig — build first." >&2
+  exit 1
+fi
 echo ""
-echo "=== [3/3] Building OTA updater (esp32ota) ==="
+echo "Chip target (from sdkconfig): $CHIP"
+
+# ---- 3. updater -------------------------------------------------------------
+# The updater is a SEPARATE project with its own sdkconfig. It must be built for
+# the SAME chip as the main app — a mismatched image bricks ota_1 and the device
+# cannot recover over the air. Re-target it only when it actually differs, since
+# set-target wipes its sdkconfig and forces a full rebuild.
+echo ""
+echo "=== [3/3] Building OTA updater (esp32ota) for $CHIP ==="
 cd "$OTA_DIR"
+OTA_CHIP=$(sed -n 's/^CONFIG_IDF_TARGET="\(.*\)"$/\1/p' sdkconfig 2>/dev/null || true)
+if [ "$OTA_CHIP" != "$CHIP" ]; then
+  echo "  updater is currently '${OTA_CHIP:-unset}' — switching to '$CHIP'"
+  rm -f sdkconfig
+  idf.py set-target "$CHIP"
+fi
 idf.py build
 cd "$SCRIPT_DIR"
 
@@ -108,9 +140,18 @@ OTA1_OFF=$(part_off ota_1);     OTA1_SZ=$(part_size ota_1)
 STORAGE_OFF=$(part_off storage); STORAGE_SZ=$(part_size storage)
 CFGFS_OFF=$(part_off cfgfs);     CFGFS_SZ=$(part_size cfgfs)
 OTADATA_OFF=$(part_off otadata)
-# bootloader (0x1000) and partition table (0x8000) are fixed for ESP32.
-BOOTLOADER_OFF=0x1000
-PARTTABLE_OFF=0x8000
+
+# The bootloader offset is CHIP-SPECIFIC: 0x1000 on the classic ESP32 but 0x0 on
+# the ESP32-S3 (and other newer targets). Rather than hardcode a table of chips,
+# read the offset IDF itself generated in build/flash_args — it is always right
+# for whatever target was built. Same for the partition table offset.
+read_flash_arg_off() {  # $1 = image path suffix to match
+  awk -v want="$1" '$2 ~ want { print $1; exit }' "$SCRIPT_DIR/build/flash_args"
+}
+BOOTLOADER_OFF=$(read_flash_arg_off 'bootloader\.bin$')
+PARTTABLE_OFF=$(read_flash_arg_off 'partition-table\.bin$')
+: "${BOOTLOADER_OFF:?could not find bootloader offset in build/flash_args}"
+: "${PARTTABLE_OFF:?could not find partition-table offset in build/flash_args}"
 
 # ---- flash params from build/flash_args (first line) ------------------------
 FLASH_PARAMS=$(head -1 "$SCRIPT_DIR/build/flash_args")
@@ -165,7 +206,7 @@ check_fit cfgfs   "$CFGFS_FSZ"   "$CFGFS_OFF"   "$CFGFS_SZ"
 [ "$fail" -eq 0 ] || { echo "Aborting: image does not fit its slot." >&2; exit 1; }
 
 # ---- assemble esptool command ----------------------------------------------
-ESPTOOL=(python -m esptool --chip esp32)
+ESPTOOL=(python -m esptool --chip "$CHIP")
 [ -n "$PORT" ] && ESPTOOL+=(-p "$PORT")
 ESPTOOL+=(-b "$BAUD" --before default_reset --after hard_reset write_flash)
 # shellcheck disable=SC2206

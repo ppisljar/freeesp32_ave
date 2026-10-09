@@ -514,4 +514,21 @@ config AUDIO_CODEC_I2C_FREQ_HZ
         I2C clock speed for the codec bus. Standard mode (100kHz) is safe;
         fast mode (400kHz) is usually fine but increases EMI risk on long lines.
 
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+
+config MDNS_HOSTNAME
+    string "mDNS hostname (label before .local)"
+    default "esp32-ave"
+    help
+        The device advertises itself at http://<hostname>.local. Sanitized to
+        [a-z0-9-] at runtime; an empty value falls back to "esp32-ave".
+
+        This only SEEDS the runtime settings store on first boot (or after a
+        settings reset) — it can be changed any time from the web Settings page.
+
+        Give each board on the same network a DISTINCT name: two devices
+        claiming the same .local name collide and one becomes unreachable.
+
 endmenu
