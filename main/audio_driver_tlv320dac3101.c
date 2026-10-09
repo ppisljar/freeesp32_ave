@@ -36,6 +36,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "settings.h"
@@ -100,6 +101,44 @@ esp_err_t tlv320dac3101_init(uint32_t sample_rate);
 esp_err_t tlv320dac3101_set_sample_rate(uint32_t sample_rate);
 esp_err_t tlv320dac3101_set_volume(float volume);
 esp_err_t tlv320dac3101_deinit(void);
+
+/* --------------------------------------------------------- hardware reset --- */
+
+/* Pulse the codec's active-low ~RESET pin before any I2C traffic.
+ *
+ * This is NOT optional on a board that wires ~RESET to a GPIO: the pin comes up
+ * floating, the codec stays held in reset, and it then ACKs nothing — the whole
+ * bus scans as empty, which reads like a wiring fault. The software reset in
+ * tlv320dac3101_init() cannot substitute, because it is itself an I2C write.
+ *
+ * Timing per TI SLAS666B: ~RESET must be held low (the datasheet's minimum is
+ * ~10 ns, but it recommends low while the supplies settle), and the control
+ * interface needs >=1 ms after release before it is addressable. The 10 ms /
+ * 10 ms used here is far inside both and costs nothing at boot. */
+static void tlv_hw_reset(void)
+{
+    int pin = settings_get()->codec_reset_pin;
+    if (pin < 0) {
+        ESP_LOGD(TAG, "no codec reset GPIO configured — skipping hardware reset");
+        return;
+    }
+
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << pin,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+
+    gpio_set_level((gpio_num_t)pin, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level((gpio_num_t)pin, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    ESP_LOGI(TAG, "hardware reset pulsed on GPIO %d", pin);
+}
 
 /* ------------------------------------------------------------------ I2C ------ */
 
@@ -271,6 +310,9 @@ esp_err_t tlv320dac3101_init(uint32_t sample_rate)
         ESP_LOGW(TAG, "tlv320dac3101_init called when already initialized — ignoring");
         return ESP_OK;
     }
+
+    /* Bring the codec out of reset BEFORE opening the bus — see tlv_hw_reset(). */
+    tlv_hw_reset();
 
     esp_err_t err = tlv_i2c_open();
     if (err != ESP_OK) return err;

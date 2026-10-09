@@ -33,9 +33,19 @@ Two board traps that drove design decisions:
    example therefore clocks the codec PLL from **BCLK**, not MCLK — and so do
    we (`CONFIG_AUDIO_I2S_MCLK_GPIO=-1`). Closing JP2 and setting the pin to 4
    switches the driver to the MCLK=256xFs clock tree.
-2. **GPIO21 is the codec's ~RESET**, tied to the ESP32's own EN pin by a
-   normally-connected (cuttable) trace. It is *not* a free GPIO — driving it
-   would continuously reset the codec. The LED strip uses **GPIO14** instead
+2. **GPIO21 is the codec's ~RESET**, and firmware is *expected* to drive it.
+   The 3-pad jumper's **default-closed** side is GPIO21 ↔ codec ~RESET; the
+   ESP32 EN pin is the *optional* side. Confirmed by
+   `espressif/arduino-esp32` `variants/yb_esp32s3_dac/pins_arduino.h`:
+   `TLV_RESET = 21 // if resp. solder bridge is closed (default closed)`.
+
+   > **Corrected 2026-10-09.** This previously said GPIO21 was tied to EN and
+   > must never be driven. That was backwards, and it is why the first firmware
+   > left the pin floating — which held the codec in reset and produced a
+   > completely silent I2C bus on first boot. Driving GPIO21 is safe and does
+   > **not** reset the ESP32.
+
+   It is still not a free GPIO, so the LED strip correctly uses **GPIO14**
    (GPIO12, the glasses board's LED pin, is the SD clock here).
 
 ## Steps

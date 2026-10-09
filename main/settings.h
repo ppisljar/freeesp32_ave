@@ -53,6 +53,7 @@ typedef struct {
     // Audio codec
     audio_codec_t audio_codec;          // active codec (runtime select; acted on in Phase 3)
     int  codec_i2c_port, codec_i2c_sda, codec_i2c_scl, codec_i2c_freq_hz;
+    int  codec_reset_pin;               // codec ~RESET (active low); -1 = not wired
     // SD card (BG audio)
     int  sd_cs, sd_mosi, sd_miso, sd_clk;
     // Audio misc

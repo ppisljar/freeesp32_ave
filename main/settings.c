@@ -22,7 +22,7 @@
 
 static const char *TAG = "settings";
 
-#define SETTINGS_VERSION   ((uint16_t)6)   // v6: mdns_hostname added
+#define SETTINGS_VERSION   ((uint16_t)7)   // v7: codec_reset_pin added
 #define SETTINGS_NS        "devcfg"
 #define SETTINGS_KEY       "blob"
 
@@ -198,6 +198,11 @@ static void settings_seed_defaults(device_settings_t *s)
     s->codec_i2c_freq_hz = CONFIG_AUDIO_CODEC_I2C_FREQ_HZ;
 #else
     s->codec_i2c_freq_hz = 100000;
+#endif
+#ifdef CONFIG_AUDIO_CODEC_RESET_GPIO
+    s->codec_reset_pin = CONFIG_AUDIO_CODEC_RESET_GPIO;
+#else
+    s->codec_reset_pin = -1;
 #endif
 
     // ---- SD card pins (depends on BG_SDCARD_ENABLED; seed regardless)
@@ -485,6 +490,7 @@ esp_err_t settings_apply_json(const char *body, int len)
     apply_int(root, "codec_i2c_port", &cur.codec_i2c_port, 0, 1);
     apply_pin(root, "codec_i2c_sda", &cur.codec_i2c_sda);
     apply_pin(root, "codec_i2c_scl", &cur.codec_i2c_scl);
+    apply_pin(root, "codec_reset_pin", &cur.codec_reset_pin);
     apply_int(root, "codec_i2c_freq_hz", &cur.codec_i2c_freq_hz, 10000, 1000000);
 
     apply_pin(root, "sd_cs", &cur.sd_cs);
@@ -612,6 +618,7 @@ int settings_to_json(char *buf, int cap)
     cJSON_AddNumberToObject(root, "codec_i2c_sda", s->codec_i2c_sda);
     cJSON_AddNumberToObject(root, "codec_i2c_scl", s->codec_i2c_scl);
     cJSON_AddNumberToObject(root, "codec_i2c_freq_hz", s->codec_i2c_freq_hz);
+    cJSON_AddNumberToObject(root, "codec_reset_pin", s->codec_reset_pin);
 
     cJSON_AddNumberToObject(root, "sd_cs", s->sd_cs);
     cJSON_AddNumberToObject(root, "sd_mosi", s->sd_mosi);

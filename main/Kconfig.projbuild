@@ -514,6 +514,25 @@ config AUDIO_CODEC_I2C_FREQ_HZ
         I2C clock speed for the codec bus. Standard mode (100kHz) is safe;
         fast mode (400kHz) is usually fine but increases EMI risk on long lines.
 
+config AUDIO_CODEC_RESET_GPIO
+    int "Audio codec hardware ~RESET GPIO (-1 = not wired)"
+    range -1 48 if IDF_TARGET_ESP32S3
+    range -1 39
+    default -1
+    help
+        GPIO wired to the codec's active-low hardware reset pin. The driver
+        pulses it LOW then HIGH before the first I2C transaction, so the codec
+        is guaranteed to be out of reset and initialized before we talk to it.
+
+        Set to -1 when the codec's reset is tied to the board's own reset rail
+        and needs no firmware involvement.
+
+        Why this exists: on the YB-ESP32-S3-DAC the codec ~RESET is on GPIO21
+        (the 3-pad jumper's default-closed side). With the pin left floating the
+        codec stays held in reset and ACKs nothing — the whole I2C bus reads as
+        empty, which looks exactly like a wiring fault. A software reset over
+        I2C cannot fix that, since it needs working I2C to begin with.
+
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------

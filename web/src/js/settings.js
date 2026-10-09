@@ -101,6 +101,8 @@ const GROUPS = [
               help: 'GPIO for the codec control bus I2C clock (SCL) line.' },
             { key: 'codec_i2c_freq_hz', label: 'I2C freq (Hz)', type: 'num', show: hasCodec,
               help: 'I2C bus clock for the codec control bus, in Hz (typically 100000).' },
+            { key: 'codec_reset_pin', label: 'Codec ~RESET pin', type: 'pin', show: hasCodec,
+              help: 'GPIO wired to the codec’s active-low hardware reset. Pulsed low then high before the first I2C transaction. -1 if the codec reset is tied to the board reset and needs no firmware involvement. If the whole I2C bus scans as empty, this pin is the first thing to check: a codec left in reset ACKs nothing.' },
         ],
     },
     {

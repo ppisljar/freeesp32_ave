@@ -49,6 +49,12 @@ CONFIG_AUDIO_CODEC_I2C_SCL_GPIO=9
 CONFIG_AUDIO_CODEC_I2C_FREQ_HZ=100000
 CONFIG_AUDIO_DEFAULT_CODEC_TLV320DAC3101=y
 
+# Codec ~RESET. The 3-pad jumper's default-closed side is GPIO21 <-> codec
+# ~RESET (EN is the optional side), and the pin comes up floating, which holds
+# the codec in reset so it ACKs nothing on I2C. The driver pulses it before the
+# first transaction. Set to -1 if you move the jumper to the EN side.
+CONFIG_AUDIO_CODEC_RESET_GPIO=21
+
 # microSD (SPI). Not enabled by default; pins recorded so BG_SDCARD_ENABLED
 # works out of the box if it is turned on.
 CONFIG_BG_SDCARD_CS_GPIO=10
@@ -60,9 +66,9 @@ CONFIG_BG_SDCARD_MISO_GPIO=13
 # board. GPIO14 — clear of I2S (4-7), codec I2C (8/9), SD (10-13), native USB
 # (19/20), flash+OPI PSRAM (26-37) and the strapping pins (0/3/45/46).
 #
-# NOT GPIO21: on this board GPIO21 is the codec's ~RESET line, and it ships
-# tied to the ESP32's own EN pin through a normally-connected (cuttable) trace.
-# Driving it as an LED data line would continuously reset the codec.
+# NOT GPIO21: on this board GPIO21 is the codec's ~RESET line (the 3-pad
+# jumper's default-closed side; EN is the optional side). The codec driver
+# pulses it to bring the codec out of reset, so it is not free for other use.
 # NOT GPIO12 (the glasses data pin): that is the SD card clock here.
 CONFIG_LED_DEFAULT_BACKEND_NEOPIXEL=y
 CONFIG_LED_DATA_PIN=14
