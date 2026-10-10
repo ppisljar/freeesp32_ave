@@ -1121,7 +1121,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     esp_err_t err = settings_apply_json(body, total);
     free(body);
     if (err != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "settings apply failed");
+        /* Name the field when we can. The request is refused atomically, so a
+         * bare "400" costs the user everything else they typed — including a
+         * WiFi password the GET never echoes back — with no clue which of the
+         * pin boxes was at fault. */
+        const char *why = settings_last_apply_error();
+        char msg[160];
+        snprintf(msg, sizeof(msg), "settings apply failed%s%s",
+                 why ? ": " : "", why ? why : "");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, msg);
         return ESP_FAIL;
     }
 

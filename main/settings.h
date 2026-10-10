@@ -81,6 +81,11 @@ const device_settings_t *settings_get(void);
  *  Unknown keys are ignored; omitted keys keep their current value. */
 esp_err_t settings_apply_json(const char *body, int len);
 
+/* Why the last settings_apply_json() refused a GPIO, or NULL. Valid until the
+ * next call. Lets the HTTP layer name the offending field instead of answering
+ * a bare 400 against a form with two dozen pin boxes. */
+const char *settings_last_apply_error(void);
+
 /** Serialize the current settings to JSON into buf (cap bytes). Returns the
  *  number of bytes written (excluding NUL), or -1 on error. */
 int settings_to_json(char *buf, int cap);

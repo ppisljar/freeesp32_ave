@@ -13,10 +13,20 @@
 #include "settings.h"
 #include "sdkconfig.h"
 #include "driver/gpio.h"   /* GPIO_IS_VALID_GPIO — per-target GPIO validity mask */
+#include "esp_bit_defs.h"  /* BIT64 */
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "cJSON.h"
+/* Not a public header, but the only target-accurate account of which pads the
+ * memory bus owns — see the unsafe-pin section below. Reached from main/
+ * because esp_hw_support exports its whole include/ (as esp_private/periph_ctrl.h
+ * in led_strip.c already relies on). Wrapped by exactly one function here so an
+ * IDF bump has one place to break. */
+#include "esp_private/esp_gpio_reserve.h"
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_SPIRAM_MODE_OCT
+#include "soc/spi_pins.h"  /* MSPI_IOMUX_PIN_NUM_* */
+#endif
 #include <string.h>
 #include <stdlib.h>
 
@@ -295,6 +305,148 @@ static esp_err_t settings_persist(void)
     return err;
 }
 
+/* ----------------------------------------------------------- unsafe pins ---- */
+
+/* Pins the device must never be talked into driving.
+ *
+ * GPIO_IS_VALID_GPIO answers "does this pad exist on this die", not "is this pad
+ * free" — and the pads bonded to the SPI flash and the PSRAM very much exist. On
+ * an unauthenticated POST /api/settings that difference is a remote brick rather
+ * than a bad setting: the value reaches NVS before the reboot that applies it,
+ * no driver will stop it (RMT, LEDC, I2S and I2C all log a warning about a
+ * reserved pin and then mux it anyway), and a board that cannot read its own
+ * flash cannot be talked out of it over the air — it needs USB and a boot
+ * button. Nothing legitimate wants these pins, so there is no trade-off to
+ * balance: they are refused outright.
+ *
+ * IDF already tracks them, but in the same global mask drivers use to record "I
+ * own this pad now", so the mask only means flash/PSRAM for as long as no driver
+ * has started. By the time the web server is up it also holds our own LED, I2S
+ * and I2C pins, and validating against it live would reject the very pin map the
+ * device is currently running on. Hence a snapshot, taken in settings_init()
+ * which app_main calls ahead of every pin consumer.
+ *
+ * Seeded with the static supplement so we are never weaker than it, even if
+ * this is somehow consulted before the snapshot. */
+#if CONFIG_IDF_TARGET_ESP32S3 && CONFIG_SPIRAM_MODE_OCT
+/* The snapshot has a hole on exactly this board. esp_mspi_pin_reserve() adds the
+ * MSPI data lines only when the *flash* is octal (it reads the FLASH_TYPE
+ * efuse), and here DIO flash sits next to OPI PSRAM, whose driver reserves only
+ * its own CS. D4..DQS are driven on every PSRAM access yet absent from the mask,
+ * so patch them in from the SoC's own pin header rather than a typed-out list.
+ *
+ * No classic-ESP32 equivalent on purpose: there the quad-PSRAM driver reserves
+ * the full set at runtime and resolves CLK/CS from the chip package, which a
+ * hardcoded list gets wrong in both directions — sdkconfig.es8388 legitimately
+ * drives LEDs on GPIO 16/17 precisely because that board has no PSRAM. */
+#define UNSAFE_PINS_STATIC \
+    (BIT64(MSPI_IOMUX_PIN_NUM_D4) | BIT64(MSPI_IOMUX_PIN_NUM_D5) | \
+     BIT64(MSPI_IOMUX_PIN_NUM_D6) | BIT64(MSPI_IOMUX_PIN_NUM_D7) | \
+     BIT64(MSPI_IOMUX_PIN_NUM_DQS))
+#else
+#define UNSAFE_PINS_STATIC 0ULL
+#endif
+
+static uint64_t s_unsafe_pins = UNSAFE_PINS_STATIC;
+
+/* Why the last settings_apply_json() refused, for the HTTP body. The whole
+ * request is rejected atomically, so without naming the field the user sees
+ * "HTTP 400" against a form with 24 pin boxes and no clue which one — and
+ * loses anything else they typed, including a WiFi password the GET never
+ * echoes back. Names the FIRST offender; the log lists them all. */
+static char s_apply_error[96];
+
+const char *settings_last_apply_error(void)
+{
+    return s_apply_error[0] ? s_apply_error : NULL;
+}
+
+static void apply_error_set(const char *field, int pin, const char *why)
+{
+    if (s_apply_error[0]) return;            /* keep the first, it is the one to fix */
+    snprintf(s_apply_error, sizeof(s_apply_error), "%s = GPIO %d: %s", field, pin, why);
+}
+
+/* Snapshot IDF's reserved-pin mask while it still describes only the memory bus
+ * and the target's missing pads — see the call site in settings_init(), which
+ * MUST stay ahead of every driver init for this to mean what we want.
+ *
+ * Queried one pin at a time through the documented esp_gpio_is_reserved()
+ * rather than in one shot. A single esp_gpio_reserve(0) returns the same word
+ * in one call, but it gets there by exploiting that a fetch_or of nothing
+ * happens to be a read — undocumented behaviour an IDF rewrite could change
+ * without anyone noticing, in a guard whose failure mode is a remotely
+ * triggered brick. 64 atomic loads, once, at boot. */
+static void settings_snapshot_unsafe_pins(void)
+{
+    for (int i = 0; i < 64; i++) {
+        if (esp_gpio_is_reserved(BIT64(i))) s_unsafe_pins |= BIT64(i);
+    }
+    ESP_LOGI(TAG, "unsafe GPIO mask 0x%016llx (flash/PSRAM + pads this chip lacks)",
+             (unsigned long long)s_unsafe_pins);
+}
+
+/* NULL when the pin is safe to store, else a short reason fit for a log line.
+ * -1 stays the "not wired" sentinel everywhere. */
+static const char *pin_reject_reason(int v)
+{
+    if (v == -1) return NULL;
+    /* > 63 first: the mask is 64 bits and BIT64 of anything larger is undefined.
+     * Keeping GPIO_IS_VALID_GPIO as well means an IDF change that empties the
+     * snapshot degrades to the old check instead of to no check. */
+    if (v < 0 || v > 63 || !GPIO_IS_VALID_GPIO(v)) return "not a GPIO on this chip";
+    if (s_unsafe_pins & BIT64(v)) return "wired to the SPI flash or PSRAM";
+    return NULL;
+}
+
+/* Disarm stored pins we would refuse over HTTP.
+ *
+ * The CONFIG_* seed and any blob written by an older build never went through
+ * that check, so a flash/PSRAM pin can already be latched before the first
+ * request arrives. -1 is the right landing: the feature goes quiet instead of
+ * fighting the memory bus, and since GET /api/settings then never hands back a
+ * value its own POST would reject, the Settings page stays savable. */
+static int settings_sanitize_pins(device_settings_t *s)
+{
+    struct { const char *name; int *pin; } fields[] = {
+        { "led_data_pin",    &s->led_data_pin },
+        { "led_clock_pin",   &s->led_clock_pin },
+        { "i2s_bck_pin",     &s->i2s_bck_pin },
+        { "i2s_ws_pin",      &s->i2s_ws_pin },
+        { "i2s_data_pin",    &s->i2s_data_pin },
+        { "i2s_mclk_pin",    &s->i2s_mclk_pin },
+        { "i2s_din_pin",     &s->i2s_din_pin },
+        { "amp_enable_pin",  &s->amp_enable_pin },
+        { "codec_i2c_sda",   &s->codec_i2c_sda },
+        { "codec_i2c_scl",   &s->codec_i2c_scl },
+        { "codec_reset_pin", &s->codec_reset_pin },
+        { "sd_cs",           &s->sd_cs },
+        { "sd_mosi",         &s->sd_mosi },
+        { "sd_miso",         &s->sd_miso },
+        { "sd_clk",          &s->sd_clk },
+        { "button_gpio",     &s->button_gpio },
+    };
+    int fixed = 0;
+
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        const char *why = pin_reject_reason(*fields[i].pin);
+        if (!why) continue;
+        ESP_LOGE(TAG, "stored %s = GPIO %d is %s — forcing -1 (feature disabled)",
+                 fields[i].name, *fields[i].pin, why);
+        *fields[i].pin = -1;
+        fixed++;
+    }
+    for (int k = 0; k < SETTINGS_LED_DIRECT_CHANNELS; k++) {
+        const char *why = pin_reject_reason(s->led_direct_pins[k]);
+        if (!why) continue;
+        ESP_LOGE(TAG, "stored led_direct_pins[%d] = GPIO %d is %s — forcing -1",
+                 k, s->led_direct_pins[k], why);
+        s->led_direct_pins[k] = -1;
+        fixed++;
+    }
+    return fixed;
+}
+
 /* ------------------------------------------------------------------ init ---- */
 
 /* Warn at boot when two settings claim the same GPIO.
@@ -367,6 +519,9 @@ esp_err_t settings_init(void)
 {
     bool loaded = false;
 
+    /* Before anything can consult it, and before any driver has polluted it. */
+    settings_snapshot_unsafe_pins();
+
     nvs_handle_t h;
     esp_err_t err = nvs_open(SETTINGS_NS, NVS_READWRITE, &h);
     if (err == ESP_OK) {
@@ -405,6 +560,16 @@ esp_err_t settings_init(void)
         }
     }
 
+    /* Write the corrected map straight back, so a value that predates this check
+     * stops reappearing on every boot. */
+    if (settings_sanitize_pins(&s_settings) > 0) {
+        esp_err_t perr = settings_persist();
+        if (perr != ESP_OK) {
+            ESP_LOGE(TAG, "could not persist sanitized pins: %s — the stored blob "
+                     "still holds them, RAM does not", esp_err_to_name(perr));
+        }
+    }
+
     settings_warn_pin_conflicts();
     return ESP_OK;
 }
@@ -416,29 +581,36 @@ const device_settings_t *settings_get(void)
 
 /* ------------------------------------------------------------- JSON apply --- */
 
-/* Validate against the SoC's real GPIO map rather than a hardcoded ceiling.
- * GPIO_IS_VALID_GPIO also rejects the holes in a target's numbering (the S3
- * has no GPIO22-25), which a numeric clamp cannot express. Clamping is the
- * wrong remedy for an out-of-range pin anyway: silently turning a requested
- * GPIO47 into GPIO39 drives a completely different pin. -1 stays the "not
- * wired" sentinel. Returns false and leaves the caller's field untouched. */
-static bool pin_is_valid(int v)
-{
-    return v == -1 || (v >= 0 && GPIO_IS_VALID_GPIO(v));
-}
-
-static void apply_pin(const cJSON *root, const char *key, int *field)
+/* Validate against the SoC's real GPIO map and the memory bus (see
+ * pin_reject_reason) rather than a hardcoded ceiling. Clamping is the wrong
+ * remedy for a pin we won't accept: silently turning a requested GPIO47 into
+ * GPIO39 drives a completely different pin, and turning a flash pin into its
+ * nearest legal neighbour hides the fact that someone asked for a flash pin.
+ *
+ * Returns false and leaves the caller's field untouched; the caller is expected
+ * to fail the whole request, because a half-applied pin map is how you end up
+ * debugging a board that is wired to neither the old config nor the new one. */
+static bool apply_pin(const cJSON *root, const char *key, int *field)
+    __attribute__((warn_unused_result));
+static bool apply_pin(const cJSON *root, const char *key, int *field)
 {
     const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
     if (cJSON_IsNumber(it)) {
-        int v = (int)it->valuedouble;
-        if (!pin_is_valid(v)) {
-            ESP_LOGW(TAG, "%s: GPIO %d is not valid on this chip — keeping %d",
-                     key, v, *field);
-            return;
+        /* valueint, not valuedouble: cJSON clamps valueint to INT_MIN/INT_MAX,
+         * whereas casting an out-of-range double to int is undefined. The range
+         * check below would catch the saturated result either way, but a guard
+         * against bricking should not rest on what UB happens to do here. */
+        int v = it->valueint;
+        const char *why = pin_reject_reason(v);
+        if (why) {
+            ESP_LOGE(TAG, "refusing %s = GPIO %d: %s — keeping %d",
+                     key, v, why, *field);
+            apply_error_set(key, v, why);
+            return false;
         }
         *field = v;
     }
+    return true;
 }
 
 static void apply_int(const cJSON *root, const char *key, int *field, int lo, int hi)
@@ -462,6 +634,8 @@ static void apply_str(const cJSON *root, const char *key, char *field, size_t ca
 
 esp_err_t settings_apply_json(const char *body, int len)
 {
+    s_apply_error[0] = '\0';          /* per-request; stale text would misdirect */
+
     if (!body || len <= 0) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -474,6 +648,10 @@ esp_err_t settings_apply_json(const char *body, int len)
 
     // Work on a copy so a malformed partial update can't leave us half-applied.
     device_settings_t cur = s_settings;
+
+    // Set by any refused pin. Accumulated rather than returned early so one
+    // request's log names every bad field, not just the first.
+    bool pins_ok = true;
 
     // LED backend (string -> enum). Phase 3: validate the requested backend is
     // actually compiled in (CONFIG_LED_SUPPORT_*); ignore + warn otherwise.
@@ -500,8 +678,8 @@ esp_err_t settings_apply_json(const char *body, int len)
         }
     }
 
-    apply_pin(root, "led_data_pin", &cur.led_data_pin);
-    apply_pin(root, "led_clock_pin", &cur.led_clock_pin);
+    pins_ok &= apply_pin(root, "led_data_pin", &cur.led_data_pin);
+    pins_ok &= apply_pin(root, "led_clock_pin", &cur.led_clock_pin);
     apply_int(root, "led_count", &cur.led_count, 1, 1000);
     apply_str(root, "led_channel_map", cur.led_channel_map, sizeof(cur.led_channel_map));
     apply_int(root, "led_grid_width", &cur.led_grid_width, 1, 64);
@@ -513,11 +691,25 @@ esp_err_t settings_apply_json(const char *body, int len)
         if (n > SETTINGS_LED_DIRECT_CHANNELS) n = SETTINGS_LED_DIRECT_CHANNELS;
         for (int i = 0; i < n; i++) {
             const cJSON *e = cJSON_GetArrayItem(dp, i);
-            if (!cJSON_IsNumber(e)) continue;
-            int v = (int)e->valuedouble;
-            if (!pin_is_valid(v)) {
-                ESP_LOGW(TAG, "led_direct_pins[%d]: GPIO %d is not valid on this "
-                         "chip — keeping %d", i, v, cur.led_direct_pins[i]);
+            if (!cJSON_IsNumber(e)) {
+                /* Fail rather than skip. Every other rejection path fails the
+                 * request, and a silent skip here would answer 200 with the
+                 * unchanged value echoed back — exactly the indistinguishable-
+                 * from-success behaviour this change exists to remove. */
+                ESP_LOGE(TAG, "refusing led_direct_pins[%d]: not a number", i);
+                apply_error_set("led_direct_pins", -1, "not a number");
+                pins_ok = false;
+                continue;
+            }
+            int v = e->valueint;
+            /* The array is the one pin field that doesn't go through apply_pin,
+             * so the check has to be repeated here. */
+            const char *why = pin_reject_reason(v);
+            if (why) {
+                ESP_LOGE(TAG, "refusing led_direct_pins[%d] = GPIO %d: %s — keeping %d",
+                         i, v, why, cur.led_direct_pins[i]);
+                apply_error_set("led_direct_pins", v, why);
+                pins_ok = false;
                 continue;
             }
             cur.led_direct_pins[i] = v;
@@ -526,12 +718,12 @@ esp_err_t settings_apply_json(const char *body, int len)
     apply_int(root, "led_direct_active_low_mask", &cur.led_direct_active_low_mask, 0, 255);
     apply_int(root, "led_dotstar_spi_clock_hz", &cur.led_dotstar_spi_clock_hz, 100000, 40000000);
 
-    apply_pin(root, "i2s_bck_pin", &cur.i2s_bck_pin);
-    apply_pin(root, "i2s_ws_pin", &cur.i2s_ws_pin);
-    apply_pin(root, "i2s_data_pin", &cur.i2s_data_pin);
-    apply_pin(root, "i2s_mclk_pin", &cur.i2s_mclk_pin);
-    apply_pin(root, "i2s_din_pin", &cur.i2s_din_pin);
-    apply_pin(root, "amp_enable_pin", &cur.amp_enable_pin);
+    pins_ok &= apply_pin(root, "i2s_bck_pin", &cur.i2s_bck_pin);
+    pins_ok &= apply_pin(root, "i2s_ws_pin", &cur.i2s_ws_pin);
+    pins_ok &= apply_pin(root, "i2s_data_pin", &cur.i2s_data_pin);
+    pins_ok &= apply_pin(root, "i2s_mclk_pin", &cur.i2s_mclk_pin);
+    pins_ok &= apply_pin(root, "i2s_din_pin", &cur.i2s_din_pin);
+    pins_ok &= apply_pin(root, "amp_enable_pin", &cur.amp_enable_pin);
 
     // Audio codec (string -> enum). Phase 3: "none" is always valid; ac101 /
     // es8388 are accepted only when compiled in (CONFIG_AUDIO_SUPPORT_*).
@@ -560,15 +752,15 @@ esp_err_t settings_apply_json(const char *body, int len)
         }
     }
     apply_int(root, "codec_i2c_port", &cur.codec_i2c_port, 0, 1);
-    apply_pin(root, "codec_i2c_sda", &cur.codec_i2c_sda);
-    apply_pin(root, "codec_i2c_scl", &cur.codec_i2c_scl);
-    apply_pin(root, "codec_reset_pin", &cur.codec_reset_pin);
+    pins_ok &= apply_pin(root, "codec_i2c_sda", &cur.codec_i2c_sda);
+    pins_ok &= apply_pin(root, "codec_i2c_scl", &cur.codec_i2c_scl);
+    pins_ok &= apply_pin(root, "codec_reset_pin", &cur.codec_reset_pin);
     apply_int(root, "codec_i2c_freq_hz", &cur.codec_i2c_freq_hz, 10000, 1000000);
 
-    apply_pin(root, "sd_cs", &cur.sd_cs);
-    apply_pin(root, "sd_mosi", &cur.sd_mosi);
-    apply_pin(root, "sd_miso", &cur.sd_miso);
-    apply_pin(root, "sd_clk", &cur.sd_clk);
+    pins_ok &= apply_pin(root, "sd_cs", &cur.sd_cs);
+    pins_ok &= apply_pin(root, "sd_mosi", &cur.sd_mosi);
+    pins_ok &= apply_pin(root, "sd_miso", &cur.sd_miso);
+    pins_ok &= apply_pin(root, "sd_clk", &cur.sd_clk);
 
     const cJSON *vol = cJSON_GetObjectItemCaseSensitive(root, "default_volume");
     if (cJSON_IsNumber(vol)) {
@@ -581,7 +773,7 @@ esp_err_t settings_apply_json(const char *body, int len)
     // NUM_AUDIO_CHANNELS=16 for headroom, so output is quiet on some headphones).
     // Peaks past full-scale are caught by the ±1.0 clamp in audio_test.c.
     apply_int(root, "audio_max_volume", &cur.audio_max_volume, 0, 200);
-    apply_pin(root, "button_gpio", &cur.button_gpio);
+    pins_ok &= apply_pin(root, "button_gpio", &cur.button_gpio);
 
     apply_str(root, "generator_url", cur.generator_url, sizeof(cur.generator_url));
 
@@ -625,6 +817,17 @@ esp_err_t settings_apply_json(const char *body, int len)
     }
 
     cJSON_Delete(root);
+
+    /* A refused pin fails the request instead of being quietly dropped: the old
+     * behaviour answered 200 with the unchanged value in the body, which looks
+     * identical to success unless you diff it, and on a GPIO this is the one
+     * mistake worth being loud about. INVALID_ARG is what the caller already
+     * turns into a 400. */
+    if (!pins_ok) {
+        ESP_LOGE(TAG, "settings not applied — one or more GPIOs were refused "
+                 "(see above); nothing was written");
+        return ESP_ERR_INVALID_ARG;
+    }
 
     s_settings = cur;
     return settings_persist();
@@ -771,5 +974,9 @@ esp_err_t settings_reset_defaults(void)
         nvs_close(h);
     }
     settings_seed_defaults(&s_settings);
+    /* The seed reads CONFIG_* straight into the struct, so a board config that
+     * names a flash/PSRAM pin would otherwise reach NVS through this endpoint
+     * without ever passing the JSON check. */
+    settings_sanitize_pins(&s_settings);
     return settings_persist();
 }

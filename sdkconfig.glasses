@@ -442,6 +442,12 @@ CONFIG_BG_SDCARD_MOSI_GPIO=23
 CONFIG_BG_SDCARD_MISO_GPIO=19
 CONFIG_BG_SDCARD_CLK_GPIO=18
 CONFIG_LED_TYPE_NEOPIXEL=y
+# This board has quad PSRAM on GPIO 16/17 (CONFIG_D0WD_PSRAM_CS_IO/CLK_IO), and
+# the Kconfig defaults for direct-LED channels 7 and 8 are exactly those pins.
+# They could never have driven LEDs here, so pin them off explicitly rather than
+# letting the boot-time pin sanitizer discover it and rewrite NVS on first boot.
+CONFIG_LED_DIRECT_PIN_CH7=-1
+CONFIG_LED_DIRECT_PIN_CH8=-1
 # CONFIG_LED_TYPE_DOTSTAR is not set
 # CONFIG_LED_TYPE_DIRECT is not set
 CONFIG_LED_DATA_PIN=12
