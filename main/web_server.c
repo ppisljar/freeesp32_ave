@@ -91,7 +91,9 @@ static esp_err_t flicker_jitter_handler(httpd_req_t *req);
 static esp_err_t iso_env_handler(httpd_req_t *req);
 static esp_err_t beat_jitter_handler(httpd_req_t *req);
 static esp_err_t audio_phase_handler(httpd_req_t *req);
+#ifdef CONFIG_DEBUG_CODEC_REGISTER_ACCESS
 static esp_err_t codecreg_handler(httpd_req_t *req);  // bring-up: peek/poke codec regs
+#endif
 #ifdef CONFIG_BG_SDCARD_ENABLED
 static esp_err_t sd_list_handler(httpd_req_t *req);
 static esp_err_t sd_get_handler(httpd_req_t *req);
@@ -405,8 +407,13 @@ esp_err_t web_server_init(void)
     httpd_uri_t audio_phase_uri = { .uri = "/api/audio-phase", .method = HTTP_GET, .handler = audio_phase_handler, .user_ctx = NULL };
     httpd_register_uri_handler(g_server_state.server, &audio_phase_uri);
 
+#ifdef CONFIG_DEBUG_CODEC_REGISTER_ACCESS
+    /* Nothing in the web UI calls this — it is a curl-only bring-up tool. No
+     * endpoint on this server is authenticated: see the Kconfig help for what a
+     * LAN client can do to the codec (and to the speakers) with one GET. */
     httpd_uri_t codecreg_uri = { .uri = "/api/codecreg", .method = HTTP_GET, .handler = codecreg_handler, .user_ctx = NULL };
     httpd_register_uri_handler(g_server_state.server, &codecreg_uri);
+#endif
 
 #ifdef CONFIG_BG_SDCARD_ENABLED
     /* SD card file transfer — same shape as /api/configs, but the payloads are
@@ -1902,12 +1909,20 @@ static esp_err_t sd_delete_handler(httpd_req_t *req)
 }
 #endif /* CONFIG_BG_SDCARD_ENABLED */
 
+#ifdef CONFIG_DEBUG_CODEC_REGISTER_ACCESS
 // GET /api/codecreg?page=<n>&reg=<n>[&val=<n>]  — read, or write-then-read, one
-// audio-codec register. BRING-UP TOOL: analog routing/gain on these codecs is
-// tuned by trial, and a rebuild+flash per guess is a ~3 minute loop. All values
-// are decimal. Always reports the value read back AFTER any write, because
-// several registers carry hardware-set status bits that differ from what was
-// written. Only meaningful when the TLV320DAC3101 is the active codec.
+// audio-codec register.
+// BRING-UP TOOL: analog routing/gain on these codecs is tuned by trial, and a
+// rebuild+flash per guess is a ~3 minute loop. All values are decimal. Always
+// reports the value read back AFTER any write, because several registers carry
+// hardware-set status bits that differ from what was written. Only meaningful
+// when the TLV320DAC3101 is the active codec.
+//
+// Compiled out unless a developer opts in: nothing on this server asks for a
+// credential, so shipping this would let any host on the LAN reprogram the
+// codec with a single unauthenticated GET. The Kconfig help spells out what
+// that costs — it is what someone flipping the flag actually reads, and the
+// concrete gain figures belong to the driver, not to a third copy here.
 static esp_err_t codecreg_handler(httpd_req_t *req)
 {
 #if CONFIG_AUDIO_SUPPORT_TLV320DAC3101
@@ -1953,6 +1968,7 @@ static esp_err_t codecreg_handler(httpd_req_t *req)
     return ESP_FAIL;
 #endif
 }
+#endif /* CONFIG_DEBUG_CODEC_REGISTER_ACCESS */
 
 static esp_err_t audio_phase_handler(httpd_req_t *req)
 {

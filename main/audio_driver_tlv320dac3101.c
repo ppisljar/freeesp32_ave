@@ -502,12 +502,19 @@ esp_err_t tlv320dac3101_set_volume(float volume)
     return tlv_write(0, P0_DAC_VOL_R, reg);
 }
 
+#ifdef CONFIG_DEBUG_CODEC_REGISTER_ACCESS
 /* Runtime register peek/poke, used by GET /api/codecreg during board bring-up.
  *
  * Tuning analog routing by rebuilding and reflashing is a ~3 minute loop per
  * guess; this makes it instant. Reads back after writing so the caller always
  * sees what the chip actually holds — several of these registers have
  * hardware-set status bits that differ from what was written.
+ *
+ * Deliberately not declared in any header and not compiled at all by default:
+ * its only caller is an unauthenticated HTTP GET, which makes every register on
+ * the chip — the 24 dB class-D gain bits above, P0_RESET, the whole PLL tree —
+ * writable by anything that can reach the device's port. Keeping the function
+ * out of default builds means a shipped binary cannot be talked into it.
  *
  * @param val  0..255 to write, or <0 to only read.
  */
@@ -524,6 +531,7 @@ esp_err_t tlv320dac3101_reg_rw(int page, int reg, int val, uint8_t *out)
     }
     return tlv_read_raw((uint8_t)reg, out);
 }
+#endif /* CONFIG_DEBUG_CODEC_REGISTER_ACCESS */
 
 esp_err_t tlv320dac3101_deinit(void)
 {

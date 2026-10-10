@@ -58,7 +58,22 @@ if [ -f "sdkconfig" ]; then
   fi
   if ! diff -q "sdkconfig" "sdkconfig.$CURRENT" >/dev/null 2>&1; then
     echo "Current sdkconfig differs from sdkconfig.$CURRENT — saving back to snapshot"
+    # Debug options that must never become a board's committed default. Saving
+    # the live sdkconfig back is how a temporary bench opt-in turns into a
+    # permanent one: you enable a flag to debug something, switch boards days
+    # later, and it is now in a tracked snapshot applying to every future build
+    # and to anyone who pulls. That is not hypothetical — CONFIG_ISR_PROFILING=y
+    # reached sdkconfig.glasses and sdkconfig.ac101 by exactly this route.
+    # These are stripped from the SNAPSHOT only; your live sdkconfig keeps them,
+    # so the current session is unaffected.
+    DANGEROUS_DEBUG="CONFIG_DEBUG_CODEC_REGISTER_ACCESS CONFIG_ISR_PROFILING CONFIG_TIMELINE_DEBUG"
     cp "sdkconfig" "sdkconfig.$CURRENT"
+    for sym in $DANGEROUS_DEBUG; do
+      if grep -q "^$sym=y" "sdkconfig.$CURRENT"; then
+        echo "  NOT persisting $sym=y into sdkconfig.$CURRENT (debug-only; stays in your live sdkconfig)"
+        sed -i.bak "s|^$sym=y|# $sym is not set|" "sdkconfig.$CURRENT" && rm -f "sdkconfig.$CURRENT.bak"
+      fi
+    done
   fi
 fi
 

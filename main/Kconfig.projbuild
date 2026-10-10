@@ -18,6 +18,23 @@ config TIMELINE_DEBUG
         curve=C".  Off in production; enable during Phase 3 validation to
         confirm sweep wiring without an oscilloscope.
 
+config DEBUG_CODEC_REGISTER_ACCESS
+    bool "Expose raw codec register peek/poke via /api/codecreg"
+    default n
+    help
+        Compile in GET /api/codecreg, which reads or writes ANY of the audio
+        codec's 256 pages x 256 registers over I2C.  The web server has no
+        authentication or rate limiting of any kind, so enabling this hands
+        every client on the LAN direct control of the codec: raising the
+        class-D gain to 24 dB destroys the 8R speakers the driver
+        deliberately holds at 6 dB, and writing register 0 desyncs the
+        driver's cached page so every later driver write lands on the wrong
+        bank.  Being a GET, a browser or proxy prefetch is enough to fire a
+        write.  When disabled (default), the handler, its URI registration
+        and the tlv320dac3101_reg_rw() helper are all compiled out, so the
+        capability is absent from the binary instead of present and merely
+        refusing.  Bench bring-up only — MUST stay off in anything shipped.
+
 config BG_SDCARD_ENABLED
     bool "Enable SD card backend for BG audio"
     default n
