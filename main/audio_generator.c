@@ -956,8 +956,7 @@ esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t sam
         // freq_diff/current_freq_r mirror the per-sample computation at line ~915;
         // inc_l/inc_r mirror the phase-increment casts at lines ~1338-1339.
         if (!freq_sweep_active && channel->params.frequency_r > 0.0f) {
-            float freq_diff = channel->params.frequency_r - channel->params.frequency;
-            channel->current_freq_r = channel->current_freq + freq_diff + buffer_beat_jitter;
+            channel->current_freq_r = channel->params.frequency_r + buffer_beat_jitter;
         }
         const uint32_t inc_l_const = (uint32_t)(channel->current_freq   * Q32_PER_HZ);
         const uint32_t inc_r_const = (uint32_t)(channel->current_freq_r * Q32_PER_HZ);
@@ -990,14 +989,26 @@ esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t sam
                         channel->sweeps[AUDIO_PARAM_FREQUENCY].curve);
                 }
             }
-            // Preserve binaural beat frequency offset after any carrier sweep update.
-            // A3: add a slow anti-habituation jitter to the beat (default off = no-op).
-            // C (fix 7): only recompute per-sample while a FREQUENCY sweep is active
-            // (current_freq changes each sample). When no freq sweep is active,
-            // current_freq_r was hoisted before the loop to the identical value.
+            // freq_r is the ABSOLUTE right-ear frequency, so sweeping the left
+            // carrier moves the BEAT. This used to hold the detune constant
+            // instead (current_freq + (frequency_r - frequency)), which kept the
+            // beat fixed across a carrier sweep.
+            //
+            // That was deliberate but wrong on two counts. First, it contradicted
+            // every other assignment of current_freq_r in this file (:382, :854,
+            // :1619), all of which take frequency_r as absolute. Second,
+            // params.frequency is never reassigned anywhere, so the detune stayed
+            // anchored to whatever the entry that started the sweep specified --
+            // meaning the beat also JUMPED BACK when the sweep ended.
+            //
+            // Nothing wanted the old behaviour: every carrier-sweep line in the
+            // shipped library documents an intended beat change ("carrier 200->203
+            // (beat 10->7)"), and none asks to hold a beat across a glide. 29 of 83
+            // sessions were silently not performing their central move.
+            //
+            // A3: a slow anti-habituation jitter rides on top (default off = no-op).
             if (freq_sweep_active && channel->params.frequency_r > 0.0f) {
-                float freq_diff = channel->params.frequency_r - channel->params.frequency;
-                channel->current_freq_r = channel->current_freq + freq_diff + buffer_beat_jitter;
+                channel->current_freq_r = channel->params.frequency_r + buffer_beat_jitter;
             }
 
             // --- Implicit amplitude ramp (de-click) ---
