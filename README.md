@@ -174,7 +174,45 @@ drivers handle all the high-current switching; the ESP32 just emits
 
 The board-specific `sdkconfig.<board>` files in this directory hold the
 exact pin assignments. To switch between boards: `./switch_board.sh
-{glasses|ac101|es8388}` then `idf.py build flash`.
+{glasses|ac101|es8388|yb_s3_dac}` then `idf.py build flash`.
+
+Targets differ in more than pins — the classic ESP32 and the ESP32-S3 need
+genuinely different code in places (RMT channel layout, I2S clocking, flash
+size). Every such divergence is catalogued in **`legacyesp32.md`**, which
+doubles as the removal checklist for the day classic-ESP32 support is dropped.
+
+### YelloByte YB-ESP32-S3-DAC (ESP32-S3)
+
+An off-the-shelf ESP32-S3 board with a **TI TLV320DAC3101** codec, stereo
+class-D speaker outputs, a headphone jack and a microSD slot — the combination
+this project otherwise needs a custom PCB for. Selected with
+`./switch_board.sh yb_s3_dac`; pins live in `sdkconfig.defaults.esp32s3`.
+
+| | |
+|---|---|
+| I2S | BCLK 5, LRCLK 6, DIN 7, MCLK **unused** (`-1`) |
+| I2C (codec control) | SDA 8, SCL 9 @ 100 kHz, address `0x18` |
+| Codec `~RESET` | GPIO 21 |
+| microSD (SPI) | CS 10, MOSI 11, CLK 12, MISO 13 |
+| LEDs | GPIO 18 |
+| Flash | 16 MB, `partitions_16mb.csv` |
+| mDNS | `esp32-ave-mobile.local` (not the default `esp32-ave`) |
+
+Three things about this board are easy to lose an evening to:
+
+- **The codec is held in reset until firmware releases it.** GPIO 21 is wired
+  to `~RESET` through a solder bridge that ships *closed*, so until the driver
+  pulses it the chip does not answer on I2C at all — it presents as "no I2C
+  devices found", not as a codec fault.
+- **MCLK is not connected** (the `JP2` bridge ships open), so the codec derives
+  its clock from BCLK via its internal PLL. The driver's clock tables assume
+  this; do not set an MCLK pin unless you also close that bridge.
+- **It wants Philips/I2S framing**, not the left-justified framing the other
+  supported codecs use. `audio_manager.c` selects this per codec.
+
+Speaker output is deliberately configured at the **minimum** class-D gain
+(6 dB), not the 24 dB the datasheet suggests — these boards are usually driven
+into small speakers right next to someone's head.
 
 ### Original reference design
 
@@ -191,6 +229,37 @@ source ./activate.sh        # activate ESP-IDF v5.5.2 environment
 idf.py menuconfig           # pick LED backend, set GPIO mapping
 idf.py build flash monitor
 ```
+
+Helper scripts for the common cases:
+
+| Script | What it does |
+|---|---|
+| `./switch_board.sh <board>` | Swap in that board's `sdkconfig` snapshot (see above). |
+| `./flash_all.sh` | Full USB flash: bootloader + app + both filesystems. Chip and offsets are read from the build, so it follows whichever board is selected. |
+| `./flash_web.sh` | Rebuild the web UI and flash **only** the `storage` partition. The app is left running. |
+| `./ota_flash.sh <ip>` | Push a new app over WiFi via the minimal OTA updater. |
+| `./build_web.sh` | Build the web bundle without flashing anything. |
+
+> **The web UI lives in a SPIFFS partition, not in the app image.** `ota_flash.sh`
+> updates the firmware only — after changing anything under `web/`, you must run
+> `./flash_web.sh` over USB or the device keeps serving the old bundle.
+
+### Working on the web UI
+
+Run `npm test` in `web/` before flashing; the suite is fast and covers the
+parser, the serializer and the device-traffic gate.
+
+**All device requests must go through `deviceFetch()`** (`web/src/js/devicefetch.js`),
+and all background polling through `startPolling()` (`web/src/js/poll.js`). A
+bare `fetch('/api/...')` is a bug. The device is a microcontroller with **seven
+HTTP sockets and one task**, and Chrome will happily open six connections per
+host: a handful of unguarded `setInterval` pollers is enough to occupy every
+connection, after which the whole page hangs with no error and no timeout —
+while `curl` from a terminal still answers in 40 ms, because curl isn't inside
+Chrome's exhausted pool. That asymmetry makes it look like a device fault, and
+it is not. `deviceFetch` caps in-flight requests, shares identical GETs and puts
+a deadline on everything; `startPolling` schedules the next run only after the
+previous one finishes.
 
 ## WiFi & setup mode
 
@@ -349,18 +418,31 @@ so the device only ever receives its canonical 44.1 kHz / 16-bit / stereo WAV.
   A **scope** selector chooses *BG + Speech* (leave A entries for the device to
   synthesize live) or *All* (BG + Speech + A entrainment mix).
 
-#### Speech command (`S` prefix) — browser-only
+#### Speech command (`S` prefix)
 
 ```
 S  <time_ms>  <voice>  <volume>  "text to speak"
 ```
 
-Text-to-speech narration/cues. **The device never sees `S` lines** — they are
-stripped before anything is sent to the firmware and are instead TTS-synthesized
-in the browser and mixed into the bounced WAV (so they reach the device as part
-of the audio, not as a command). `voice` is a TTS voice / language code
+Text-to-speech narration/cues. `voice` is a TTS voice / language code
 (e.g. `en-US`, `Joanna`, `sl`); `volume` is 0..100; the text is double-quoted
 (may contain spaces and `#`).
+
+There are **two ways** an `S` line reaches your ears, chosen automatically:
+
+- **From the SD card (offline).** If every phrase the session needs is already
+  on the card, the `S` lines are sent to the device as-is and the firmware
+  narrates by itself — mixed live on top of the `BG` track. Nothing streams
+  from the browser, so you can close the laptop. See
+  [SD card & offline sessions](#sd-card--offline-sessions).
+- **Streamed from the browser (fallback).** Otherwise the browser strips the
+  `S` lines, TTS-synthesizes them, mixes them into the bounced WAV and pushes
+  that as the background track — so they reach the device as audio rather than
+  as commands. The page must stay open for the whole session.
+
+The fallback is taken on *any* doubt — no card, a phrase missing, `/api/sd`
+unreachable — because a session that needs the laptop open is much better than
+one that half-plays without it.
 
 Two TTS engines (both free, no API key), selectable in the Background-audio panel:
 - **Puter.js** (default) — AWS Polly neural voices entirely in the browser
@@ -463,6 +545,51 @@ A 600000        0      0  20  0  9  0  4
 
 Real-world session files (45-minute deep-meditation, etc.) live in
 `freeesp32_ave_generator/ledc/` — read those for richer examples.
+
+## SD card & offline sessions
+
+With a microSD card fitted, a session can run with **no browser attached** —
+the device narrates and plays its own background audio, so you can start a
+session and close the laptop.
+
+Format the card as a single **FAT32** partition. The firmware mounts it over
+SPI (pins per board, above) and uses two directories:
+
+```
+/speech/sp_<hash>.wav     one file per unique phrase
+/bg/<name>.wav            background tracks
+```
+
+It is a **library, not per-session mixes**: phrases are shared across sessions,
+so adding a session is nearly free and syncing only uploads what is missing.
+
+**Filling the card.** Settings → *Sync speech to SD card* walks every session in
+the library, synthesizes any phrase the card lacks (served from the browser's
+TTS cache when possible) and uploads it. Re-running it is cheap — present files
+are skipped. You can also drop files on the card directly from a computer, or
+use the HTTP API:
+
+```
+GET    /api/sd            list files + free space
+GET    /api/sd/<name>     download
+PUT    /api/sd/<name>     upload
+DELETE /api/sd/<name>     remove
+```
+
+**How a phrase is found.** The device resolves an `S` line to a filename by
+hashing the phrase itself (FNV-1a over `voice|text`) — so there is no manifest
+to keep in sync and no change to the `.ledc` format. That hash is implemented
+twice, in `main/speech_player.c` and `web/src/js/gen/sdsync.js`, and a
+divergence would be **silent**: the device would look for files the browser
+never uploaded and you would simply get no speech. `web/test/sdsync.test.js`
+pins the JavaScript to values generated from the C, so they cannot drift apart
+unnoticed.
+
+Background audio plays from the card with a `sdcard://` URL:
+
+```
+BG  sdcard://bg/river.wav  0  30
+```
 
 ## Related projects
 

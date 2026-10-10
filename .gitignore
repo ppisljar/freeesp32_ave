@@ -5,3 +5,5 @@ tmp/
 managed_components/
 sdkconfig.bak*
 sdkconfig.old
+# Tooling scratch state, not part of the project.
+.flow-state/
