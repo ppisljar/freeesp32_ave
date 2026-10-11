@@ -1,11 +1,23 @@
-# Reproduces the 7 Hz rate error, then measures it.
-# 10 Hz first on purpose: it raises the flicker ISR tick to 2500 Hz (400 us)
-# and the tick is never lowered within a session, so the 7 Hz section inherits
-# a 400 us grid -- 142857/400 = 357.14, which is what used to round up to 358.
-0 40 50 100 255 255 255 15     # sync marker
-A 0 3000 0 70 0 1
+# Rate-accuracy verification. Light channel only -- no audio cable needed.
+#
+# The 10 Hz block comes FIRST on purpose: it raises the flicker ISR tick to
+# 10 x LED_FLICKER_TICK_MULT = 2500 Hz (400 us), and the tick is never lowered
+# within a session, so every later block is measured on that same 400 us grid.
+#
+# Predicted OLD error (period rounded up to a whole number of 400 us ticks):
+#    10 Hz  100000/400 = 250.00 -> 250  ->  10.00000 Hz   exact
+#     7 Hz  142857/400 = 357.14 -> 358  ->   6.98324 Hz   -0.240%   <- measured 6.98320
+#     8 Hz  125000/400 = 312.50 -> 313  ->   7.98722 Hz   -0.160%
+#     9 Hz  111111/400 = 277.78 -> 278  ->   8.99281 Hz   -0.080%
+#     6 Hz  166667/400 = 416.67 -> 417  ->   5.99520 Hz   -0.080%
+#
+# With the phase-locked origin all five should now read exact.
+# 100% white 600 ms marker at t=0 is the sync reference on the light channel.
+0 40 50 100 255 255 255 15
 600 0 50 0 0 0 0 15
-A 600 0 0 0 0 1
-1000 10 50 80 0 0 255 15       # 10 Hz for 30 s -> tick raised to 2500 Hz
-31000 7 50 80 0 0 255 15       # 7 Hz for 120 s  <- the measurement
-151000 10 50 0 0 0 0 15        # off
+1000   10 50 80 0 0 255 15     # 10 Hz, 60 s  (sets the 400 us tick)
+61000   7 50 80 0 0 255 15     #  7 Hz, 60 s  (the worst case)
+121000  8 50 80 0 0 255 15     #  8 Hz, 60 s
+181000  9 50 80 0 0 255 15     #  9 Hz, 60 s
+241000  6 50 80 0 0 255 15     #  6 Hz, 60 s
+301000 10 50 0 0 0 0 15        # off  -> 5 min 1 s total
