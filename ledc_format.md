@@ -35,6 +35,30 @@ white). Audio still accepts 5..8 core tokens before the new pulse fields.
 
 ## Fields
 
+### `env` 1 is called SINE but is a PARABOLA
+
+`led_carrier_level_iram` implements env=1 as `4x(1-x)` -- a parabola, chosen to
+avoid a lookup table and 64-bit maths in the flicker ISR. It is a smooth hump
+like a raised sine and looks similar, but it has a derivative discontinuity at
+the cycle boundary, so its harmonics fall as 1/n^2 instead of vanishing.
+
+Measured optically at 10 Hz, relative to the fundamental:
+
+| | h2 | h3 | h4 | h5 |
+|---|---|---|---|---|
+| true sine (what the name implies) | 0.000 | 0.000 | 0.000 | 0.000 |
+| parabola (theory, 1/n^2) | 0.250 | 0.111 | 0.063 | 0.040 |
+| **measured** | **0.286** | **0.145** | **0.090** | **0.169** |
+
+This matters for entrainment: picking SINE to get a gentle single-frequency
+stimulus actually delivers ~25% second harmonic, so a 10 Hz session is also
+driving 20 and 30 Hz. If spectral purity is the goal, there is currently no
+env that provides it.
+
+For comparison, env=0 SQUARE measured h3=0.346 / h5=0.257 against the
+theoretical 0.333 / 0.200, with even harmonics at 0.004 -- i.e. a textbook
+square, exactly as intended.
+
 ### `bright` is linear only above ~40% effective drive
 
 Light output is proportional to `bright x RGB/255` (the "effective drive"), but
