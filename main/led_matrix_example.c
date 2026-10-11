@@ -905,6 +905,12 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
              * and 358 x 400 = 143200 us -- which is what came out, to 1 us.
              * 10 Hz was unaffected only because 100000/400 = 250 exactly.
              *
+             * Verified on hardware after the fix, same 400 us grid, five rates
+             * in one capture: 6/7/8/9/10 Hz all measured within +0.0005% of
+             * demanded, where 7 Hz had been -0.240% and 8 Hz -0.160%. The whole
+             * predicted error column went away, not just the rate that was
+             * first noticed -- which is what confirms the mechanism.
+             *
              * Stepping by ended_cycle_us keeps the origin on an absolute grid:
              * edges still land on tick boundaries (+/-400 us of jitter) but the
              * MEAN rate is now exact, which is what entrainment depends on.
