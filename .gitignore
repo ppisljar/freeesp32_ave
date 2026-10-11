@@ -7,3 +7,6 @@ sdkconfig.bak*
 sdkconfig.old
 # Tooling scratch state, not part of the project.
 .flow-state/
+
+__pycache__/
+*.pyc

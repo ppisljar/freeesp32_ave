@@ -1,0 +1,42 @@
+# avmeasure self-test session -- NOT for human use, NOT therapeutic.
+# Exists only so the test suite has a session that exercises every measurement:
+# a sync marker, two light channels, a binaural pair, an isochronic pulse, an
+# audio-only step and a light-only step (so a fault can be aimed at exactly one
+# domain).
+#
+# LED columns  : time(ms) freq duty bright R G B mask
+# Audio columns: A time(ms) freq pan vol mod ch freqR wave
+
+# --- sync marker: 600 ms of 50 Hz full-brightness light + a 3 kHz tone ---
+#     See README "sync marker recipe". 50 Hz raises the flicker ISR tick to its
+#     10 kHz ceiling for the whole session, which makes the later 10/20 Hz
+#     rates land exactly on tick boundaries -- deliberate, so this session
+#     tests the comparator rather than the quantization model (which has its
+#     own unit test against hand-computed values).
+0       50 50 100 255 255 255 3
+A 0     3000 0 70 0 15
+600     0 50 0 0 0 0 3
+A 600   3000 0 0 0 15
+
+# --- body: ch1 + ch2 at 10 Hz / 50% / 60%; binaural 240|246 (6 Hz beat),
+#     gated at 7 Hz ---
+1000    10 50 60 255 255 255 1
+1000    10 50 60 255 255 255 2
+A 1000  240 0 50 7 1 246 0
+
+# --- AUDIO-ONLY step at 30 s: volume 50 -> 25. No light entry shares this
+#     timestamp, so a 'late' fault here lands purely on the audio path. ---
+A 30000 240 0 25 7 1 246 0
+
+# --- LIGHT-ONLY step at 60 s: ch1 10 Hz -> 20 Hz. No audio entry shares this
+#     timestamp, so a 'drop' fault here lands purely on the light path. ---
+60000   20 50 60 255 255 255 1
+
+# --- end: brightness 0 on the last entry. config_parser.c:2104-2111 stops all
+#     flicker in the same dispatch as the last batch, so a last entry that
+#     still asks for light would be cancelled before it ever emits an edge --
+#     which the linter flags as LEDC_LAST_ENTRY_CANCELLED. Ending at 0 makes
+#     the intent explicit, and is what every shipped session does. ---
+90000   20 50 0 255 255 255 1
+90000   10 50 0 255 255 255 2
+A 90000 240 0 0 7 1 246 0

@@ -1,0 +1,63 @@
+# SYNC MARKER prepended by marker.py -- every original timestamp
+# shifted +1000 ms. Analyse with: --sync-tone 3000
+#
+# The marker is NOT part of the session: 600 ms of
+# full-brightness white at 40 Hz. Look away until it has passed.
+0 40 50 100 255 255 255 15
+A 0 3000 0 70 0 1
+600 0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- original session, timestamps +1000 ms ----
+# 17_nondual_awareness_RGB -- PREPARED FOR MEASUREMENT. Not a therapy session.
+#
+# Keeps 17's exact TIMING skeleton -- every rate, every step instant, the
+# carrier sweep, all audio -- and changes only what stops a sensor grading it:
+#
+#   1. mask 9 + mask 6 merged to mask 15, phase 0. One sensor, all zones in
+#      step. The original runs them 180 antiphase at the SAME rate, so a sensor
+#      seeing both gets cancellation that looks like a device fault.
+#   2. 7 brightness values flattened to a constant 80%. The original
+#      fades in from 0 over 15 s and then breathes 8<->22% every 12 s. Both are
+#      brightness-only and affect NO timing, but they break measurement twice:
+#      a slow fade gives the sync solver no sharp edge, and a moving 8-22%
+#      envelope makes the edge detector miss edges -- and a missed edge is
+#      indistinguishable from 'the device never fired that event'.
+#   3. 10 speech rows removed: speech is broadband and swamps the
+#      carrier/beat tracking on the audio channel.
+#
+# So every timing finding here applies directly to the real session.
+#
+# 17_nondual_awareness_RGB.ledc — Non-Dual Awareness, RGB inner/outer build
+# RGB variant of 17_nondual_awareness. Audio + speech IDENTICAL (steady 7 Hz open hold).
+# LEDs on inner ring (mask 9, violet-blue 60,30,200) + outer ring (mask 6, calm blue
+# 32,96,255), 180 antiphase, SINE gate — spacious and steady, the slow breathing LFO the
+# only movement. Every rate <=10 Hz; brightness <=22%. See base header for safety.
+#
+# LED: time freq duty bright R G B mask [env phase]
+
+# --- Brief settle / alpha (beat 10 Hz): vol + light fade in ---
+1000 10 50 80 60 30 200 15 1 0   # start: 10 Hz, 80%
+A 1000 200 0 >0 0 1 210 0            # binaural: carrier 200 / R210 => 10 Hz beat; vol fade-in
+8500 10 50 80 60 30 200 15 1 0   # no-op step
+16000 10 50 80 60 30 200 15 1 0   # no-op step
+A 31000 200 0 100 0 1 210 0       # alpha settle holds
+
+# --- Descend to the theta-alpha border (beat 10->7) ---
+A 151000 >200 0 100 0 1 210 0     # carrier 200->203 (beat 10->7)
+151000 >10 50 80 60 30 200 15 1 0   # rate sweep 10 -> 7 Hz begins; audio carrier sweeps with it
+
+# --- Long FLAT open hold (beat 7 Hz, deliberately steady) ---
+A 196000 203 0 100 0 1 210 0      # carrier 203 => beat 7 Hz held flat
+196000 7 50 80 60 30 200 15 1 0   # steady 7 Hz
+
+# --- Gentle return (beat 7->10) ---
+A 781000 >203 0 100 0 1 210 0    # carrier 203->200 (beat 7->10)
+781000 >7 50 80 60 30 200 15 1 0   # rate sweep 7 -> 10 Hz begins
+
+# --- Soft close: vol + brightness fade to 0 over 60 s ---
+A 871000 200 0 >100 0 1 210 0    # beat alpha 10; vol 50->0
+871000 10 50 80 60 30 200 15 1 0   # steady 10 Hz
+A 901000 200 0 0 0 1 210 0       # volume 0
+901000 10 50 0 60 30 200 15 1 0   # off
+

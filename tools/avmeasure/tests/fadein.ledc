@@ -1,0 +1,17 @@
+# A session with NO sharp optical feature, which is the shape of most real
+# therapeutic sessions: brightness ramps in from 0 over 20 s, holds one rate for
+# minutes, then ramps back out. There is nothing for a cross-correlation to lock
+# onto, so t0 is genuinely ambiguous by seconds.
+#
+# Used by the regression test asserting the tool NEVER claims high confidence in
+# a t0 it cannot actually determine. Before that fix it reported a t0 that was a
+# full 2 s wrong as "HIGH confidence (+/-5 ms)", and then emitted a phantom
+# "audio leads light" ERROR plus ten more findings downstream of it.
+0        40 50 >0  255 255 255 1
+A 0      240 0 >0 0 1 246 0
+20000    40 50 45  255 255 255 1
+A 20000  240 0 50 0 1 246 0
+220000   40 50 >45 255 255 255 1
+A 220000 240 0 >50 0 1 246 0
+240000   40 50 0   255 255 255 1
+A 240000 240 0 0 0 1 246 0

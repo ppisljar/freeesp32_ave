@@ -1,0 +1,54 @@
+# Measurement session -- NOT therapeutic. Shaped to make every fault class the
+# analyzer looks for visible, and to be short enough to iterate on.
+#
+# RIG (one audio interface, so every input shares one ADC clock):
+#   ch1  device headphone jack -> line in      (NOT a microphone: a room adds
+#                                               reverb and ~3 ms per metre, all
+#                                               of it noise in a timing measurement)
+#   ch2  solar cell / photodiode on one LED    (load it with 220R-1k: a bare
+#                                               cell into a 1M Hi-Z input rolls
+#                                               off at a couple of Hz and would
+#                                               smear the very edges we time)
+#
+#   python3 tools/avmeasure/analyze.py analyze \
+#       --ledc sessions/library/90_measure_sync.ledc --wav rec.wav \
+#       --map "audioL=1,light1=2" --sync-tone 3000
+#
+# --------------------------------------------------------------- sync marker
+# 600 ms of full-brightness white on every channel plus a 3 kHz tone. Both
+# edges are sharp, which is the whole point: without a marker the analyzer can
+# only cross-correlate, and on a session that fades in slowly it localises t=0
+# to +/-2 s and says so rather than guessing. With it: +/-5 ms.
+0     40 50 100 255 255 255 15   # all four zones, 100% bright
+A 0   3000 0 70 0 1              # 3 kHz marker tone, ch1
+600   0 50 0 0 0 0 15            # freq 0 => stop flicker
+A 600 0 0 0 0 1                  # freq 0 => stop the tone
+
+# ------------------------------------------------------- phase 1: t = 1..60 s
+# Inner and outer run at DIFFERENT rates on purpose. One sensor sees one zone,
+# so distinct rates tell us which zone it is actually watching -- that settles
+# the inner/outer channel-map question as a side effect of any capture.
+#   mask 9 = 1+8 = inner-left + inner-right
+#   mask 6 = 2+4 = outer-left + outer-right
+1000  10 50 80 0 0 255 9         # inner: 10 Hz, blue
+1000   7 50 80 255 80 0 6        # outer:  7 Hz, amber
+A 1000 240 0 60 0 1 250 0        # binaural 240/250 => 10 Hz beat, matches inner
+
+# ------------------------------------------------------ phase 2: t = 60..120 s
+# A hard step on all three quantities at one instant. Lateness, drops and
+# audio-vs-light offset all become measurable here because nothing ramps.
+60000 14 50 80 0 255 100 9       # inner -> 14 Hz, green
+60000  9 50 80 255 0 120 6       # outer ->  9 Hz, magenta
+A 60000 240 0 60 0 1 254 0       # beat -> 14 Hz, still matching inner
+
+# ----------------------------------------------------- phase 3: t = 120..300 s
+# Back to the phase-1 values. If the first and third blocks measure differently,
+# that is drift rather than a one-off error -- the comparison is self-referencing.
+120000 10 50 80 0 0 255 9
+120000  7 50 80 255 80 0 6
+A 120000 240 0 60 0 1 250 0
+
+# 5 minutes total: long enough for a ppm-scale clock divergence to show as a
+# growing lateness, short enough to re-record while iterating.
+300000 0 50 0 0 0 0 15
+A 300000 0 0 0 0 1
