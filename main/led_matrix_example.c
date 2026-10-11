@@ -915,11 +915,22 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
              * edges still land on tick boundaries (+/-400 us of jitter) but the
              * MEAN rate is now exact, which is what entrainment depends on.
              *
-             * Re-anchor instead when the rate changed this cycle (a sweep moves
-             * the grid by design) or when more than two periods have elapsed
-             * (a stall; stepping would fire repeatedly catching up). */
-            if (ended_cycle_us > 0u && new_freq == cur_freq_mhz &&
-                elapsed_us < (ended_cycle_us << 1)) {
+             * The advance is by the duration the ENDING cycle was supposed to
+             * take, which is correct whether or not the next cycle's rate
+             * differs: a rate change computed at this boundary applies to the
+             * NEXT cycle, not the one being closed.
+             *
+             * An earlier version also required the rate to be unchanged
+             * (new_freq == cur_freq_mhz). That was too strict and silently
+             * reintroduced the whole bug for any session using the jitter
+             * column, because jitter recomputes new_freq EVERY cycle: measured
+             * 9.95944 Hz against a demanded 10 (-0.41%) with jitter 0.5:10000,
+             * versus 10.00005 Hz with jitter off. 32_hypnagogic_visions and
+             * its RGB twin ship with jitter 0.6:30000, so this was live.
+             *
+             * Re-anchor only on a stall -- more than two periods elapsed --
+             * where stepping would fire repeatedly catching up. */
+            if (ended_cycle_us > 0u && elapsed_us < (ended_cycle_us << 1)) {
                 s->cycle_start_time_us += ended_cycle_us;
             } else {
                 s->cycle_start_time_us = now_us;
