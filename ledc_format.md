@@ -35,29 +35,24 @@ white). Audio still accepts 5..8 core tokens before the new pulse fields.
 
 ## Fields
 
-### `env` 1 is called SINE but is a PARABOLA
+### `env` shapes, measured
 
-`led_carrier_level_iram` implements env=1 as `4x(1-x)` -- a parabola, chosen to
-avoid a lookup table and 64-bit maths in the flicker ISR. It is a smooth hump
-like a raised sine and looks similar, but it has a derivative discontinuity at
-the cycle boundary, so its harmonics fall as 1/n^2 instead of vanishing.
+| env | shape | measured harmonics (h2/h3/h4) at 10 Hz |
+|---|---|---|
+| 0 | SQUARE | 0.004 / 0.346 / 0.003 -- textbook (theory 0 / 0.333 / 0) |
+| 1 | SINE | 0.058 / 0.004 / 0.010 |
+| 2 | TRIANGLE | 0.061 / 0.139 / 0.022 (theory 0 / 0.111 / 0) |
+| 3 | TRAPEZOID | 0.081 / 0.310 / 0.073 |
 
-Measured optically at 10 Hz, relative to the fundamental:
+`env=1` was a `4x(1-x)` parabola until it was replaced with a real raised-sine
+LUT. The parabola looks like a similar hump but has a derivative discontinuity
+at the cycle boundary, so its harmonics fell as 1/n^2: it measured h2=0.286,
+h3=0.145, i.e. a 10 Hz session was also driving 20 and 30 Hz at a quarter of
+the fundamental. After the fix h3 is 36x smaller.
 
-| | h2 | h3 | h4 | h5 |
-|---|---|---|---|---|
-| true sine (what the name implies) | 0.000 | 0.000 | 0.000 | 0.000 |
-| parabola (theory, 1/n^2) | 0.250 | 0.111 | 0.063 | 0.040 |
-| **measured** | **0.286** | **0.145** | **0.090** | **0.169** |
-
-This matters for entrainment: picking SINE to get a gentle single-frequency
-stimulus actually delivers ~25% second harmonic, so a 10 Hz session is also
-driving 20 and 30 Hz. If spectral purity is the goal, there is currently no
-env that provides it.
-
-For comparison, env=0 SQUARE measured h3=0.346 / h5=0.257 against the
-theoretical 0.333 / 0.200, with even harmonics at 0.004 -- i.e. a textbook
-square, exactly as intended.
+Measurement note: the 5th harmonic of a 10 Hz flicker lands on 50 Hz, so a
+mains-hum pickup shows up there and is easy to mistake for real harmonic
+content. Check whether h5 moves when you change the flicker rate.
 
 ### `bright` is linear only above ~40% effective drive
 

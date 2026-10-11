@@ -490,12 +490,61 @@ static inline uint32_t IRAM_ATTR led_interp_param(const led_sweep_param_t *sw, u
     return (uint32_t)result;
 }
 
+/* Raised-sine lookup, (1 - cos(2*pi*x))/2 in Q16, 256 steps + the endpoint so
+ * index = phase_q16 >> 8 needs no clamp. DRAM_ATTR because both callers run in
+ * the flicker ISR and a .rodata read would be a flash cache miss there.
+ *
+ * This replaces a 4x(1-x) parabola that was labelled SINE. The parabola is a
+ * similar-looking hump but has a derivative discontinuity at the cycle
+ * boundary, so its harmonics fall as 1/n^2 instead of vanishing: measured
+ * optically at 10 Hz it produced h2=0.286, h3=0.145, h4=0.090 where a sine
+ * gives ~0. For entrainment that means an env=1 session at 10 Hz was also
+ * driving 20 and 30 Hz at a quarter of the fundamental.
+ *
+ * 514 bytes. A table lookup is also cheaper than the multiply it replaces. */
+static const DRAM_ATTR uint16_t s_sine_q16[257] = {
+         0,     10,     39,     89,    158,    246,    355,    482,
+       630,    796,    982,   1187,   1411,   1654,   1915,   2196,
+      2494,   2811,   3146,   3499,   3869,   4257,   4662,   5084,
+      5522,   5977,   6448,   6935,   7438,   7956,   8489,   9036,
+      9598,  10173,  10762,  11365,  11980,  12608,  13248,  13900,
+     14563,  15237,  15922,  16617,  17321,  18035,  18758,  19489,
+     20228,  20975,  21729,  22489,  23256,  24028,  24806,  25588,
+     26375,  27166,  27960,  28757,  29556,  30357,  31160,  31964,
+     32768,  33572,  34376,  35179,  35980,  36779,  37576,  38370,
+     39161,  39948,  40730,  41508,  42280,  43047,  43807,  44561,
+     45308,  46047,  46778,  47501,  48215,  48919,  49614,  50299,
+     50973,  51636,  52288,  52928,  53556,  54171,  54774,  55363,
+     55938,  56500,  57047,  57580,  58098,  58601,  59088,  59559,
+     60014,  60452,  60874,  61279,  61667,  62037,  62390,  62725,
+     63042,  63340,  63621,  63882,  64125,  64349,  64554,  64740,
+     64906,  65054,  65181,  65290,  65378,  65447,  65497,  65526,
+     65536,  65526,  65497,  65447,  65378,  65290,  65181,  65054,
+     64906,  64740,  64554,  64349,  64125,  63882,  63621,  63340,
+     63042,  62725,  62390,  62037,  61667,  61279,  60874,  60452,
+     60014,  59559,  59088,  58601,  58098,  57580,  57047,  56500,
+     55938,  55363,  54774,  54171,  53556,  52928,  52288,  51636,
+     50973,  50299,  49614,  48919,  48215,  47501,  46778,  46047,
+     45308,  44561,  43807,  43047,  42280,  41508,  40730,  39948,
+     39161,  38370,  37576,  36779,  35980,  35179,  34376,  33572,
+     32768,  31964,  31160,  30357,  29556,  28757,  27960,  27166,
+     26375,  25588,  24806,  24028,  23256,  22489,  21729,  20975,
+     20228,  19489,  18758,  18035,  17321,  16617,  15922,  15237,
+     14563,  13900,  13248,  12608,  11980,  11365,  10762,  10173,
+      9598,   9036,   8489,   7956,   7438,   6935,   6448,   5977,
+      5522,   5084,   4662,   4257,   3869,   3499,   3146,   2811,
+      2494,   2196,   1915,   1654,   1411,   1187,    982,    796,
+       630,    482,    355,    246,    158,     89,     39,     10,
+         0,
+};
+
+
 /*
  * Evaluate a modulation slot to its current value at time `now_us`. Pure
  * integer math + IRAM-safe — runs inside the LED ISR alongside the sweep
  * interpolator. Wave shapes encoded as small integers (matches mod_wave_t
  * in mod_engine.h):
- *   0 = TRIANGLE, 1 = SINE (parabolic approx), 2 = SAW_UP,
+ *   0 = TRIANGLE, 1 = SINE (true raised sine, LUT), 2 = SAW_UP,
  *   3 = SAW_DOWN, 4 = SQUARE
  *
  * Sine uses the parabolic approximation 4·phase·(1−phase) which closely
@@ -555,17 +604,9 @@ static inline int32_t IRAM_ATTR led_eval_mod_iram(const led_mod_slot_t *m, uint6
                         ? (phase_q16 << 1)
                         : (131072u - (phase_q16 << 1));
             break;
-        case 1: { // SINE (parabolic approx: 4·x·(1−x), scaled to 0..65536)
-            /* 32-bit safe: scale phase_q16 down to Q8 (0..256) first so the
-             * multiply stays in 32 bits. Loses 8 bits of precision but that's
-             * still 1/256 = 0.4% — invisible for visual modulation. */
-            uint32_t p_q8       = phase_q16 >> 8;            // 0..256
-            uint32_t one_minus  = 256u - p_q8;               // 0..256
-            uint32_t prod_q16   = p_q8 * one_minus;          // max 128*128 = 16384, fits 32-bit
-            shape_q16           = prod_q16 << 2;             // *4 → max 65536, fits uint32_t
-            if (shape_q16 > 65536u) shape_q16 = 65536u;
+        case 1: // SINE — true raised sine from the shared LUT (was a parabola)
+            shape_q16 = s_sine_q16[phase_q16 >> 8];
             break;
-        }
         case 2: // SAW_UP — linear ramp 0→1, then jump back
             shape_q16 = phase_q16;
             break;
@@ -633,15 +674,13 @@ static inline uint16_t IRAM_ATTR led_carrier_level_iram(uint8_t wave, uint32_t e
             else                               shape_q16 = 65536u;
             if (shape_q16 > 65536u) shape_q16 = 65536u;
         }
-    } else { // SINE (parabola 4·x·(1−x))
-        uint32_t p_q8      = phase_q16 >> 8;       // 0..256
-        uint32_t one_minus = 256u - p_q8;
-        shape_q16          = (p_q8 * one_minus) << 2;
-        if (shape_q16 > 65536u) shape_q16 = 65536u;
+    } else { // SINE -- true raised sine from the LUT, not the old parabola
+        shape_q16 = s_sine_q16[phase_q16 >> 8];
     }
     // output = brightness_q8 * shape / 65536; brightness_q8 ≤25600, product ≤1.68e9 fits u32.
     return (uint16_t)(((uint32_t)brightness_q8 * shape_q16) >> 16);
 }
+
 
 // LED flicker-rate jitter (anti-habituation): a slow bipolar triangle LFO returning
 // a signed millihertz offset. IRAM-safe / 32-bit only. amp_millihz kept small
