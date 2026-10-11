@@ -1,0 +1,11 @@
+# Reproduces the 7 Hz rate error, then measures it.
+# 10 Hz first on purpose: it raises the flicker ISR tick to 2500 Hz (400 us)
+# and the tick is never lowered within a session, so the 7 Hz section inherits
+# a 400 us grid -- 142857/400 = 357.14, which is what used to round up to 358.
+0 40 50 100 255 255 255 15     # sync marker
+A 0 3000 0 70 0 1
+600 0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+1000 10 50 80 0 0 255 15       # 10 Hz for 30 s -> tick raised to 2500 Hz
+31000 7 50 80 0 0 255 15       # 7 Hz for 120 s  <- the measurement
+151000 10 50 0 0 0 0 15        # off

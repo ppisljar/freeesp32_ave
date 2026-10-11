@@ -788,6 +788,11 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             s->cd_cache_freq = cur_freq_mhz;
         }
         uint64_t cycle_duration_us = s->cached_cycle_duration_us;
+        // The cycle that is ENDING ran at this duration. Keep it: the boundary
+        // recompute below may overwrite cycle_duration_us with the NEXT cycle's
+        // value, and the phase-locked advance at the publish site needs the one
+        // that actually elapsed.
+        const uint64_t ended_cycle_us = cycle_duration_us;
         // now_us >= cycle_start_time_us is guaranteed by the pre-anchor check above.
         uint64_t elapsed_us = now_us - s->cycle_start_time_us;
 
@@ -888,7 +893,31 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
 
             // -- publish outputs under the spinlock (bit-identical values) --
             portENTER_CRITICAL_ISR(&s_flicker_mux);
-            s->cycle_start_time_us = now_us;
+            /* Advance the cycle origin by one PERIOD, not to now_us.
+             *
+             * now_us is a tick instant, so re-anchoring to it folded the tick
+             * quantisation into the origin and the error accumulated every
+             * cycle instead of averaging out -- a systematic rate error, not
+             * jitter. Measured on hardware with a photodiode: a session whose
+             * tick had been raised to 2500 Hz (400 us) by an earlier 10 Hz
+             * entry emitted 7 Hz as 6.98320 Hz, stable to five decimals over
+             * nine minutes. 142857 us / 400 = 357.14 ticks, rounded up to 358,
+             * and 358 x 400 = 143200 us -- which is what came out, to 1 us.
+             * 10 Hz was unaffected only because 100000/400 = 250 exactly.
+             *
+             * Stepping by ended_cycle_us keeps the origin on an absolute grid:
+             * edges still land on tick boundaries (+/-400 us of jitter) but the
+             * MEAN rate is now exact, which is what entrainment depends on.
+             *
+             * Re-anchor instead when the rate changed this cycle (a sweep moves
+             * the grid by design) or when more than two periods have elapsed
+             * (a stall; stepping would fire repeatedly catching up). */
+            if (ended_cycle_us > 0u && new_freq == cur_freq_mhz &&
+                elapsed_us < (ended_cycle_us << 1)) {
+                s->cycle_start_time_us += ended_cycle_us;
+            } else {
+                s->cycle_start_time_us = now_us;
+            }
             if (freq_changed) {
                 s->frequency_milliHz        = new_freq;
                 s->cached_cycle_duration_us = cycle_duration_us;  // A2 cache stays coherent
