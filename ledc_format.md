@@ -35,6 +35,28 @@ white). Audio still accepts 5..8 core tokens before the new pulse fields.
 
 ## Fields
 
+### `phase` is a LEAD, not a lag
+
+`phase` advances the cycle: the firmware adds `phase x period / 360` to elapsed
+time (`led_matrix_example.c`, "V-E2"), so the edge arrives EARLIER, matching the
+`sin(wt + phi)` convention rather than "start this many degrees later".
+
+Measured on hardware at 10 Hz (100 ms period), timing LED-on edges:
+
+| `phase` | if it were a lag | actually measured |
+|---|---|---|
+| 0   |  0 ms |  0.00 ms |
+| 90  | 25 ms | 74.76 ms |
+| 180 | 50 ms | 49.93 ms |
+| 270 | 75 ms | 24.69 ms |
+
+0 and 180 are symmetric under negation, so they are identical either way -- and
+every shipped session uses only those two values (244 uses of 0, 189 of 180).
+That is why the convention has never mattered in practice, and why it is written
+down here before someone reaches for 90.
+
+To delay by N degrees, write `360 - N`.
+
 ### Value fields (compound cells — support interpolation prefixes)
 `freq duty bright R G B` (LED) and `freq pan vol mod freqR duty phase attack` (audio)
 and LED `phase attack` are **compound cells**: a bare number, or one of the existing
