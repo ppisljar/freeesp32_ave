@@ -35,6 +35,36 @@ white). Audio still accepts 5..8 core tokens before the new pulse fields.
 
 ## Fields
 
+### `bright` is linear only above ~40% effective drive
+
+Light output is proportional to `bright x RGB/255` (the "effective drive"), but
+only in the upper part of the range. Measured optically, light per unit drive:
+
+| effective drive | light / drive | vs linear |
+|---|---|---|
+| 12 | 0.135 | 68% |
+| 24 | 0.153 | 77% |
+| 36 | 0.175 | 88% |
+| 48-60 | 0.183-0.188 | 92-95% |
+| 102 | 0.200 | 100% |
+| 153-255 | 0.197-0.202 | 100% |
+
+Above drive ~100 it is linear to about +/-1%. Below that it rolls off, reaching
+68% of linear at drive 12. This is the LED's own behaviour at low PWM, not a
+firmware scaling bug -- but it is worth knowing because the therapeutic sessions
+live in exactly that region. `17_nondual_awareness` breathes `~8:22` on blue
+200, i.e. effective drive 16..44, so its brightness LFO is compressed at both
+ends and compressed UNEVENLY -- the dim end loses more than the bright end, so
+the shape of the breathing is distorted, not just its depth.
+
+If an accurate low-brightness ramp matters, raise the RGB value and lower
+`bright` to hit the same light at a higher effective drive.
+
+Validated as a device property rather than a sensor artifact: two sweeps at
+different RGB (255 and 60) overlap in effective drive (48/51/60) and land on
+the same curve there (0.183/0.186/0.188), so the measurement chain is linear
+across the range.
+
 ### `phase` is a LEAD, not a lag
 
 `phase` advances the cycle: the firmware adds `phase x period / 360` to elapsed
