@@ -169,9 +169,9 @@ modulations every tick, so a DC channel can breathe and fade — it just never g
   <thead><tr><th>#</th><th>Field</th><th>Kind</th><th>Accepted</th><th>If absent or <code>-</code></th><th>Notes</th></tr></thead>
   <tbody>
     <tr><td>0</td><td><code>time</code></td><td>integer ms</td><td><code>atol</code></td><td>—</td><td>—</td></tr>
-    <tr><td>1</td><td><code>freq</code></td><td>compound</td><td><strong>not validated on any session path</strong></td><td>live value</td><td>Left-ear carrier, Hz. <code>0</code> does <em>not</em> stop the channel.</td></tr>
+    <tr><td>1</td><td><code>freq</code></td><td>compound</td><td><strong>clamped to 0&ndash;22050</strong> on the session path</td><td>live value</td><td>Left-ear carrier, Hz. <code>0</code> does <em>not</em> stop the channel.</td></tr>
     <tr><td>2</td><td><code>pan</code></td><td>compound</td><td>nominally −100…+100, <strong>not validated</strong></td><td>live value</td><td><strong>No effect on a binaural channel</strong> — see <a href="#binaural">binaural</a>.</td></tr>
-    <tr><td>3</td><td><code>vol</code></td><td>compound</td><td>nominally 0–100, <strong>not validated</strong></td><td>live value</td><td><code>vol/100</code> becomes the amplitude. <code>0</code> is how you silence a channel.</td></tr>
+    <tr><td>3</td><td><code>vol</code></td><td>compound</td><td><strong>clamped to 0&ndash;100</strong> on the session path</td><td>live value</td><td><code>vol/100</code> becomes the amplitude. <code>0</code> is how you silence a channel.</td></tr>
     <tr><td>4</td><td><code>mod</code></td><td>compound</td><td>pulse rate Hz; <code>0</code> = no pulse at all</td><td>live value</td><td>This, not <code>freq</code>, is the entrainment rate on an audio line.</td></tr>
     <tr><td>5</td><td><code>ch</code></td><td><strong>selector</strong></td><td><strong>0–15</strong>; out of range is clamped to <strong>0</strong> with a warning</td><td><strong>0</strong></td><td>Channel 0 is real and is exactly what an omitted column picks. <code>-</code> also selects 0.</td></tr>
     <tr><td>6</td><td><code>freqR</code></td><td>compound</td><td>above 0 up to 22050&nbsp;Hz; anything else becomes 0.0 = mono</td><td>live value</td><td><code class="kbd">&gt;</code> and <code class="kbd">*</code> only; a periodic glyph warns and holds. Absolute, not an offset.</td></tr>
@@ -354,30 +354,37 @@ fallback flicker — they keep doing whatever they were doing.</p>
 an in-range value. Nothing warns. <code>R G B</code> are safe — <code>clamp_u8_field</code> clamps
 and logs.</p>
 
-<p><strong>Audio — there is effectively no range check at all.</strong> The validating entry points
-(which would reject <code>freq ≤ 0</code> or <code>&gt; 22050</code>, amplitude outside 0–1, pan
-outside ±1) are the non-<code>_locked</code> wrappers, and <strong>no session path calls
-them</strong>: the timeline batch executor and <code>/api/patch</code> both hold the mutex and call
-the <code>_locked</code> variants, which bounds-check the <strong>channel index only</strong>.</p>
+<p><strong>Audio — <code>freq</code> and <code>vol</code> are clamped on the session path;
+<code>pan</code> is not.</strong> The validating entry points (which <em>reject</em>
+<code>freq ≤ 0</code> or <code>&gt; 22050</code>, amplitude outside 0–1, pan outside ±1) are the
+non-<code>_locked</code> wrappers, and <strong>no session path calls them</strong>: the timeline
+batch executor and <code>/api/patch</code> both hold the mutex and call the <code>_locked</code>
+variants. Those used to bounds-check the <strong>channel index only</strong>, so a
+<code>.ledc</code> typo reached the mixer unfiltered.</p>
+
+<p><code>freq</code> and <code>amplitude</code> are now <strong>clamped</strong> — not rejected — at
+every <code>_locked</code> entry point, including both ends of every ramp. Clamping rather than
+rejecting, because rejecting would silence a channel mid-session over one bad row.</p>
 
 <div class="spec-table">
 <table>
   <caption>What out-of-range audio values actually do from a <code>.ledc</code> file.</caption>
   <thead><tr><th>You write</th><th>What happens</th></tr></thead>
   <tbody>
-    <tr><td><code>vol 500</code></td><td>Amplitude 5.0. It <em>works</em> and is about 14&nbsp;dB louder. The fixed 1/16 divisor means a single centre-panned sine needs roughly <code>vol 2200</code> to clip. Rejected by live control; accepted here.</td></tr>
-    <tr><td><code>pan 200</code></td><td>The equal-power law runs past 90°, so the <strong>left output inverts polarity</strong> while the right falls back toward 0.707. Keep pan inside ±100.</td></tr>
-    <tr><td><code>freq 30000</code></td><td>Aliases. No warning.</td></tr>
-    <tr><td><code>freq 0</code>, sine</td><td>Silence — but the channel stays <strong>active</strong>. An audio line never stops a channel; use <code>vol 0</code>.</td></tr>
+    <tr><td><code>vol 500</code></td><td><strong>Clamped to <code>vol 100</code></strong> (amplitude 1.0). Previously amplitude 5.0, which <em>worked</em> and was about 14&nbsp;dB louder; the fixed 1/16 divisor means a single centre-panned sine needed roughly <code>vol 2200</code> to clip. The real hazard was <code>vol 10000</code>: amplitude 100, still 6.25× full scale after the divisor, into headphones.</td></tr>
+    <tr><td><code>pan 200</code></td><td><strong>Still unguarded.</strong> The equal-power law runs past 90°, so the <strong>left output inverts polarity</strong> while the right falls back toward 0.707. Keep pan inside ±100.</td></tr>
+    <tr><td><code>freq 30000</code></td><td><strong>Clamped to 22050.</strong> Previously aliased with no warning.</td></tr>
+    <tr><td><code>freq 0</code>, sine</td><td>Silence — but the channel stays <strong>active</strong>. An audio line never stops a channel; use <code>vol 0</code>. Deliberately <em>not</em> clamped away: <code>freq 0</code> is also how the noise wave types run.</td></tr>
     <tr><td><code>freq 0</code>, square</td><td>A constant +1.0, i.e. a <strong>DC offset</strong> on the output, because the phase never advances.</td></tr>
   </tbody>
 </table>
 </div>
 
-<p>This asymmetry — LED guarded, audio unguarded — is not a documented design decision; the format
-spec flags it for a decision rather than defending it. The linter models the LED guards
-(<code>LEDC_LED_OUT_OF_RANGE</code>, <code>LEDC_LED_REJECTED</code>) and does not yet model the audio
-gap.</p>
+<p>The remaining asymmetry: an out-of-range LED entry is <strong>dropped</strong>, an audio one is
+<strong>clamped</strong>. That is deliberate — a dropped LED row is visible, whereas a dropped audio
+row means silence where the session expects a carrier. The linter models the LED guards
+(<code>LEDC_LED_OUT_OF_RANGE</code>, <code>LEDC_LED_REJECTED</code>); it does not yet flag audio
+values the firmware will clamp, nor <code>pan</code> outside ±100.</p>
 
 <h2 id="env"><code>env</code> — the pulse envelope</h2>
 

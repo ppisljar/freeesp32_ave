@@ -150,9 +150,9 @@ Consequences worth internalising:
 | # | field | kind | accepted | default / absent | notes |
 |---|---|---|---|---|---|
 | 0 | `time` | integer ms | `atol` | — | |
-| 1 | `freq` | compound | **not validated on any session path** | live value | left-ear carrier Hz; `0` does **not** stop the channel |
+| 1 | `freq` | compound | **clamped to 0..22050** on the session path | live value | left-ear carrier Hz; `0` does **not** stop the channel |
 | 2 | `pan` | compound | nominally −100..+100, **not validated** | live value | **no effect on a binaural channel** (see `freqR`) |
-| 3 | `vol` | compound | nominally 0..100, **not validated** | live value | `vol/100` → amplitude; `0` is how you silence a channel |
+| 3 | `vol` | compound | **clamped to 0..100** on the session path | live value | `vol/100` → amplitude; `0` is how you silence a channel |
 | 4 | `mod` | compound | pulse rate Hz; `0` = no pulse at all | live value | |
 | 5 | `ch` | selector | **0..15**; out of range → clamped to **0** with a warning | **0** | `-` here also selects 0 |
 | 6 | `freqR` | compound **(NEW v3)** | >0 .. 22050 Hz, else 0.0 = mono | live value | `>`/`*` ramp only; a periodic glyph warns and holds |
@@ -320,26 +320,33 @@ guard sees them. 101..255 is caught by the guards; **above 255 the cast wraps**
 (`300` → `44`) and the guard then sees an in-range value. Nothing warns. `R G B`
 are safe — `clamp_u8_field` clamps and logs.
 
-**Audio — there is effectively no range check at all.** The validating entry
-points (`audio_generator_start_channel`, which rejects `freq <= 0` or
-`> 22050`, `amplitude` outside 0..1, `pan` outside ±1) are the *non*-`_locked`
-wrappers, and **no session path calls them**: the timeline batch executor and
-`/api/patch` both hold the mutex and call `audio_generator_start_channel_locked`
-/ `update_params_locked`, which bounds-check the **channel index only**. So, from
-a `.ledc` file:
+**Audio — `freq` and `vol` are CLAMPED on the session path; `pan` is not.**
+
+The validating entry points (`audio_generator_start_channel`, which *rejects*
+`freq <= 0` or `> 22050`, `amplitude` outside 0..1, `pan` outside ±1) are the
+*non*-`_locked` wrappers, and **no session path calls them**: the timeline batch
+executor and `/api/patch` both hold the mutex and call the `_locked` variants.
+Those used to bounds-check the **channel index only**, so a `.ledc` typo reached
+the mixer unfiltered.
+
+`freq` and `amplitude` are now clamped — not rejected — at every `_locked` entry
+point (`start_channel_locked`, `update_params_locked`, `set_param_locked`,
+`start_sweep_locked`, both ends of every ramp). Clamping rather than rejecting,
+because rejecting would silence a channel mid-session over one bad row.
 
 | you write | what happens |
 |---|---|
-| `vol 500` | amplitude 5.0. It *works* and is ~14 dB louder — the fixed 1/16 divisor means a single centre-panned sine needs roughly `vol 2200` to clip. Rejected by live control, accepted here. |
-| `pan 200` | the equal-power law runs past 90°, so the **left output inverts polarity** (`cos` goes negative) while the right falls back toward 0.707. Keep pan inside ±100. |
-| `freq 30000` | aliases. No warning. |
-| `freq 0`, sine | silence, but the channel stays **active** — an audio line never stops a channel. Use `vol 0`. |
+| `vol 500` | **clamped to `vol 100`** (amplitude 1.0). Previously amplitude 5.0 — which *worked*, ~14 dB louder; the fixed 1/16 divisor means a single centre-panned sine needed roughly `vol 2200` to clip. The hazard was `vol 10000`: amplitude 100, still 6.25× full scale after the divisor, into headphones. |
+| `freq 30000` | **clamped to 22050**. Previously aliased with no warning. |
+| `pan 200` | **still unguarded.** The equal-power law runs past 90°, so the **left output inverts polarity** (`cos` goes negative) while the right falls back toward 0.707. Keep pan inside ±100. |
+| `freq 0`, sine | silence, but the channel stays **active** — an audio line never stops a channel. Use `vol 0`. Deliberately **not** clamped away: `freq 0` is also how the noise wave types run. |
 | `freq 0`, square | a constant +1.0 → **DC offset** on the output, because `raw_l` is `phase < 2^31 ? 1 : -1` and the phase never advances. |
 
-This asymmetry (LED guarded, audio unguarded) is not a documented design
-decision as far as this file can tell — flagged for a decision rather than
-defended. The linter models the LED guards (`LEDC_LED_OUT_OF_RANGE`) and does not
-yet model the audio gap.
+The remaining asymmetry: LED out-of-range entries are **dropped**, audio ones are
+**clamped**. That is deliberate — a dropped LED row is visible, whereas a dropped
+audio row means silence where the session expects a carrier. The linter models
+the LED guards (`LEDC_LED_OUT_OF_RANGE`); it does not yet flag audio values that
+the firmware will clamp, nor `pan` outside ±100.
 
 ## `env` — the pulse envelope
 
