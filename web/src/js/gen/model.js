@@ -150,13 +150,25 @@ export function audioRow(opts) {
         mod:  (opts.mod  === undefined) ? cell(0) : opts.mod,
         channel:  (opts.channel  === undefined) ? null : opts.channel,  // 1..16; null => omit token
         freqR:    (opts.freqR    === undefined) ? 0    : opts.freqR,    // 0 => mono / omit token
-        waveType: (opts.waveType === undefined) ? null : opts.waveType, // 0..6; null => omit token
+        // freqR is a COMPOUND cell in format v3 (rampable, so a beat can be
+        // glided directly). The wizard and lane editor model it as a plain
+        // number, so rather than change that everywhere, the parsed CELL rides
+        // alongside and the serializer prefers it when it carries a prefix.
+        // Without this the editor ran parseFloat('>410') -> 0 and silently
+        // rewrote a ramped binaural line to mono on save, destroying the glide.
+        // undefined => no prefix seen; plain `freqR` is authoritative.
+        freqRCell: opts.freqRCell,
+        waveType: (opts.waveType === undefined) ? null : opts.waveType, // 0..7; null => omit token
         // NEW pulse fields (format v2) — same conventions as ledRow. audio env default 4.
         duty:   opts.duty,     // compound cell, %
         env:    opts.env,      // 0..4; audio default 4 (bipolar sine tremolo = legacy)
         phase:  opts.phase,    // compound cell, degrees
         attack: opts.attack,   // compound cell, ms
         jitter: opts.jitter,   // {amp, period} | number | null | undefined
+        // depth (format v3, 14th column): isochronic/tremolo depth %, compound
+        // cell. Absent => the firmware's per-envelope default (100 for the
+        // unipolar gates env 0..3, 10 for the env 4 tremolo).
+        depth:  opts.depth,
         inlineComment: opts.inlineComment || '',
     };
 }

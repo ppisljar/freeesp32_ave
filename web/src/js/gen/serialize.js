@@ -86,19 +86,24 @@ function serializeAudio(row) {
 
     // NEW pulse fields (format v2): duty env phase attack jitter.
     const newTrail = trailingTokens([cellTok(row.duty), envStr(row.env),
-                                     cellTok(row.phase), cellTok(row.attack), jitterStr(row.jitter)]);
+                                     cellTok(row.phase), cellTok(row.attack),
+                                     jitterStr(row.jitter), cellTok(row.depth)]);
     const hasNew = newTrail.length > 0;
 
     // Minimal trailing tokens with the positional-placeholder rule. When any new
     // pulse field is present, the carrier optionals (channel/freqR/waveType) must
     // be emitted too so the new fields land at the right positions.
     const emitWave = row.waveType !== null && row.waveType !== undefined; // bug #3/#6
-    const freqRPos = (row.freqR && row.freqR > 0);                        // bug #4
+    // Emit the freq_r slot when there is a real value OR a prefix to preserve.
+    const freqRRamp = !!(row.freqRCell && row.freqRCell.interp &&
+                         row.freqRCell.interp !== 'none');
+    const freqRPos = (row.freqR && row.freqR > 0) || freqRRamp;           // bug #4
     const emitFreqR = emitWave || freqRPos || hasNew; // wave_type / new fields force the freq_r slot
     const emitChannel = emitFreqR || (row.channel !== null && row.channel !== undefined);
 
     if (emitChannel) parts.push(fmt(row.channel === null || row.channel === undefined ? 0 : row.channel));
-    if (emitFreqR)   parts.push(fmt(freqRPos ? row.freqR : 0)); // 0 placeholder when wave but no freq_r
+    if (emitFreqR)   parts.push(freqRRamp ? cellStr(row.freqRCell)
+                                : fmt(freqRPos ? row.freqR : 0)); // 0 placeholder when wave but no freq_r
     if (emitWave)      parts.push(fmt(row.waveType));
     else if (hasNew)   parts.push(fmt(0)); // waveType placeholder (sine) so duty aligns
 

@@ -147,29 +147,38 @@ function parseAudio(tokens, comment) {
     let channel = null;
     if (tokens.length >= 6 && tokens[5] !== '-') channel = parseInt(tokens[5], 10) || 0;
 
-    // freq_r (token 7): present → atof, validated (>0 && <= Nyquist) else 0; `-` → 0.
-    let freqR = 0;
+    // freq_r (token 7): a COMPOUND CELL in format v3, so a prefix survives a
+    // round-trip. Previously parseFloat, which turned '>410' into 0 and rewrote a
+    // ramped binaural line to mono on save. `-` → null (leave unchanged).
+    let freqR = 0, freqRCell;
     if (tokens.length >= 7 && tokens[6] !== '-') {
-        const fr = parseFloat(tokens[6]) || 0;
-        freqR = (fr > 0 && fr <= NYQUIST) ? fr : 0;
+        const c = parseCell(tokens[6]);
+        freqR = (c.value > 0 && c.value <= NYQUIST) ? c.value : 0;
+        // Keep the cell only when it actually carries a prefix, so an ordinary
+        // line serializes byte-identically to before.
+        if (c.interp && c.interp !== 'none') {
+            freqRCell = cell(freqR, c.interp, c.modEnd, c.modPeriodMs);
+        }
     }
 
-    // wave_type (token 8): present → int 0..6 (else 0); absent / `-` → null.
+    // wave_type (token 8): present → int 0..7 (else 0); absent / `-` → null.
     let waveType = null;
     if (tokens.length >= 8 && tokens[7] !== '-') {
         const wt = parseInt(tokens[7], 10);
         waveType = (Number.isFinite(wt) && wt >= 0 && wt < WAVE_COUNT) ? wt : 0;
     }
 
-    // Optional pulse fields (format v2): duty env phase attack jitter.
+    // Optional pulse fields: duty env phase attack jitter, then depth (v3, 14th).
     const duty   = optCell(tokens, 8);
     const env    = optInt(tokens, 9);
     const phase  = optCell(tokens, 10);
     const attack = optCell(tokens, 11);
     const jitter = optJitter(tokens, 12);
+    const depth  = optCell(tokens, 13);
 
-    return { row: audioRow({ time, freq, pan, vol, mod, channel, freqR, waveType,
-                             duty, env, phase, attack, jitter, inlineComment: comment }) };
+    return { row: audioRow({ time, freq, pan, vol, mod, channel, freqR, freqRCell,
+                             waveType, duty, env, phase, attack, jitter, depth,
+                             inlineComment: comment }) };
 }
 
 // Parse the tokens AFTER the leading 'BG' keyword (url pan loudness).

@@ -182,10 +182,21 @@ export function renderSession(channels, opts = {}) {
             const modHz = evalField(ent.mod, next && next.mod, ent.time, nextMs, tMs);
             const pan = Math.max(-1, Math.min(1, panRaw / 100));
             let amp = Math.max(0, volRaw / 100);
-            // Binaural: right ear tracks freq + (freqR-baseFreq) to preserve the beat.
+            // Binaural: freqR is the ABSOLUTE right-ear frequency, so the right ear
+            // holds it while the left carrier sweeps -- which is what makes a
+            // carrier ramp GLIDE the beat.
+            //
+            // This previously computed freq + (freqR - baseFreq), holding the beat
+            // fixed across a carrier sweep. The firmware was changed to treat
+            // freqR as absolute (every other assignment of current_freq_r already
+            // did, and params.frequency is never reassigned, so the old form also
+            // made the beat jump back when a sweep ended). 29 of 83 shipped
+            // sessions document an intended beat change across their carrier
+            // ramps. Leaving this preview on the old rule meant the browser and
+            // the device disagreed on every one of them.
             const baseFreq = ent.freq ? (ent.freq.value || 0) : 0;
             const binaural = ent.freqR > 0 && ent.freqR !== baseFreq;
-            const freqRight = binaural ? (freq + (ent.freqR - baseFreq)) : freq;
+            const freqRight = binaural ? ent.freqR : freq;
 
             // De-click fade-in over the first ~5 ms of the channel.
             const since = i - startSample;
