@@ -9,6 +9,7 @@ import { settingsInit } from './settings.js';
 import { refreshReportList, viewReport, deleteReport, saveReportEdits, syncReportFromHash,
          toggleDeviceLog, downloadDeviceLog, toggleBrowserLog, downloadBrowserLog } from './reportstore.js';
 import { initTabs } from './nav.js';
+import { homeInit } from './home.js';
 import { generatorInit } from './gen/generator.js';
 import { firmwareInit } from './firmware.js';
 import { diagnosticsInit } from './diagnostics.js';
@@ -55,6 +56,7 @@ async function boot() {
     window.addEventListener('hashchange', syncReportFromHash);
     bindFileInput();
     initTabs();            // top menu: home / live / reports / settings
+    homeInit();            // home status strip (listens, never polls)
 
     loadExample();         // populate textarea with the example config
     refreshConfigList();   // list configs from generator + device + browser

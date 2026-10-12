@@ -196,8 +196,11 @@ function fieldHtml(f, val, settings) {
         inner = `<input type="number" id="${id}" value="${val}" style="width:90px;">`;
     }
     const note = f.note ? ` <span style="color:var(--fg-dim);font-size:11px;">(${f.note})</span>` : '';
-    return `<div class="set-row" id="row-${f.key}" style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-        <label for="${id}" style="min-width:220px;font-size:13px;">${f.label}${helpIcon(f)}${note}</label>
+    // Layout lives in css/style.css (.set-row): a two-column grid, label left,
+    // control right. It used to be an inline flex row with a 220px min-width on
+    // the label, which the stylesheet then had to fight with !important.
+    return `<div class="set-row" id="row-${f.key}">
+        <label for="${id}">${f.label}${helpIcon(f)}${note}</label>
         ${inner}
     </div>`;
 }

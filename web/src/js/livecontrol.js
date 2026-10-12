@@ -592,6 +592,9 @@ async function ctrlPoll() {
             { detail: { position_ms: (st.timeline && st.timeline.position_ms) || 0 } }));
     }
     ctrlPrevTlRunning = tlRunning;
+    // Broadcast the state this poll already paid for, so other panels (the Home
+    // status strip) can render from it without opening a second poller.
+    window.dispatchEvent(new CustomEvent('devicestate', { detail: st }));
     // Audio sliders A1..A8 correspond to state.audio[1..8] — the .ledc
     // convention is 1-indexed and channel 0 is unused, so we offset by
     // +1 when reading state. Slider DOM IDs stay 0..7 internally; only

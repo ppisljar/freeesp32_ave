@@ -31,26 +31,47 @@
 
         <!-- ===================== HOME ===================== -->
         <div class="page active" id="page-home">
-            <div class="section">
-                <h2>Config</h2>
-                <div class="controls">
-                    <button id="btnUpload">📂 Upload File…</button>
-                    <input type="file" id="configFile" accept=".led,.ledc,.txt" style="display:none">
-                    <button id="btnPlay" style="background:var(--ok);color:#06240f;border-color:transparent;">▶ PLAY Config</button>
-                    <label style="font-size:13px;color:var(--fg-mut);" title="Countdown before playback starts, so you can put on the glasses & headphones">
-                        Delay <input type="number" id="playDelay" value="60" min="0" max="600" step="5" style="width:56px;padding:4px;"> s
-                    </label>
-                    <button id="btnClear">Clear</button>
+
+            <!-- Status strip. Driven by the 'devicestate' event that
+                 livecontrol.js already broadcasts from its 1 Hz /api/state
+                 poll, so this costs no extra requests. -->
+            <div class="now" id="homeNow" data-running="false">
+                <div class="now-dot" aria-hidden="true"></div>
+                <div class="now-text">
+                    <strong id="homeNowLabel">Idle</strong>
+                    <span id="homeNowSub">No session running</span>
                 </div>
-                <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:var(--bg-2);border:1px solid var(--edge);border-radius:4px;">
-                    <strong style="font-size:13px;">Configs:</strong>
-                    <select id="ledcDropdown" style="min-width:240px;padding:4px;"></select>
-                    <button id="btnRefreshLedc" title="Reload list from all sources">⟳</button>
+                <div class="now-clock" id="homeNowClock">--:--</div>
+                <div class="now-bar"><i id="homeNowBar"></i></div>
+            </div>
+
+            <div class="section">
+                <h2>Session</h2>
+
+                <div class="pick">
+                    <select id="ledcDropdown" aria-label="Session file"></select>
+                    <button id="btnRefreshLedc" class="icon-btn" title="Reload list from all sources">⟳</button>
+                    <button id="btnUpload" title="Upload a .ledc file from this device">📂 Upload…</button>
+                    <input type="file" id="configFile" accept=".led,.ledc,.txt" style="display:none">
                     <button id="btnSaveGen">Save</button>
                     <button id="btnSaveAsGen">Save As…</button>
-                    <span id="loadedFilename" style="color:var(--fg-mut);font-style:italic;font-size:13px;margin-left:8px;"></span>
+                    <span id="loadedFilename"></span>
                 </div>
-                <textarea id="exampleConfig" placeholder="Enter .led config here..."></textarea>
+
+                <div class="play-bar">
+                    <button id="btnPlay" class="play-btn">▶ Play session</button>
+                    <label class="delay" title="Countdown before playback starts, so you can put on the glasses &amp; headphones">
+                        <span>Start in</span>
+                        <input type="number" id="playDelay" value="60" min="0" max="600" step="5">
+                        <span>s</span>
+                    </label>
+                    <button id="btnClear" class="ghost-btn">Clear</button>
+                </div>
+
+                <details class="src" id="homeSrc">
+                    <summary>Session source <span class="src-meta" id="homeSrcMeta"></span></summary>
+                    <textarea id="exampleConfig" placeholder="Enter .led config here..."></textarea>
+                </details>
             </div>
         </div>
 
@@ -69,7 +90,10 @@
                     <button class="gen-subtab" data-view="community">Community</button>
                 </div>
 
-                <!-- Config load/save row -->
+                <!-- Config load/save + transport, one toolbar panel. They used to
+                     be two free-standing bars stacked with the badge below them,
+                     which cost ~180px of height before the editor began. -->
+                <div class="gen-toolbar">
                 <div class="gen-store">
                     <strong style="font-size:13px;">Configs:</strong>
                     <select id="genLedcDropdown" style="min-width:220px;padding:4px;"></select>
@@ -86,6 +110,7 @@
                     <button id="btnGenApply">⚡ Apply live</button>
                     <button id="btnGenBounce" title="Render the whole session (BG + Speech + A) to one WAV">⭯ Bounce</button>
                     <span id="genRowMeter" class="gen-meter">0 / 100 entries</span>
+                </div>
                 </div>
 
                 <!-- Active view area -->
