@@ -62,12 +62,9 @@ An 11-minute constant-10 Hz capture (0.0000% missing samples, 6523 cycles):
   **-2.54 / -2.44 / -2.48 / -2.47 ms** -- flat to 0.1 ms over 9 minutes, i.e.
   **< 0.2 ppm** divergence between `esp_timer` (LED clock) and the I2S sample
   clock. Extrapolated over a 60 min session that is well under 1 ms.
-* ONE confirmed per-cycle timing event in 11 minutes: a cycle 6.24 ms short
-  (6% of a period) at device t = 577.84 s, seen independently by both detectors
-  (-6.24 ms and 6.24 ms). Cause not yet identified -- most likely the flicker ISR
-  being delayed ~16 ticks by something (RMT transmission, WiFi, a flash op), with
-  the phase-locked advance then absorbing it. ~5 per hour, 6% of a period, so low
-  priority next to what was fixed, but it IS real.
+* ZERO device-side timing faults in 6523 cycles. **Corrected below** -- the
+  "-6.24 ms event" originally reported here was the RECORDING, not the device.
+  See section 3a.
 * 101 single-ISR-tick steps (0.400 ms at 10 Hz), which are expected quantisation
   rather than faults -- see section 4.
 
@@ -351,3 +348,67 @@ Practical note for writing sessions: to drive one eye independently use mask 3 o
 mask 12. To check a measurement rig, drive each channel at a distinct rate and
 read the spectrum -- it identifies the map in one capture and needs no knowledge
 of the wiring.
+
+
+## 3a. CORRECTION: the "-6.24 ms single-cycle fault" was the recording
+
+It is not a firmware defect. I reported it as one, twice, and it survived a day
+of scrutiny because two independent optical detectors agreed on it. They agreed
+because the whole recording stepped, not because the LED did.
+
+**What settles it, in order of strength:**
+
+1. **Sign structure.** With `cycle_start_time_us += ended_cycle_us` the origin
+   stays on an absolute grid, so an ISR served late yields one LONG cycle and
+   then a compensating SHORT one -- the grid is restored. The measured event is
+   ONE-SIDED: the lattice steps and stays there for the rest of the capture. Only
+   a WRITE to the origin can do that, and no such write was reachable (the
+   session had a single flicker entry at t=2000 ms, so V-S4's
+   `pending_anchor_us` was 0 from t~2.05 s onward; the stall path needs
+   `elapsed >= 2*period` = 200 ms and the longest interval anywhere near the
+   event is 100.4 ms). So EVERY ISR-delay story was structurally impossible
+   before any other evidence was considered -- including the one this report
+   originally offered.
+2. **The device's audio carrier steps at the same instant.** That 400 Hz sine is
+   clocked by I2S and the codec; nothing in the LED path, in `esp_timer`, or in
+   the optical chain can move it. Demodulated in 5 ms blocks (block-to-block
+   phase noise ~1 us), it steps +1079.1 us at the event -- independently
+   reproduced.
+3. **Arithmetic.** The only integer frame count consistent with BOTH the carrier
+   step and the ~6.1 ms light step is **268 frames = 6.0771 ms**, matching the
+   carrier step to 0.3 us (267 and 269 are 22 us off). Both solar cells measure
+   the light step as -6.122 and -6.138 ms, agreeing to 16 us.
+
+The same applies to the t=433 s event that the percycle pi-slip hardening
+suppressed: that was a genuine ~-52 ms CAPTURE break (the two eyes disagreed by
+1.6 ms on edges that normally agree to 0.33 ms, and an unused ADC input burst to
+126 LSB against a baseline of 1). The hardening produced the right outcome for
+the wrong reason.
+
+Total: **five timebase discontinuities in 665 s** (~1 per 2.2 min), and **zero
+device-side timing faults in 6523 cycles**.
+
+**Why this went undetected:** `capture.sh` asserted the frame COUNT, and the
+file was exactly the right length -- a dropout removes time rather than padding
+it. `tools/avmeasure/captureintegrity.py` now closes that hole by using the
+device's own audio carrier as a clock, and `capture.sh` refuses a capture whose
+timebase stepped by more than 10 frames (set `AVM_CARRIER_HZ`). It needs a
+continuous SINE reference tone: a session cycling square/sawtooth/noise
+"carriers" gave 369 us of phase noise against ~1 us for a sine, which inflated
+the self-calibrating threshold into a rubber stamp -- the tool now returns "could
+not verify" rather than a worthless pass.
+
+**Which earlier conclusions survive.** Differential measurements are immune,
+because all four input channels step TOGETHER: the audio-vs-LED offset, the
+inter-eye offset, and every harmonic ratio are unaffected, which is also why the
+A/V offset read -2.54 / -2.44 / -2.48 / -2.47 ms across the same capture. Absolute
+per-cycle timing is what was corrupted, and only at the five instants above --
+the median period (99.999 ms, 10.00007 Hz) is robust because a dropout spoils one
+period, not the median.
+
+**The 101 one-tick steps ARE device-real and benign.** Every excursion is a
++/- pair summing to ~0 (+0.455/-0.446, +0.408/-0.402, ...): a boundary served one
+tick early and then restored, because the `cycle_start + period` threshold sits
+just above a tick instant and ISR-entry latency occasionally crosses it. They
+cluster at times ending .899/.999, i.e. a ~1 s cadence, which points at a
+periodic timer (lwIP/WiFi/stats) rather than RMT or flash.

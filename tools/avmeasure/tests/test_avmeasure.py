@@ -1006,18 +1006,31 @@ class TestFirmwareSemantics(unittest.TestCase):
                                places=2)
         self.assertTrue(any(f.code == "LEDC_RAMP_TO_ZERO" for f in exp.lints))
 
-    def test_46_channels_8_to_15_never_ramp(self):
-        # config_parser.c:2465 -- 1u<<8 truncated to uint8_t is 0.
+    def test_46_channels_8_to_15_ramp_like_any_other(self):
+        """Channels 8..15 ramp. They used not to, and that was a real defect.
+
+        config_parser.c built the look-ahead key as
+        `uint8_t ch_bit = 1u << audio->channel`, which truncates to 0 for
+        channel >= 8, so find_next_audio_for_bit never matched and every
+        '>'/'*' ramp on those channels silently STEPPED. It hit 14 shipped
+        Gateway sessions, which are exactly the ones using the high channel
+        indices. The helper and its three call sites are uint16_t now.
+
+        This test asserted the broken behaviour (`ch11 must STEP, not ramp`)
+        and so would have blocked the fix. Inverted deliberately: ch11 must now
+        reach the SAME mid-ramp value as ch7, and no CH8 lint may fire.
+        """
         p = self._parse_one(
             "A 0 240 0 >0 0 11\n"
             "A 10000 240 0 80 0 11\n")
         exp = le.build_expectation(p, duration_s=12.0)
         A = exp.audio[11]
-        self.assertAlmostEqual(A.amp[int(np.searchsorted(A.t, 5.0))], 0.0,
-                               places=3, msg="ch11 must STEP, not ramp")
-        self.assertTrue(any(f.code == "LEDC_AUDIO_CH8_NO_RAMP"
-                            for f in exp.lints))
-        # ...while channel 7 does ramp.
+        self.assertAlmostEqual(A.amp[int(np.searchsorted(A.t, 5.0))], 0.4,
+                               places=2, msg="ch11 must RAMP like ch0..7")
+        self.assertFalse(any(f.code == "LEDC_AUDIO_CH8_NO_RAMP"
+                             for f in exp.lints),
+                         "the CH8 lint describes a defect that is now fixed")
+        # ...and channel 7 ramps identically, which is the whole point.
         p2 = self._parse_one(
             "A 0 240 0 >0 0 7\n"
             "A 10000 240 0 80 0 7\n")
@@ -1544,7 +1557,17 @@ print(f"PEAK_RSS_MB={{mb:.1f}}")
             seen.update(f.code for f in exp.lints)
         print(f"\n    linted {len(files)} shipped sessions; "
               f"codes seen: {sorted(seen)}")
-        self.assertIn("LEDC_AUDIO_CH8_NO_RAMP", seen)
+        # LEDC_AUDIO_CH8_NO_RAMP is deliberately absent now, for exactly the
+        # same reason LEDC_BEAT_NOT_SWEPT is below. It described
+        # `uint8_t ch_bit = 1u << audio->channel` truncating to 0 for channels
+        # 8..15, which made find_next_audio_for_bit never match so every '>'/'*'
+        # ramp on those channels silently stepped -- a real defect that hit 14
+        # shipped Gateway sessions. The firmware helper and its three call sites
+        # are uint16_t now, so ledc_expect.py masks to 16 bits and the branch is
+        # unreachable for any input. Leaving the assertIn would pin the model to
+        # the OLD firmware and, worse, keep raising error severity on those 14
+        # sessions for a defect that no longer exists.
+        self.assertNotIn("LEDC_AUDIO_CH8_NO_RAMP", seen)
         # LEDC_BEAT_NOT_SWEPT is deliberately absent: the firmware change at
         # main/audio_generator.c:995-1013 made it describe behaviour that no
         # longer exists, and it was firing at error severity on 29 of these 83

@@ -66,6 +66,25 @@ print(f"  capture: {N} frames, {miss:+.4f}% missing")
 if abs(miss)>0.01: sys.exit("  REFUSING: lossy capture would corrupt every measurement")
 PY
 
+# TIMEBASE gate. The frame count above proves the recorder produced the right
+# NUMBER of frames; it is blind to a discontinuity in the middle, because the
+# missing time is simply absent rather than padded. An 11-minute capture that
+# passed the frame-count check with "+0.0000% missing" held five such breaks, the
+# largest 268 frames (6.08 ms) -- and one of them was reported as a firmware
+# defect, "confirmed" by two independent optical detectors, because the whole
+# recording stepped rather than the LED. Set AVM_CARRIER_HZ to the session's
+# continuous SINE reference tone to check this.
+if [ -n "$AVM_CARRIER_HZ" ]; then
+  python3 "$HERE/captureintegrity.py" "$OUT" --carrier "$AVM_CARRIER_HZ" \
+          --audio-ch "${AVM_AUDIO_CH:-3}" || {
+    rc=$?
+    if [ "$rc" = "1" ]; then
+      echo "  REFUSING: capture timebase is broken; re-record" >&2; exit 1
+    fi
+    echo "  WARNING: capture timebase could not be verified" >&2
+  }
+fi
+
 # Signal gate. The frame count above proves the RECORDER worked; it says nothing
 # about whether the sensor saw anything. A disconnected sensor yields a valid,
 # full-length, perfectly-sized WAV of noise -- and analysing one produced four
