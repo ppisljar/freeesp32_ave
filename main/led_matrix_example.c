@@ -2016,12 +2016,50 @@ static inline void s_apply_mod(led_mod_slot_t *m, uint8_t wave,
                                int32_t start_q, int32_t end_q,
                                uint32_t period_ms)
 {
-    m->wave         = wave;
-    m->start_q      = start_q;
-    m->end_q        = end_q;
-    m->period_us    = period_ms * 1000u;
-    m->start_time_us = (uint64_t)esp_timer_get_time();
-    m->active       = true;  /* set LAST so a partially-written slot is never seen */
+    const uint32_t period_us = period_ms * 1000u;
+
+    /* Re-arming an IDENTICAL modulation must NOT restart it.
+     *
+     * start_time_us is the LFO's phase origin, so resetting it unconditionally
+     * snapped the modulated field back to start_q. A session that repeats the
+     * same `~a:b:p` cell on a later entry -- which is how the format says to
+     * carry a modulation across an entry that changes something else -- got a
+     * visible jump every time.
+     *
+     * Reported symptom, 17_nondual_awareness_RGB: the LEDs breathe 16..44%
+     * brightness on a 12 s cycle, and at t=300000 (where the entry that ramps
+     * the rate 10->7 Hz repeats the same brightness modulation) they were at
+     * full and dropped hard to the floor. Exactly start_q. The same collision
+     * sits at t=1560000 and t=1740000. It reads as a speech-related fault
+     * because a speech line shares those timestamps, but the speech is only the
+     * audible cue -- the LED entry is what re-armed the LFO.
+     *
+     * A CHANGED spec still restarts, which is right: a different wave, range or
+     * period is a different modulation, and its phase origin should be the
+     * moment it was asked for. */
+    /* Deliberately NOT gated on m->active. The timeline dispatcher STOPS every
+     * LED mod and then re-arms the ones the entry carries
+     * (config_parser.c, mod_engine_stop_led x6 followed by mod_engine_start_led),
+     * so the slot is always inactive by the time this runs -- an `active` test
+     * here never fires and the first version of this fix did nothing at all.
+     * led_matrix_clear_mod_masked only clears the flag and RETAINS the spec and
+     * the phase origin, which is what makes recognising "same modulation" possible
+     * across that stop.
+     *
+     * period_us != 0 excludes a zero-initialised slot on a fresh channel, which
+     * would otherwise "match" an all-zero arm and inherit a phase origin of 0. */
+    const bool unchanged = m->period_us != 0 && m->period_us == period_us &&
+                           m->wave == wave &&
+                           m->start_q == start_q && m->end_q == end_q;
+
+    m->wave      = wave;
+    m->start_q   = start_q;
+    m->end_q     = end_q;
+    m->period_us = period_us;
+    if (!unchanged) {
+        m->start_time_us = (uint64_t)esp_timer_get_time();
+    }
+    m->active    = true;  /* set LAST so a partially-written slot is never seen */
 }
 
 esp_err_t led_matrix_set_mod_freq_masked(uint8_t channel_mask, uint8_t wave,

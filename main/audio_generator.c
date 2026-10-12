@@ -1849,11 +1849,39 @@ esp_err_t audio_generator_set_mod_locked(int channel, audio_param_t param,
     if (param >= AUDIO_PARAM_COUNT) return ESP_ERR_INVALID_ARG;
 
     audio_gen_channel_t *ch = &audio_channels[channel];
+    const uint32_t period_us = period_ms * 1000u;
+
+    /* Re-arming an IDENTICAL modulation must NOT restart it -- same reasoning as
+     * s_apply_mod on the LED side (see led_matrix_example.c). start_time_us is
+     * the LFO's phase origin, so resetting it unconditionally snapped the
+     * modulated parameter back to `start`, and the format's way of carrying a
+     * modulation across a later entry is to repeat the same `~a:b:p` cell.
+     *
+     * Live example: 36_shamanic_trance_drum repeats `~-100:100:8000` on ch4's pan
+     * at t=60000, so its 8 s rotating pan jumped back to hard-left there. The
+     * LED counterpart of this bug was visible as the brightness breathing in
+     * 17_nondual_awareness_RGB dropping from full to the floor at t=300000. */
+    /* NOT gated on .active: the timeline dispatcher clears a param's mod and
+     * then re-arms it, and audio_generator_clear_mod_locked only clears the flag
+     * while RETAINING the spec and the phase origin -- which is what lets this
+     * recognise "the same modulation" across that clear. Requiring .active made
+     * the first version of this fix a no-op.
+     *
+     * period_us != 0 excludes a zero-initialised slot, which would otherwise
+     * match an all-zero arm and inherit a phase origin of 0. */
+    const bool unchanged = ch->mods[param].period_us != 0 &&
+                           ch->mods[param].period_us == period_us &&
+                           ch->mods[param].wave      == wave &&
+                           ch->mods[param].start     == start &&
+                           ch->mods[param].end       == end;
+
     ch->mods[param].wave           = wave;
     ch->mods[param].start          = start;
     ch->mods[param].end            = end;
-    ch->mods[param].period_us      = period_ms * 1000u;
-    ch->mods[param].start_time_us  = (uint64_t)esp_timer_get_time();
+    ch->mods[param].period_us      = period_us;
+    if (!unchanged) {
+        ch->mods[param].start_time_us = (uint64_t)esp_timer_get_time();
+    }
     ch->mods[param].active         = true; /* set last */
     /* Also cancel any active sweep on this param so the sweep machinery
      * doesn't fight the modulator. */
