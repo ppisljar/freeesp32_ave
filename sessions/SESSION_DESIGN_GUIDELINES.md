@@ -176,7 +176,10 @@ lives in the firmware engine, not the timeline.)
 - **Ramp = animate-on-start:** the `>`/`*` prefix lives on the *earlier* entry; its value
   is the **start**, the target is the next same-channel entry's value, swept over the gap.
   A ramp on the last entry never fires.
-- **LED `freq 0` = steady-on (no flicker)** — the Focus/Energize "steady dim light" trick
+- **LED `freq 0` = steady-on (no flicker)** — the Focus/Energize "steady dim light" trick.
+  This is TRUE on-device as of the DC-channel fix. It had NOT been: the dispatcher turned
+  `freq 0` into a stop that painted the channel black, so all 19 sessions relying on this
+  ran dark for their whole length. The ISR had always supported it.
   relies on this (`05_focus_smr`).
 - `env` and `waveType` are **discrete** (set per entry, not ramped).
 - New pulse fields default to legacy behaviour (LED `env=0`, audio `env=4`, `phase=0`,
@@ -204,11 +207,20 @@ tolerant older parser falls back to legacy behaviour — square gate, no phase, 
   (`web/src/js/safety.js`, one-time opt-in). Author safety into the timeline by hand (§9).
 - **(b) Asymmetric breath LFO shape** (e.g. 4 s in / 6 s out) needs a new LFO shape —
   ship symmetric sine (§5) for now.
-- **(c) Ramps / modulation ON the v2 pulse fields** — `env`, `phase`, and `attack` are
-  **step-only on-device** for now (set per entry, not swept). Don't put `>`/`*`/`~` on them.
-- **Fixed ~0.1 AM modulation depth:** the audio AM/isochronic depth is hard-fixed at ~0.1,
-  so "deep" isochronic and AM-noise bursts are **gentle by design** until a firmware depth
-  control lands. `07`, `28`, `29` note this in their headers.
+- **(c) Ramps on the v2 pulse fields — PARTLY LANDED.** `duty`, `phase`, `attack` and the
+  new `depth` accept `>` and `*` ramps (wired through the timeline's forward-looking sweep
+  table). `env` is still step-only — it selects a shape, so there is nothing to interpolate.
+  PERIODIC modulation (`~ ^ / \ _`) on `depth` and on `freqR` is still unimplemented: the
+  parser warns and drops the glyph rather than silently ignoring it.
+
+**Isochronic/AM depth is now a column, not a fixed constant.** `depth` (14th on an audio
+line, 0..100 %) sets how far the gate pulls the carrier down. Absent, it defaults PER
+ENVELOPE: a unipolar gate (`env 0..3`) gets **100** — a real pulse reaching silence — while
+the legacy bipolar tremolo (`env 4`) keeps **10**. It used to be hard-fixed at ~0.1 for
+both, measuring ~5.8 % actual gate depth. `07`, `28`, `29` and `36` had headers waiting on
+this; they are updated. Two consequences worth designing around: a 50 %-duty gate at full
+depth is ~3 dB quieter in MEAN power, so `vol` may need raising; and `env 3` (trapezoid)
+with `attack` 3..10 ms is the click-free route to full depth.
 
 ## 9. SAFETY — mandatory, non-negotiable
 

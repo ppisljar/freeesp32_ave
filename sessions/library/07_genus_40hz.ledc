@@ -10,9 +10,13 @@
 #
 # EXPERIMENTAL: the 40 Hz amyloid / disease-modifying claim is CONTESTED; the steady-state
 #   entrainment itself is well established. Treat this as experiential, not therapy.
-#   Engine caveat: this build's AM depth is fixed (~0.1), so the audio "click" is a shallow
-#   4%-duty gate (GENUS-shaped, not a full-depth pulse) — the shape is faithful, the depth
-#   is gentle-by-design.
+#   Gate depth: the firmware depth work this header used to wait for has landed. The
+#   `depth` column (14th on an audio line) controls it, and a unipolar gate (env 0..3)
+#   now DEFAULTS to 100 — a real full-depth pulse, which is what the GENUS protocol
+#   calls for. It used to be hard-fixed at ~0.1, measuring ~5.8% actual depth: a shallow
+#   tick rather than a click. Add `depth 10` on the audio lines to get the old gentle
+#   behaviour back. Note a full-depth 4%-duty gate is much quieter in MEAN power than a
+#   shallow one, so `vol` may want raising.
 #
 # SAFETY / CONTRAINDICATIONS:
 #   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of

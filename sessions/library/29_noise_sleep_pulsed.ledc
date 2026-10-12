@@ -5,8 +5,12 @@
 #            smooth sine swell of 28_noise_sleep_bed.ledc. Same slow delta/sleep pulse rate.
 # Bands: pink-noise trapezoid AM at 0.85 Hz (sleep-onset delta); brown-noise steady bed; light steady.
 #
-# Engine caveat: AM depth is fixed (~0.1) in this build, so even the trapezoid gate is a
-#   gentle burst, not a deep on/off — deeper isochronic pulsing awaits the firmware depth work.
+# Gate depth: the firmware depth work this header used to wait for has landed. The
+#   trapezoid gate (env 3) is a unipolar gate, so it now DEFAULTS to 100 — a real on/off
+#   burst, where it previously measured ~5.8% actual depth. THIS IS A SLEEP SESSION and
+#   the change is roughly 10x: listen before trusting it, and put `depth 10` on the audio
+#   lines (14th column) to restore the gentle burst. The trapezoid's `attack` is what
+#   keeps a full-depth gate click-free.
 #
 # SAFETY / CONTRAINDICATIONS:
 #   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of

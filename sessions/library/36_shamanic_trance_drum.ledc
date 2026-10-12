@@ -35,7 +35,9 @@
 #   amber is NOT saturated red (R/(R+G+B)=220/330=0.67<0.8); no red<->blue; brightness dim (<=26%)
 #   with a floor; the 8 ms trapezoid attack keeps every flash/pulse click-free; light ramps in 20 s
 #   and fades out over the wake, never stopped abruptly. Eyes closed, lying down. Engine note: AM
-#   depth is fixed (~0.1) here, so the trapezoid pulse is a gentle buzz, not a hard on/off.
+#   depth now defaults to 100 for a unipolar gate (env 0..3), so the trapezoid pulse is a
+#   real drum hit rather than the gentle buzz it used to be — measured 92.6% actual gate
+#   depth against ~5.8% before. Set the `depth` column (14th on an audio line) to change it.
 #
 # Duration: ~30 min.  LED cols: time freq duty bright R G B mask env phase attack
 #   Audio: A time freq pan vol mod [ch] [freqR] [wave] [duty] [env] [phase] [attack] [jitter]

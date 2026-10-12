@@ -6,8 +6,12 @@
 #            is 29_noise_sleep_pulsed.ledc.
 # Bands: pink-noise AM at 0.85 Hz (sleep-onset delta); brown-noise steady warm bed; light steady.
 #
-# Engine caveat: this build's AM depth is fixed (~0.1), so the swell is gentle, not the
-#   "deep depth" of the reference — a deeper burst awaits the firmware trapezoid/depth work.
+# Gate depth: the firmware depth work this header used to wait for has landed, so the
+#   swell can now reach the reference's depth. This session uses the audio-default
+#   envelope (bipolar tremolo, env 4), which still defaults to 10 — unchanged. Only the
+#   unipolar gates (env 0..3) default to 100. Set the `depth` column (14th on an audio
+#   line) to choose explicitly. THIS IS A SLEEP SESSION: listen before trusting a deeper
+#   burst, since a crisp on/off can wake a sleeper that a swell would not.
 #
 # SAFETY / CONTRAINDICATIONS:
 #   Do NOT use if you have photosensitive epilepsy, a seizure disorder, or a history of
