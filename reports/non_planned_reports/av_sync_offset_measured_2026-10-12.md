@@ -273,7 +273,21 @@ visible at all:
 | 9080 ms | -47.46 ms | -3.00 ms |
 | 9100 ms | -27.68 ms | -2.74 ms |
 
-Still OPEN: the sweep path (`start_sweep_masked`) does not arm the anchor. An
-entry whose brightness or colour is swept but whose RATE is constant
-(`freq_curve == LED_INTERP_NONE`) has a well-defined lattice and should be
-re-anchored too; it currently is not.
+### The sweep path (82 of 85 sessions use it)
+
+`start_sweep_masked` serves every entry with a swept field -- 82 of the 85
+library sessions sweep at least one non-freq LED field, so this is the path real
+content takes.  It did NOT arm the anchor, and was extended to do so.
+
+The measured error there was much smaller than on the no-sweep path, which is
+worth recording so the next person does not expect a dramatic number: it never
+wrote `frequency_milliHz` directly, so after V-S3 the only residue was the
+next-boundary quantisation.  Rate change 8 -> 6 Hz at t=9040 via the sweep path
+measured -4.81 / -4.30 ms against a block-1 reference of -3.00 / -2.49, i.e. only
+~1.8 ms out, and arming the anchor brought it to -2.91 / -3.06.  A real but minor
+improvement; the value is mostly uniformity and self-healing rather than size.
+
+Armed unconditionally for an already-running channel rather than gating on
+`freq_curve == LED_INTERP_NONE` at the call site: the ISR already decides whether
+a fixed lattice exists (no freq sweep, no freq mod, no jitter), so that judgement
+stays in one place instead of being duplicated.

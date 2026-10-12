@@ -2170,6 +2170,17 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
         // was interrupted (scheduling jitter, manual override), starting from
         // the literal produces a visible "snap". For non-swept params or fresh
         // channels, the entry's literal IS the correct start.
+        // V-S4: the sweep path serves entries WITH swept fields. When the rate
+        // itself is not swept (freq_curve == NONE), the cycle lattice is still
+        // well defined, so an entry that only ramps brightness or colour must
+        // re-anchor the grid exactly like the no-sweep path does. Armed
+        // unconditionally for an already-running channel: the ISR's own guard
+        // (no freq sweep / no freq mod / no jitter) is what decides whether a
+        // fixed lattice exists, so the decision lives in one place rather than
+        // being duplicated here.
+        if (s->active && cycle_hint_us != 0u) {
+            s->pending_anchor_us = cycle_hint_us;
+        }
         bool already_active = s->active;
         uint32_t eff_freq_start   = (spec->freq_curve   != LED_INTERP_NONE && already_active) ? s->frequency_milliHz : spec->freq_milliHz_start;
         uint8_t  eff_duty_start   = (spec->duty_curve   != LED_INTERP_NONE && already_active) ? s->duty_cycle        : spec->duty_start;
