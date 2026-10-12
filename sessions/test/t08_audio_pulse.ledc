@@ -59,7 +59,7 @@
 # --------------------------------------------------------------- sync marker
 0     40 50 100 255 255 255 15
 A 0   3000 0 70 0 1
-600   0 50 0 0 0 0 15
+600   -1 50 0 0 0 0 15
 A 600 0 0 0 0 1
 
 # ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
@@ -132,8 +132,8 @@ A 51000 311 -100 60 8 1 0 0 50 0 0     # hard LEFT,  phase 0
 A 51000 503  100 60 8 2 0 1 50 0 90    # hard RIGHT, phase 90 -> 31.25 ms early
 
 # ---- end
-61000 0 50 0 0 0 0 15
-61000 0 50 0 0 0 0 16                     # stop the tick primer too
+61000 -1 50 0 0 0 0 15
+61000 -1 50 0 0 0 0 16                     # stop the tick primer too
 A 61000 311 0 0 8 1 0 0 50 0 0
 A 61000 503 0 0 8 2 0 1 50 0 0
 A 61000 701 0 0 0 3 0 2 50 0 0

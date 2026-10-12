@@ -41,7 +41,7 @@
 # --------------------------------------------------------------- sync marker
 0     40 50 100 255 255 255 15
 A 0   3000 0 70 0 1
-600   0 50 0 0 0 0 15
+600   -1 50 0 0 0 0 15
 A 600 0 0 0 0 1
 
 # ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
@@ -98,6 +98,6 @@ A 700 1900 -100 40 0 15 0 0
 61000  7 50 100 255 255 255 12 0 0     # lane B: reference restored
 
 # ---- end
-71000 0 50 0 0 0 0 15
-71000 0 50 0 0 0 0 16                     # stop the tick primer too
+71000 -1 50 0 0 0 0 15
+71000 -1 50 0 0 0 0 16                     # stop the tick primer too
 A 71000 1900 -100 0 0 15 0 0            # stop the integrity carrier

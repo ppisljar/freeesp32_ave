@@ -13,6 +13,9 @@ export const NUM_LED_CHANNELS   = 8;  // led channel_mask is a uint8 (bits 0..7)
 export const MAX_ENTRIES        = 100; // CONFIG_PARSER_MAX_ENTRIES
 export const MAX_BATCH_SIZE     = 50;  // same-timestamp batch cap
 export const SAMPLE_RATE        = 44100; // AUDIO_GEN_SAMPLE_RATE
+// led_matrix_example.c:1827 -- the flicker rate ceiling. Separate from the
+// audio Nyquist: an LED row above this is rejected by the firmware.
+export const MAX_LED_FLICKER_HZ = 100;
 export const NYQUIST            = SAMPLE_RATE / 2; // 22050
 
 // Waveform types — index = the integer emitted in the 8th audio token.

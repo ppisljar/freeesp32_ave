@@ -24,8 +24,11 @@ Reproduced faithfully, including the warts:
   * first-batch hoisting: the first batch fires at wall-clock 0 whatever its
     timestamp -- which is benign for LED (anchored to the demanded time) and
     NOT benign for audio (started at dispatch)
-  * LED freq<=0 means STOP FLICKER, not DC-on; LED freq>100 Hz is rejected
-    outright so the entry does nothing at all
+  * LED freq<0 means STOP FLICKER. freq==0 is a DC CHANNEL: active, constant
+    output, no flicker gate, with brightness/colour ramps still evaluated. The
+    dispatcher used to turn freq<=0 into a stop, which left 19 shipped sessions
+    rendering black even though the ISR had always implemented DC; that is fixed
+    and this model follows. LED freq>100 Hz is rejected outright.
 
 Deliberately NOT modelled (and stated in README LIMITATIONS):
   * LED swept values only being recomputed at flicker cycle boundaries (we
@@ -1504,10 +1507,12 @@ class _Simulator:
                         domain="led", line_no=led.line_no, t_ms=float(led.time_ms),
                         message=f"line {led.line_no} leaves freq as '-' but "
                                 f"channel {low + 1} has no live rate, so it "
-                                f"resolves to 0 = STOP FLICKER (LEDs off)",
+                                f"resolves to 0 -- which is now a DC channel "
+                                f"(constant output, no flicker), not a stop",
                         detail="config_parser.c:2651-2676, 2729-2736"))
 
-        # config_parser.c:2729-2736 -- freq <= 0 means STOP FLICKER, not DC-on.
+        # config_parser.c:2835 -- freq < 0 means STOP FLICKER. freq == 0 is a DC
+        # CHANNEL (constant output, no flicker), NOT a stop.
         #
         # The stop clears ONLY led_state / led_dirty / active
         # (led_matrix_example.c:1532-1545). frequency_milliHz, duty_cycle,
@@ -1518,7 +1523,12 @@ class _Simulator:
         # RETAINED rate on the device. Zeroing `freq` here made the model resolve
         # that '-' to 0 = stop, keep the LEDs modelled dark, and then report the
         # correctly-flickering channel as "never turned on".
-        if eff["freq"] <= 0.0:
+        # freq < 0 stops. freq == 0 falls THROUGH to the normal path below and
+        # becomes a DC channel: active, no flicker gate, constant output at the
+        # commanded brightness/colour, with brightness and colour ramps still
+        # running. Modelling 0 as a stop reported all 19 freq-0 sessions as dark
+        # -- the opposite of what the device now does.
+        if eff["freq"] < 0.0:
             for b in bits:
                 # WHAT SURVIVES A STOP IS THE LIVE VALUE, NOT THE RAMP'S START.
                 # The firmware publishes the interpolated value into
@@ -1550,11 +1560,14 @@ class _Simulator:
         # RANGE REJECTION IS PATH-DEPENDENT, and getting that wrong inverts the
         # whole rest of the channel's timeline.
         #
-        # The freq>100 / duty>100 / bright>100 guards exist ONLY in
-        # led_matrix_start_flicker_masked (led_matrix_example.c:1314-1325) and
-        # led_matrix_update_flicker_params_masked (:1588-1594) -- the no-sweep
-        # "orphan" path. led_matrix_start_sweep_masked (:1920-1939) validates
-        # nothing except duration_ms != 0 and init_freq_milliHz != 0, and
+        # HISTORICAL: the freq>100 / duty>100 / bright>100 guards used to exist
+        # ONLY in led_matrix_start_flicker_masked and
+        # led_matrix_update_flicker_params_masked -- the no-sweep "orphan" path --
+        # so a RAMPED out-of-range entry took effect while the same value stepped
+        # was refused. led_matrix_start_sweep_masked now validates both endpoints
+        # of every ramp and drops the entry, so the asymmetry below is fixed on
+        # the device. Kept because the reasoning about WHICH path a bit takes is
+        # still correct and still load-bearing:
         # config_parser.c:2836-2896 routes a bit to the sweep path whenever any
         # of its fields carries `>` or `*` and the bit has a later entry. So an
         # out-of-range RAMPED entry DOES take effect on the device: it re-anchors

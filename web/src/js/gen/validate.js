@@ -6,7 +6,7 @@
 
 import {
     NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS, MAX_ENTRIES, MAX_BATCH_SIZE,
-    NYQUIST, WAVE_COUNT, isModInterp,
+    NYQUIST, WAVE_COUNT, isModInterp, MAX_LED_FLICKER_HZ,
 } from './model.js';
 
 function isRamp(interp) { return interp === 'lin' || interp === 'quad'; }
@@ -92,7 +92,16 @@ export function validate(doc) {
                 add(i, 'warn', 'LED channel_mask ' + r.mask + ' exceeds 8 bits; only bits 0..' +
                     (NUM_LED_CHANNELS - 1) + ' are used.');
             }
-            checkCell(i, r.freq,   0, NYQUIST, 'LED freq',  'led', r.mask, null, 'freq');
+            // LED `freq` has THREE regimes: > 0 flicker, 0 = a DC channel
+            // (steady on, no flicker), < 0 = STOP the mask. A negative is the
+            // OFF SWITCH, not an out-of-range value, so the numeric range check
+            // is done here rather than by checkCell -- and the ceiling is the
+            // firmware's flicker cap, not the audio Nyquist.
+            if (r.freq && r.freq.value > MAX_LED_FLICKER_HZ) {
+                add(i, 'warn', 'LED freq ' + r.freq.value + ' exceeds the ' +
+                    MAX_LED_FLICKER_HZ + ' Hz flicker cap (the firmware rejects the row).');
+            }
+            checkCell(i, r.freq,   -Infinity, Infinity, 'LED freq',  'led', r.mask, null, 'freq');
             checkCell(i, r.duty,   0, 100,     'duty',      'led', r.mask, null, 'duty');
             checkCell(i, r.bright, 0, 100,     'brightness','led', r.mask, null, 'bright');
             checkCell(i, r.r,      0, 255,     'R',         'led', r.mask, null, 'r');

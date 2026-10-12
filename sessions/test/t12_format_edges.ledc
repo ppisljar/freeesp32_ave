@@ -45,7 +45,7 @@
 # --------------------------------------------------------------- sync marker
 0     40 50 100 255 255 255 15
 A 0   3000 0 70 0 1
-600   0 50 0 0 0 0 15
+600   -1 50 0 0 0 0 15
 A 600 0 0 0 0 1
 
 # ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
@@ -96,6 +96,6 @@ A 31000 - - 40 - 3                     # audio: vol 70 -> 40, freq/pan/mod held
 A 41000 - - - 4 3                      # audio: gate 10 Hz -> 4 Hz, vol stays 40
 
 # ---- end
-51000 0 50 0 0 0 0 15
-51000 0 50 0 0 0 0 16                     # stop the tick primer too
+51000 -1 50 0 0 0 0 15
+51000 -1 50 0 0 0 0 16                     # stop the tick primer too
 A 51000 500 0 0 4 3 0 0 50 0 0

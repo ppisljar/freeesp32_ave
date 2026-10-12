@@ -161,7 +161,7 @@ reason to build a session.</p>
   <thead><tr><th>#</th><th>Column</th><th>What it controls</th><th>Accepted</th></tr></thead>
   <tbody>
     <tr><td>0</td><td><code>time</code></td><td>when, in milliseconds from session start</td><td>integer</td></tr>
-    <tr><td>1</td><td><code>freq</code></td><td><strong>flicker rate</strong>, Hz</td><td>above 0 up to 100.0 — and <code>≤ 0</code> means <em>stop</em>, see below</td></tr>
+    <tr><td>1</td><td><code>freq</code></td><td><strong>flicker rate</strong>, Hz</td><td>0 up to 100.0 — <code>0</code> is a <em>steady</em> (DC) channel and <code>&lt; 0</code> <em>stops</em>, see below</td></tr>
     <tr><td>2</td><td><code>duty</code></td><td>on-fraction per cycle, %</td><td>0–100; ignored by <code>env 1</code> and <code>env 2</code></td></tr>
     <tr><td>3</td><td><code>bright</code></td><td>master brightness, %</td><td>0–100</td></tr>
     <tr><td>4,5,6</td><td><code>R G B</code></td><td>colour</td><td>0–255 each, clamped with a log line</td></tr>
@@ -174,20 +174,31 @@ reason to build a session.</p>
 </table>
 </div>
 
-<div class="warn">
-  <p><strong><code>freq 0</code> turns the zone OFF. It does not give you a steady lamp.</strong>
-  <code>frequency ≤ 0</code> dispatches <code>led_matrix_stop_flicker_masked</code>, which clears the
-  channel's active and led_state flags and paints it black. <code>bright</code>, <code>R</code>,
-  <code>G</code> and <code>B</code> on that row are never applied to the output.</p>
-  <p>This matters because several shipped sessions were authored on the opposite belief.
-  <code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §7 states “LED <code>freq 0</code> = steady-on
-  (no flicker)”, and <code>05_focus_smr.ledc</code> holds <code>freq 0</code> with
-  <code>bright 20…40</code> for its whole 30-minute run, commenting “lamp steady” and “light STAYS
-  ON and BRIGHTENS”. On this firmware that session runs dark. The format spec is unambiguous — “<code>&lt;= 0</code>
-  means <strong>STOP FLICKER</strong> on the mask, not DC-on” — and the code agrees with the spec.</p>
-  <p><strong>So: there is no way to command a steady, non-flickering light from a <code>.ledc</code>
-  timeline.</strong> An audio-only session simply has no LED line in it. If you need the beat in the
-  15–25&nbsp;Hz danger band, that is the correct shape for the file anyway.</p>
+<div class="note">
+  <p><strong>The <code>freq</code> column has three regimes, and the middle one is the easy
+  mistake.</strong></p>
+  <ul>
+    <li><code>freq &gt; 0</code> — <strong>flicker</strong> at that rate.</li>
+    <li><code>freq 0</code> — a <strong>DC channel</strong>: the zone holds <em>steady on</em> at the
+      row's <code>bright</code> and RGB, with no flicker at all.</li>
+    <li><code>freq &lt; 0</code> — <strong>stop</strong> the mask. The channel goes inactive and dark.
+      <code>-1</code> is the convention.</li>
+  </ul>
+  <p>A DC channel is a first-class feature: the flicker ISR has a dedicated branch for it
+  (<code>led_matrix_example.c:824</code>) that still evaluates brightness and colour ramps and
+  modulations on every tick, so a steady field can breathe, fade and change colour — it just never
+  gates off. <code>05_focus_smr.ledc</code> holds its lamp at <code>freq 0</code> with
+  <code>bright 20…40</code> for its whole 30-minute run, and
+  <code>31_ganzfeld_amber.ledc</code> is a steady amber Ganzfeld field. Nineteen shipped sessions
+  rely on it.</p>
+  <p><strong>To turn a zone off, write a negative rate.</strong> A row of <code>freq 0</code> leaves
+  the channel <em>active</em>, which keeps the flicker timer alive and so pins the ISR tick where it
+  already was. <code>bright 0</code> with <code>freq 0</code> is dark but still active — fine as a
+  session's final row, since the end-of-timeline handler stops everything anyway, but not as a
+  mid-session off switch.</p>
+  <p>Earlier firmware (and earlier revisions of this page) treated <code>freq &le; 0</code> as the
+  stop, which painted those nineteen sessions black. That was a defect in the parser, fixed in
+  <code>config_parser.c</code>: the stop test is now <code>frequency &lt; 0.0f</code>.</p>
 </div>
 
 <h3 id="masks">Zone masks</h3>

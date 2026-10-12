@@ -1816,7 +1816,20 @@ def solve_sync(exp: Expectation, obs: Observation,
         # there is normal and gating on it would mark every healthy session
         # low-confidence.
         agree = (math.isfinite(lag_l) and abs(lag_l - t0_light) < 0.5)
-        if agree and pk_l > 0.5:
+        # A MODEL-FREE ACTIVATION EDGE OUTRANKS THE CORRELATION PEAK. The peak
+        # is degenerate for exactly the same reason the margin is (see above):
+        # when the expected light activity is a single on/off step -- which is
+        # what a DC channel, or any session that just holds a steady state,
+        # produces -- the correlation is triangular and its peak is broad and
+        # LOW by construction, with no bearing on how well t0 is localised. A
+        # DC-lamp session measured t0 to 50 us off a sync marker, had its
+        # activation edge agree to sub-millisecond, and was still labelled
+        # MEDIUM (+/-50 ms) purely because the step correlation peaked at 0.40.
+        # When a sharp rise out of a dark period was found, THAT is the
+        # evidence; the caps below (coarse localisation, estimator spread, dim
+        # first edge) still run and can still demote.
+        sharp_edge = math.isfinite(t0_edge)
+        if agree and (pk_l > 0.5 or sharp_edge):
             conf, unc = "high", 5.0
         elif agree and pk_l > 0.25:
             conf, unc = "medium", 50.0
@@ -2706,6 +2719,42 @@ def _check_events(exp: Expectation, obs: Observation, cfg: CompareConfig,
                     return float(np.nan_to_num(L_ev.bright_pct[i]))
 
                 b_at, b_pre = _eff_bright(i_at), _eff_bright(i_pre)
+
+                # A DC CHANNEL HAS NO FLICKER EDGE, so an entry with DC on BOTH
+                # sides changes nothing a recording can time. freq 0 selects a
+                # DC channel (constant output, no gate) rather than stopping the
+                # channel, and 19 shipped sessions hold a steady lamp that way
+                # for their whole length -- 05_focus_smr never leaves 0 Hz.
+                #
+                # Without this gate those entries went into the edge search,
+                # which locked onto whatever edge it could find and reported the
+                # miss as a timing error: a clean synthetic render produced
+                # EVENT_EARLY at -1007 ms on two channels and dropped the sync
+                # confidence to medium.
+                #
+                # A DC<->FLICKER transition IS observable -- the flicker starting
+                # or stopping is exactly what a sensor sees -- so only skip when
+                # neither side flickers. The entry's VALUES (brightness, colour)
+                # are still graded elsewhere; it is only the transition TIME that
+                # is unmeasurable.
+                def _eff_hz(i: int) -> float:
+                    if not bool(L_ev.active[i]):
+                        return 0.0
+                    return float(np.nan_to_num(L_ev.demanded_hz[i]))
+
+                if _eff_hz(i_at) <= 0.0 and _eff_hz(i_pre) <= 0.0 \
+                        and max(b_at, b_pre) >= cfg.min_bright_pct:
+                    out.append(Finding(
+                        code="EVENT_NOT_OBSERVABLE", severity="info",
+                        domain="led", channel=ch, t_ms=ev["t_ms"],
+                        line_no=ev.get("line_no"),
+                        message=f"LED ch{ch}: this entry sits between two DC "
+                                f"(freq 0) states, so the channel is a steady "
+                                f"lamp either side of it and there is no flicker "
+                                f"edge to time. Its brightness and colour are "
+                                f"still graded.",
+                        detail="freq 0 = DC channel, not a stop"))
+                    continue
                 # THE VERDICT ON OBSERVABILITY IS DEFERRED until the search has
                 # actually run (see below). This gate used to skip the entry on
                 # the spot whenever the two sampled brightnesses straddling it

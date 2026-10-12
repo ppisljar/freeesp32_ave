@@ -280,7 +280,7 @@ class TestSyncHonesty(unittest.TestCase):
         # flicker ISR tick and therefore does not perturb what we measure.
         marker = ["0     40 50 100 255 255 255 1",
                   "A 0   3000 0 70 0 15",
-                  "600   0 50 0 0 0 0 1",
+                  "600  -1 50 0 0 0 0 1",   # -1 = STOP (0 is a DC channel)
                   "A 600 3000 0 0 0 15"]
         with open(marked, "w") as fh:
             fh.write("\n".join(marker + rows) + "\n")
@@ -721,8 +721,17 @@ class TestNoCryWolf(unittest.TestCase):
         end = cut_ms + 3000
         marker = [f"0     50 50 100 255 255 255 {union}",
                   "A 0   3000 0 70 0 15",
-                  f"600   0 50 0 0 0 0 {union}",
+                  f"600  -1 50 0 0 0 0 {union}",  # -1 = STOP, not 0
                   "A 600 3000 0 0 0 15"]
+        # The close row ends the TRIMMED session. It keeps rate 0 (a DC
+        # channel at 0% brightness and black -- dark, and the parser's
+        # end-of-timeline stop fires anyway) rather than -1, because
+        # trimming severs any rate RAMP from its real target and this
+        # row becomes the new endpoint: 04_meditation_theta ramps ">10"
+        # at t=60 s toward an entry at t=540 s that the cut removes, so
+        # a -1 close glided the demanded rate DOWN THROUGH ZERO and the
+        # model then demanded 28% light at a negative rate, which
+        # neither the renderer nor a device can produce.
         close = [f"{end} 0 50 0 0 0 0 {m}" for m in sorted(masks)]
         close += [f"A {end} 200 0 0 0 {c}" for c in sorted(chans)]
         with open(out, "w") as fh:
@@ -1145,27 +1154,30 @@ class TestFirmwareSemantics(unittest.TestCase):
         self.assertFalse(any(f.code == "LEDC_FREQR_PREFIX" for f in exp.lints),
                          "the lint describes a defect that is now fixed")
 
-    @unittest.skip("model not yet updated for DC channels -- see the note below")
-    def test_50_led_freq_zero_stops_flicker(self):
-        """SKIPPED: the DEVICE behaviour this asserts was fixed; the MODEL lags.
+    def test_50_led_freq_zero_is_a_dc_channel(self):
+        """freq 0 is a DC channel -- constant output -- not a stop.
 
-        freq 0 no longer stops a channel -- it selects a DC channel, constant
-        output with no flicker gate. The ISR always implemented that ("DC channel
-        (frequency 0)" in led_matrix_example.c, which even evaluates brightness
-        and colour sweeps every tick) but no timeline could reach it, because the
-        dispatcher turned freq <= 0 into a stop. 19 shipped therapeutic sessions
-        write freq 0 with a non-zero brightness to ask for a steady lamp --
-        including 31_ganzfeld_amber, where a Ganzfeld IS a uniform light field --
-        and every one rendered BLACK. Confirmed on hardware both ways: before the
-        fix 05_focus_smr's opening rows left LED1/LED3 at active=false; after, they
-        report active=true with brightness ramping 2->5->7->10 and the right colour.
+        The ISR always implemented it ("DC channel (frequency 0)" in
+        led_matrix_example.c, which even evaluates brightness and colour sweeps
+        every tick) but no timeline could reach it: the dispatcher turned
+        freq <= 0 into led_matrix_stop_flicker_masked, which paints the channel
+        black. 19 shipped therapeutic sessions write freq 0 with a non-zero
+        brightness to ask for a steady lamp -- including 31_ganzfeld_amber, where
+        a Ganzfeld IS a uniform unstructured light field -- and every one of them
+        rendered BLACK for its whole length.
 
-        This test is skipped rather than inverted because ledc_expect.py still
-        models freq 0 as a stop, so there is nothing correct to assert against
-        yet. Inverting it against a stale model would have it pass while the model
-        reports every one of those 19 sessions as dark. Updating the model to
-        carry a DC channel (active, no flicker, constant level) is tracked
-        separately; re-enable and invert this test as part of that.
+        Confirmed on hardware both ways with 05_focus_smr's opening rows: before,
+        LED1/LED3 sat at active=false and emitted nothing; after, active=true with
+        brightness ramping 2->5->7->10 and the correct colour. All 19 sessions
+        were then replayed and every one reported active channels at the
+        brightness its file commands.
+
+        This test asserted the OLD behaviour (`freq <= 0 means STOP, not DC-on`)
+        and so would have blocked the fix. It was briefly skipped rather than
+        inverted, because the expectation model still modelled 0 as a stop and
+        inverting against a stale model would have passed while the model
+        reported all 19 sessions dark. The model carries DC now, so it is live
+        again and inverted.
         """
         p = self._parse_one(
             "0 10 50 60 255 255 255 1\n"
@@ -1173,8 +1185,19 @@ class TestFirmwareSemantics(unittest.TestCase):
             "9000 10 50 60 255 255 255 1\n")
         exp = le.build_expectation(p, duration_s=11.0)
         L = exp.light[1]
-        self.assertTrue(L.active[int(np.searchsorted(L.t, 2.0))])
-        self.assertFalse(L.active[int(np.searchsorted(L.t, 6.0))])
+        i_flicker = int(np.searchsorted(L.t, 2.0))
+        i_dc      = int(np.searchsorted(L.t, 6.0))
+        self.assertTrue(L.active[i_flicker], "10 Hz row must flicker")
+        self.assertTrue(L.active[i_dc],
+                        "freq 0 is a DC channel and must stay ACTIVE, not stop")
+        # and a NEGATIVE rate still stops
+        p2 = self._parse_one(
+            "0 10 50 60 255 255 255 1\n"
+            "5000 -1 50 60 255 255 255 1\n")
+        exp2 = le.build_expectation(p2, duration_s=7.0)
+        L2 = exp2.light[1]
+        self.assertFalse(L2.active[int(np.searchsorted(L2.t, 6.0))],
+                         "a negative rate must still stop the channel")
 
     def test_51_led_above_100hz_is_rejected(self):
         # led_matrix_example.c:1314 -- the entry does nothing at all.
@@ -1354,9 +1377,9 @@ class TestFirmwareSemantics(unittest.TestCase):
         as "never turned on"."""
         exp = le.build_expectation(self._parse_one(
             "0 12 50 60 255 255 255 1\n"
-            "10000 0 50 60 255 255 255 1\n"
+            "10000 -1 50 60 255 255 255 1\n"
             "20000 - 50 60 255 255 255 1\n"
-            "40000 0 50 0 255 255 255 1\n"), grid_hz=4.0, duration_s=45.0)
+            "40000 -1 50 0 255 255 255 1\n"), grid_hz=4.0, duration_s=45.0)
         L = exp.light[1]
         i = int(np.searchsorted(L.t, 30.0))
         self.assertTrue(bool(L.active[i]),
@@ -1974,8 +1997,12 @@ class TestRound3Model(unittest.TestCase):
         which the README's own 40 Hz marker recipe then pinned at 10 kHz for the
         whole session.
         """
+        # freq -1, not 0: a ZERO rate is a DC channel (the lamp stays on),
+        # which would keep the timer alive and never reset the tick. Only a
+        # NEGATIVE rate stops the channel (config_parser.c, "frequency <
+        # 0.0f").
         exp = self._exp("0 40 50 100 255 255 255 15\n"
-                        "600 0 50 0 0 0 0 15\n"
+                        "600 -1 50 0 0 0 0 15\n"
                         "1000 7 50 80 0 0 255 15\n", duration_s=6.0)
         L = exp.light[1]
         i = int(np.searchsorted(L.t, 3.0))
@@ -1995,9 +2022,10 @@ class TestRound3Model(unittest.TestCase):
         # The last entry on a channel is cancelled by the end-of-timeline stop
         # (config_parser.c:2104-2111), so the '-' restart needs a later entry
         # for its state to last any time at all.
+        # freq -1 is the stop; 0 would be a DC channel (see test_50).
         exp = self._exp("0 10 >20 80 255 255 255 1\n"
                         "6000 10 90 80 255 255 255 1\n"
-                        "6500 0 50 0 0 0 0 1\n"
+                        "6500 -1 50 0 0 0 0 1\n"
                         "11000 - - - - - - 1\n"
                         "19000 10 90 80 255 255 255 1\n", duration_s=22.0)
         L = exp.light[1]

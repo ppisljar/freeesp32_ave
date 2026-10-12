@@ -44,7 +44,7 @@
 # --------------------------------------------------------------- sync marker
 0     40 50 100 255 255 255 15
 A 0   3000 0 70 0 1
-600   0 50 0 0 0 0 15
+600   -1 50 0 0 0 0 15
 A 600 0 0 0 0 1
 
 # ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
@@ -68,7 +68,7 @@ A 700 1900 -100 40 0 15 0 0
 # LED5/LED6 are stopped here rather than at the end: the final stop row below
 # uses mask 15, and a channel left flickering past the last entry is cancelled
 # by the end-of-timeline handler without ever being graded.
-13000 0 50 0 0 0 0 48
+13000 -1 50 0 0 0 0 48
 
 # ---- B2 / FAULTS 3  13..25 s : LED RANGE REJECTION IS PATH-DEPENDENT.
 #      The freq>100 / duty>100 / bright>100 guards live ONLY in the no-sweep
@@ -123,7 +123,7 @@ A 37000 - 0 70 0 5 0 1
 A 37000 500 0 70 0 3 0
 
 # ---- end
-41000 0 50 0 0 0 0 15
+41000 -1 50 0 0 0 0 15
 A 41000 1900 -100 0 0 15 0 0            # stop the integrity carrier
 A 41000 400 0 0 0 0 0 1
 A 41000 500 0 0 0 3 0 0

@@ -378,15 +378,23 @@ live waveform back when the column is absent, and the corresponding lint has bee
 reading older measurements or an older session header that worries about this, it is fixed. The
 general rule now holds without exception: an absent trailing column means "leave unchanged".</p>
 
-<h3><code>freq 0</code> on an LED line turns the light OFF</h3>
+<h3>Write a <em>negative</em> rate to turn an LED line off — <code>freq 0</code> is a steady lamp</h3>
 
-<p>It does not give you a steady lamp. <code>frequency ≤ 0</code> stops the flicker on the mask and
-paints those channels black; the <code>bright</code> and RGB values on that row never reach the
-output. Several shipped sessions were authored on the opposite belief — most visibly
-<code>05_focus_smr</code>, which holds <code>freq 0</code> with a rising brightness for thirty minutes
-and comments "light STAYS ON and BRIGHTENS". It does not. <strong>There is no way to command a
-steady, non-flickering light from a <code>.ledc</code> timeline</strong>; an audio-only session simply
-has no LED line.</p>
+<p>The <code>freq</code> column has three regimes: <code>&gt; 0</code> flickers,
+<strong><code>0</code> is a DC channel that holds steady on</strong> at the row's <code>bright</code>
+and RGB, and <code>&lt; 0</code> stops the mask. Use <code>-1</code> to stop.</p>
+
+<p>A DC channel still evaluates brightness and colour ramps and modulations every ISR tick, so a
+steady field can breathe and fade — it simply never gates off. That is what
+<code>05_focus_smr</code> is built on: <code>freq 0</code> with a rising brightness for thirty
+minutes, "light STAYS ON and BRIGHTENS". It does.</p>
+
+<p>The trap is the other direction: <strong>a row of <code>freq 0</code> does not switch a zone
+off.</strong> It leaves the channel active, which keeps the flicker timer alive and pins the ISR tick
+where it already was — so a measurement sync marker that "stops" with <code>freq 0</code> never
+tears the timer down and never resets the tick. <code>bright 0</code> with <code>freq 0</code> is
+dark but still active: acceptable as a final row, since the end-of-timeline handler stops everything
+anyway, but not as a mid-session off switch.</p>
 
 <h3>The accidental binaural beat</h3>
 
@@ -402,7 +410,7 @@ that touches <code>freq</code>.</strong> No lint catches it.</p>
 <p>A fresh LED flicker start writes the carrier waveform (square), <code>attack 3</code> and the
 jitter globals <em>unconditionally</em> — and the timeline treats a mask as needing a fresh start
 unless <em>every</em> bit in it is already active. So a row that restarts a channel after a
-<code>freq 0</code> stop, or a multi-bit mask where one bit happens to be idle, resets those three
+<code>freq &lt; 0</code> stop, or a multi-bit mask where one bit happens to be idle, resets those three
 columns to their defaults on every bit in the mask. The <em>sweep</em> path does not re-latch, so
 whether it happens depends on whether the row carries a ramp. <strong>Restate <code>env</code> on
 every row that restarts a channel.</strong> Not covered by a lint.</p>
@@ -458,8 +466,10 @@ are listed here because a reader who trusts them will author the wrong file.</p>
     <tr><td><code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §7</td>
       <td>“LED <code>freq 0</code> = steady-on (no flicker)”, and §11 describes
       <code>05_focus_smr</code>'s steady lamp built on it.</td>
-      <td><code>freq ≤ 0</code> <strong>stops the flicker and goes dark.</strong> This one has shipped
-      consequences — see the trap above.</td></tr>
+      <td><strong>Correct — this is now true.</strong> The parser had been stopping the mask on
+      <code>freq &le; 0</code>, which painted nineteen sessions black; the test is now
+      <code>frequency &lt; 0.0f</code>, so <code>0</code> is a DC channel and only a negative rate
+      stops.</td></tr>
     <tr><td><code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §3, §7, §8 and many session headers</td>
       <td>“<code>freq_R</code> is NOT interpolatable”; “<code>env</code>, <code>phase</code>,
       <code>attack</code> are step-only on-device… don't put <code class="kbd">&gt;</code>/

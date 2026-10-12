@@ -48,7 +48,7 @@
 # --------------------------------------------------------------- sync marker
 0     40 50 100 255 255 255 15
 A 0   3000 0 70 0 1
-600   0 50 0 0 0 0 15
+600   -1 50 0 0 0 0 15
 A 600 0 0 0 0 1
 
 # ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
@@ -118,8 +118,8 @@ A 37000 400 0 60 0 2 406 0                     # no jitter column -- wanders any
 A 37000 701 0 60 10 7 0 0 50 0 0               # mono + 10 Hz gate: must NOT wander
 
 # ---- end: jitter explicitly back to 0 so it cannot leak into the next session
-53000 0 50 0 0 0 0 15
-53000 0 50 0 0 0 0 16                     # stop the tick primer too
+53000 -1 50 0 0 0 0 15
+53000 -1 50 0 0 0 0 16                     # stop the tick primer too
 A 53000 1900 -100 0 0 15 0 0            # stop the integrity carrier
 A 53000 243 0 0 0 1 250 0 50 0 0 3 0
 A 53000 400 0 0 0 2 406 0

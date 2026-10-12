@@ -528,3 +528,90 @@ t=300 so a fixed-window peak-to-peak also tracks cycle count. The two light
 channels disagreed by 1.5 s vs 3.5 s -- the estimator failing, not the device.
 Reading the modulated value from `/api/state` is the right instrument for a slow
 LFO: it is the exact quantity, noise-free, and needs no rig.
+
+## 13. `freq 0` was a stop, not a DC channel (FIXED) — and a doc/tooling sweep
+
+**The defect.** `config_parser.c` dispatched `led_matrix_stop_flicker_masked`
+on `frequency <= 0.0f`, so a row of `freq 0` stopped the mask and painted it
+black. Nineteen shipped sessions were authored on the opposite reading —
+`05_focus_smr` holds its lamp at `freq 0` with a rising brightness for its whole
+30-minute run ("light STAYS ON and BRIGHTENS"), and `31_ganzfeld_amber` is a
+steady amber Ganzfeld field. On that firmware all nineteen ran dark.
+
+**The fix.** The stop test is now `frequency < 0.0f`. `freq 0` is a DC channel:
+the ISR has a dedicated branch (`led_matrix_example.c:824`) that holds the output
+constant-on while still evaluating brightness and colour ramps and modulations
+every tick, so a steady field can breathe and fade — it just never gates off.
+A negative rate (`-1` by convention) is the stop. `led_matrix_example.c:1514`
+and `:1827` reject `frequency < 0.0f` rather than `<= 0.0f` to match.
+
+**The three regimes** are now `> 0` flicker, `0` DC, `< 0` stop.
+
+### Model agreement (verified against the device)
+
+| session | model DC channels | device |
+|---|---|---|
+| `05_focus_smr` | 1, 3 | agrees |
+| `31_ganzfeld_amber` | 2, 4 | agrees |
+| `03_deep_relaxation` | 1, 2, 3, 4 | agrees |
+| `13_astral_deep` | 2, 4 | agrees |
+
+### What the semantics change broke, and why each break was real
+
+Changing the meaning of `0` invalidated everything that had used it as an off
+switch. Five avmeasure tests failed immediately and four more surfaced during
+the fix; all nine were the *fixtures* expressing a stop as `0`, not the model:
+
+- **Sync markers.** `tests/selftest.ledc` and every `sessions/test/t01..t14`
+  marker "stopped" with `freq 0`, which now leaves the channel active. The body
+  entries then had no dark period to be located against (`EVENT_EARLY`,
+  `EVENT_NOT_LOCATED`). Worse, the marker recipe *depends* on the stop tearing
+  the gptimer down: without the teardown the ISR tick is never re-derived, so
+  the documented "40 Hz burst then stop" no longer resets it. All marker and
+  end-of-session stop rows are now `freq -1` (42 rows across 14 test sessions).
+- **A rate ramp that crosses zero.** `04_meditation_theta` ramps `>10` at
+  t=60 s toward an entry at t=540 s. The test harness trims sessions at 180 s,
+  which severs the ramp from its target and makes the harness's own close row the
+  new endpoint — so a `-1` close glided the demanded rate *down through zero* and
+  the model then demanded 28% brightness at a negative rate, which neither the
+  renderer nor a device can produce (`LIGHT_DARK_WHEN_DEMANDED` ×4). The close
+  row stays at rate 0 (a DC channel at 0% brightness and black — dark, and the
+  end-of-timeline handler stops everything anyway). **Authoring rule: pin a
+  descending rate ramp with a plain row at its intended endpoint before stopping
+  the channel.**
+- **Sync confidence.** A DC channel's expected light activity is a single on/off
+  step, whose cross-correlation is triangular and peaks low (0.40) by
+  construction. `compare.py` already discounted the correlation *margin* for
+  exactly this reason but still gated confidence on the *peak*, so a session
+  whose t0 was pinned to 50 µs off a sync marker — with its activation edge
+  agreeing to sub-millisecond — was labelled `medium (±50 ms)`. A model-free
+  activation edge now outranks the peak. The caps that exist to prevent
+  over-confidence (coarse localisation, estimator spread, dim first edge) all
+  still run afterwards and can still demote.
+
+Suite: **103/103 green.**
+
+### Documentation and tooling corrected
+
+The old rule was documented in five places, two of them published:
+
+- `ledc_format.md` — the LED field table said "`<= 0` means **STOP FLICKER** on
+  the mask, not DC-on". Added a "three rate regimes" section with the ramp and
+  off-switch consequences; corrected the `-`-resolution note, the
+  restart-after-stop gotcha, the pulse-fields-on-a-stop-row gotcha and the
+  sync-marker recipe. Revision note added (v3.1).
+- `docs/sessions/photic.html` — carried a warning block headed "`freq 0` turns
+  the zone OFF. It does not give you a steady lamp" and concluded "**there is no
+  way to command a steady, non-flickering light from a `.ledc` timeline**".
+  Replaced with the three regimes; that conclusion is now false.
+- `docs/sessions/authoring.html` — same claim as a trap section, plus a
+  spec-disagreement table row that listed `SESSION_DESIGN_GUIDELINES.md` §7
+  ("LED `freq 0` = steady-on") as *wrong*. §7 was right all along; the row now
+  says so.
+- `docs/sessions/reference.html` — the LED field table row, the `-`-resolution
+  note, two gotchas and the sync-marker recipe; added the regimes table.
+- `web/src/js/gen/validate.js` — checked LED `freq` against `0..NYQUIST`, so a
+  legitimate `-1` stop warned "out of range (will clamp)" while a 5 kHz LED rate
+  passed. LED freq now admits negatives as the off switch and is bounded by the
+  firmware's flicker cap (`MAX_LED_FLICKER_HZ = 100`, added to `model.js`),
+  not the audio Nyquist.

@@ -13,6 +13,12 @@
 > trailing column = leave unchanged, range guards on the sweep path, and the new
 > `depth` column. Anything this file cannot source to a function is marked
 > **UNVERIFIED**.
+>
+> **v3.1 (2026-10-12)**: the LED `freq` column has **three** regimes, not two —
+> `0` is a **DC channel** (steady on), and only a **negative** rate stops a mask.
+> v3 and earlier documented `<= 0` as the stop, which matched neither the
+> firmware nor the 19 shipped sessions that hold a lamp at 0 Hz. See "The three
+> rate regimes".
 
 ## Model: two layers per channel
 
@@ -93,7 +99,7 @@ occupies a slot, and does nothing. `voice` defaults to `default` and `volume` to
 | # | field | kind | accepted | default / absent | notes |
 |---|---|---|---|---|---|
 | 0 | `time` | integer ms | `atol`, no range check | — | not `-`-able (a `-` here reads as 0) |
-| 1 | `freq` | compound | **>0 .. 100.0 Hz** | live value | `<= 0` means **STOP FLICKER** on the mask, not DC-on |
+| 1 | `freq` | compound | **0 .. 100.0 Hz** | live value | `0` is a **DC channel** (steady on, no flicker); **`< 0` means STOP FLICKER** on the mask |
 | 2 | `duty` | compound | 0..100 % | live value | cast to `uint8_t` at parse — see "ranges" |
 | 3 | `bright` | compound | 0..100 % | live value | ditto |
 | 4,5,6 | `R G B` | compound | 0..255, **clamped** with a warning | live value | `clamp_u8_field` |
@@ -105,6 +111,39 @@ occupies a slot, and does nothing. `voice` defaults to `default` and `volume` to
 
 The legacy 5-token line is `time freq duty bright mask` and sets RGB to full
 white explicitly. It cannot carry any pulse column.
+
+### The three rate regimes — `freq > 0`, `freq == 0`, `freq < 0`
+
+The `freq` column has **three** meanings, and the middle one is the easy mistake:
+
+| `freq` | meaning | what the LEDs do |
+|---|---|---|
+| `> 0` | flicker at that rate | square/env-shaped pulse train |
+| **`== 0`** | **DC channel** | **steady on** at the row's `bright`/RGB — no flicker |
+| `< 0` | **stop** the mask | channel goes inactive; the timer is torn down if no channel is left |
+
+A DC channel is a real feature, not a degenerate case: 19 shipped sessions use it
+(`05_focus_smr` holds its lamp at 0 Hz for the whole run, `31_ganzfeld_amber` is a
+Ganzfeld field). The ISR has a dedicated branch for it
+(`led_matrix_example.c:824`) that still evaluates brightness and colour ramps and
+modulations every tick, so a DC channel can breathe and fade — it just never
+gates off.
+
+Consequences worth internalising:
+
+- **To turn a channel OFF, write a negative rate** — `-1` is conventional. A row
+  of `0` leaves the channel *active*, which keeps the flicker gptimer alive and
+  therefore keeps the ISR tick pinned where it was (see "Path-dependent
+  behaviour" #5). The sync-marker recipe depends on the teardown, so its stop row
+  must be `freq -1`.
+- `bright 0` with `freq 0` is dark but **still active**. That is fine as a final
+  row (the end-of-timeline handler stops everything anyway) but not as a
+  mid-session off switch.
+- A rate **ramp that crosses zero** is unrenderable below it. `>` interpolates
+  linearly toward the next entry's rate, so a descending glide whose target is a
+  negative stop row sweeps the demanded rate down through 0 and into negative
+  territory. Pin the ramp with a plain row at its intended endpoint before
+  stopping the channel.
 
 ## Column reference — audio line (after the `A`)
 
@@ -202,8 +241,9 @@ Four caveats that are *not* sugar:
    is on the timeline path; otherwise the parsed zero stands, so `-` on `freq` or
    `vol` in a channel's *first* entry means literally 0. For LED the live value
    is read from `led_matrix_get_snapshot`, and an inactive channel reports
-   `freq 0` — so `-` on `freq` in the first entry resolves to 0 and **stops the
-   flicker** (lint `LEDC_DASH_FREQ_STOPS`).
+   `freq 0` — so `-` on `freq` in the first entry resolves to 0, which is a
+   **DC channel** (steady on, no flicker), *not* a stop (lint
+   `LEDC_DASH_FREQ_STOPS`). Write a negative rate to stop a channel.
 3. **LED `-` reads the lowest bit in the mask.** A multi-bit mask whose channels
    hold different live values collapses them all to the low bit's value for the
    `-` fields.
@@ -619,7 +659,7 @@ These are observations about the code, not format rules.
    `s->carrier_waveform = s_flicker_carrier` (square), `s->attack_ms = 3`, and
    the jitter globals *unconditionally*, and the timeline calls it for any mask
    that is not **already fully active** (`led_matrix_is_flickering_masked` is ALL,
-   not ANY). So a row that restarts a channel after a `freq 0` stop, or a
+   not ANY). So a row that restarts a channel after a `freq < 0` stop, or a
    multi-bit mask where one bit is idle, **resets env/attack/jitter to the
    defaults on every bit in the mask** unless the row restates them — defeating
    "absent = leave unchanged" for those three columns. `phase` survives (it is
@@ -633,14 +673,15 @@ These are observations about the code, not format rules.
    only writes `duty_pct > 0`, so the previous duty stays (lint
    `LEDC_AUDIO_DUTY_ZERO`, info). A *ramped* or modulated duty can reach 0,
    because the per-block evaluation uses `iso_duty_from_pct`, which allows it.
-4. **`env`/`phase`/`attack`/`jitter` are applied on a `freq 0` LED row too** —
+4. **`env`/`phase`/`attack`/`jitter` are applied on a stop (`freq < 0`) LED row
+   too** —
    the pulse-field writes sit outside the stop/start branch, so a stop row can
    change the pulse shape. Observable only at the next start (and then subject
    to 1 above).
 5. **The flicker ISR tick is not monotonic across a session.** The gptimer is
    deleted when no channel is left active and the next activation re-derives the
    tick from the 1000 Hz floor — so the standard sync marker (40 Hz burst, then
-   `freq 0` everywhere) *resets* it, and the first post-marker rate then fixes
+   **`freq -1`** everywhere) *resets* it, and the first post-marker rate then fixes
    the grid for everything after it. This is why every file in `sessions/test`
    carries a "tick primer" row that keeps one invisible channel alive.
 6. **The first batch is hoisted.** It fires at wall-clock 0 whatever its

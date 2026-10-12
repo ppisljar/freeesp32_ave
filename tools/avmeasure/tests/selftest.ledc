@@ -15,7 +15,10 @@
 #     own unit test against hand-computed values).
 0       50 50 100 255 255 255 3
 A 0     3000 0 70 0 15
-600     0 50 0 0 0 0 3
+# -1, not 0: a ZERO rate is a DC channel (the lamp holds steady on), so a
+# 0 here left the marker lit for the whole session and the body entries
+# had no dark period to be located against. A NEGATIVE rate is the stop.
+600    -1 50 0 0 0 0 3
 A 600   3000 0 0 0 15
 
 # --- body: ch1 + ch2 at 10 Hz / 50% / 60%; binaural 240|246 (6 Hz beat),

@@ -53,7 +53,7 @@
 # only cross-correlate.  Copied verbatim from sessions/library/90_measure_sync.
 0     40 50 100 255 255 255 15
 A 0   3000 0 70 0 1
-600   0 50 0 0 0 0 15
+600   -1 50 0 0 0 0 15
 A 600 0 0 0 0 1
 
 # ---- ISR TICK PRIMER, and it is NOT decoration.
@@ -96,9 +96,9 @@ A 26000 400 0 70 16 1 0 0 50 0 0
 46030   8 50 100 255 255 255 15 0 0
 A 46030 400 0 70 8 1 0 0 50 0 0
 
-# ---- end: freq 0 stops flicker, vol 0 silences.  Both masks are stopped --
+# ---- end: freq -1 stops flicker, vol 0 silences.  Both masks are stopped --
 #      a channel left flickering past the last entry is cancelled by the
 #      end-of-timeline handler without ever having been graded.
-56000 0 50 0 0 0 0 15
-56000 0 50 0 0 0 0 16
+56000 -1 50 0 0 0 0 15
+56000 -1 50 0 0 0 0 16
 A 56000 400 0 0 0 1 0 0 50 0 0
