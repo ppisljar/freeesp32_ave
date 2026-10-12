@@ -501,7 +501,19 @@ static inline uint32_t IRAM_ATTR led_interp_param(const led_sweep_param_t *sw, u
  * gives ~0. For entrainment that means an env=1 session at 10 Hz was also
  * driving 20 and 30 Hz at a quarter of the fundamental.
  *
- * 514 bytes. A table lookup is also cheaper than the multiply it replaces. */
+ * 514 bytes. A table lookup is also cheaper than the multiply it replaces.
+ *
+ * CLAMPED TO 65535, NOT 65536. The mathematical peak of (1-cos)/2 in Q16 is
+ * 65536, which does NOT fit a uint16_t -- it wraps to 0. The first version of
+ * this table stored exactly that at index 128, so at the top of every
+ * brightness LFO the shape read ZERO instead of full scale and the modulated
+ * value collapsed to its start for one evaluation: one dim flick per LFO
+ * period, forever, at the brightest moment of the breath. Measured as a 3-of-3
+ * dropout at LFO phase 181 deg with the flicker amplitude at 0.152 of normal.
+ *
+ * The parabola this replaced computed the same 65536 but in a uint32_t, which
+ * is why the defect arrived with the table and not before. Losing 1/65536 at
+ * the peak is 0.0015% and invisible. */
 static const DRAM_ATTR uint16_t s_sine_q16[257] = {
          0,     10,     39,     89,    158,    246,    355,    482,
        630,    796,    982,   1187,   1411,   1654,   1915,   2196,
@@ -519,7 +531,7 @@ static const DRAM_ATTR uint16_t s_sine_q16[257] = {
      60014,  60452,  60874,  61279,  61667,  62037,  62390,  62725,
      63042,  63340,  63621,  63882,  64125,  64349,  64554,  64740,
      64906,  65054,  65181,  65290,  65378,  65447,  65497,  65526,
-     65536,  65526,  65497,  65447,  65378,  65290,  65181,  65054,
+     65535,  65526,  65497,  65447,  65378,  65290,  65181,  65054,
      64906,  64740,  64554,  64349,  64125,  63882,  63621,  63340,
      63042,  62725,  62390,  62037,  61667,  61279,  60874,  60452,
      60014,  59559,  59088,  58601,  58098,  57580,  57047,  56500,
