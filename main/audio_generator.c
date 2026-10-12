@@ -374,6 +374,16 @@ void audio_generator_unlock(void) {
 // ---------------------------------------------------------------------------
 
 esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_params_t* params) {
+    // Bounds check. The public (non-_locked) wrappers all validate, but the
+    // _locked variants are the ones the timeline batch executor calls directly
+    // while holding audio_gen_mutex, and they did not -- so a .ledc naming an
+    // audio channel outside 0..15 wrote a whole audio_gen_channel_t past the end
+    // of audio_channels[] (or before it, for a negative index). The channel comes
+    // straight from atoi() on an uploaded file, so this was reachable by any
+    // user-authored session; sessions/library/test.ledc does it at line 110.
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) {
+        return ESP_ERR_INVALID_ARG;
+    }
     audio_gen_channel_t* ch = &audio_channels[channel];
 
     memcpy(&ch->params, params, sizeof(audio_gen_params_t));
@@ -498,6 +508,16 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
 }
 
 esp_err_t audio_generator_update_params_locked(int channel, const audio_gen_params_t *new_params) {
+    // Bounds check. The public (non-_locked) wrappers all validate, but the
+    // _locked variants are the ones the timeline batch executor calls directly
+    // while holding audio_gen_mutex, and they did not -- so a .ledc naming an
+    // audio channel outside 0..15 wrote a whole audio_gen_channel_t past the end
+    // of audio_channels[] (or before it, for a negative index). The channel comes
+    // straight from atoi() on an uploaded file, so this was reachable by any
+    // user-authored session; sessions/library/test.ledc does it at line 110.
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) {
+        return ESP_ERR_INVALID_ARG;
+    }
     audio_gen_channel_t *ch = &audio_channels[channel];
     if (!ch->active) {
         return ESP_ERR_INVALID_STATE;
@@ -528,6 +548,16 @@ esp_err_t audio_generator_start_sweep_locked(int channel, audio_param_t param,
                                                      float start, float target,
                                                      uint64_t duration_samples,
                                                      audio_gen_sweep_type_t curve) {
+    // Bounds check. The public (non-_locked) wrappers all validate, but the
+    // _locked variants are the ones the timeline batch executor calls directly
+    // while holding audio_gen_mutex, and they did not -- so a .ledc naming an
+    // audio channel outside 0..15 wrote a whole audio_gen_channel_t past the end
+    // of audio_channels[] (or before it, for a negative index). The channel comes
+    // straight from atoi() on an uploaded file, so this was reachable by any
+    // user-authored session; sessions/library/test.ledc does it at line 110.
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) {
+        return ESP_ERR_INVALID_ARG;
+    }
     audio_gen_channel_t *ch = &audio_channels[channel];
 
     // If the channel is already running, capture the LIVE current value as

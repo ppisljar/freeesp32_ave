@@ -658,8 +658,12 @@ static inline int32_t IRAM_ATTR led_eval_mod_iram(const led_mod_slot_t *m, uint6
 /*
  * B2 — per-tick flicker CARRIER output level (0..brightness) for non-square
  * carriers. IRAM-safe / 32-bit-only (same rules as led_eval_mod_iram: no 64-bit
- * ops, no flash libgcc helpers). SINE reuses the parabolic (1−cos(2πx))/2 ≈
- * 4x(1−x) approximation; TRIANGLE is the linear fold. The shape is
+ * ops, no flash libgcc helpers). SINE reads the s_sine_q16 LUT -- a TRUE raised
+ * sine; it is NOT the 4x(1-x) parabola this header used to advertise, and that
+ * difference was a real defect (the parabola's derivative discontinuity at the
+ * cycle boundary put a 3rd harmonic at a quarter of the fundamental, and its
+ * uint16_t-clamped replacement initially wrapped 65536 to 0 at the peak, dropping
+ * one flick per breath). TRIANGLE is the linear fold. The shape is
  * LUMINANCE-LINEAR (no perceptual gamma) so a 180°-antiphase pair of raised
  * sines sums to a constant → luminance-flat "invisible" flicker.
  */

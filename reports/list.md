@@ -51,3 +51,10 @@ Implementation reports. Reports not tied to a numbered plan live under
   entries on an already-active channel bypass both the catch-up and the DMA-lag
   pre-advance and run ~48 ms early (= −AUDIO_DMA_PIPELINE_LAG_US) — the dominant
   real-world case. Also: the +44 dB LED→audio crosstalk was a USB ground loop, not a bug.
+- `non_planned_reports/led_audio_bug_sweep_2026-10-12.md` — bug sweep after the A/V sync
+  work. Fixed an out-of-bounds write from an unchecked audio channel number (the three
+  `_locked` generator entry points; reachable from any uploaded .ledc) and the `uint8_t`
+  bitmask truncation that made audio channels 8..15 silently ignore EVERY `>`/`*` ramp —
+  that one affected 14 shipped Gateway sessions. Also: 11-minute capture shows no clock
+  drift (<0.2 ppm) and no per-cycle glitches; and a percycle.py false-positive mode on
+  long windows that nearly produced a bogus "-36.8 ms glitch" report.

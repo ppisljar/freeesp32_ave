@@ -130,9 +130,14 @@ static esp_err_t execute_timeline_entry(const config_entry_t *entry);
 static const config_audio_entry_t *find_prev_audio_for_bit(const config_timeline_t *timeline,
                                                             size_t current_idx,
                                                             uint8_t channel_bit);
+// uint16_t, NOT uint8_t: audio has NUM_AUDIO_CHANNELS == 16 channels, so
+// (1u << channel) needs 16 bits. As a uint8_t every bit for channels 8..15
+// truncated to 0, no entry ever matched, and every '>'/'*' ramp on those
+// channels (freq, vol, pan, mod, duty, phase, attack) silently STEPPED instead
+// of ramping. The LED helpers below stay uint8_t -- there really are only 8.
 static const config_audio_entry_t *find_next_audio_for_bit(const config_timeline_t *timeline,
                                                             size_t current_idx,
-                                                            uint8_t channel_bit);
+                                                            uint16_t channel_bit);
 static const config_led_entry_t   *find_prev_led_for_bit(const config_timeline_t *timeline,
                                                           size_t current_idx,
                                                           uint8_t channel_bit);
@@ -192,7 +197,7 @@ static void log_entry_summary(const config_timeline_t *tl, size_t idx)
 
     if (e->type == CONFIG_ENTRY_AUDIO) {
         const config_audio_entry_t *au = &e->data.audio;
-        uint8_t ch_bit = (uint8_t)(1u << au->channel);
+        uint16_t ch_bit = (uint16_t)(1u << au->channel);
         const config_audio_entry_t *nb = find_next_audio_for_bit(tl, idx, ch_bit);
         if (nb) {
             uint32_t dur = nb->time_ms - au->time_ms;
@@ -1620,7 +1625,21 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
     }
 
     // Channel (optional, defaults to 0). Selector — not '-'-able.
-    audio_entry->channel = (token_count >= 6 && !tok_is_dash(tokens[5])) ? atoi(tokens[5]) : 0;
+    // Clamped at parse time as well as bounds-checked in the generator: this is
+    // a raw atoi() on an uploaded file, and the generator's _locked entry points
+    // (which the timeline batch executor calls) indexed audio_channels[] with it
+    // unchecked. Rejecting here is what gives the author a log line naming the
+    // bad value instead of silent memory corruption.
+    {
+        int req = (token_count >= 6 && !tok_is_dash(tokens[5])) ? atoi(tokens[5]) : 0;
+        if (req < 0 || req >= NUM_AUDIO_CHANNELS) {
+            ESP_LOGW(TAG, "audio channel %d out of range 0..%d — entry at t=%u clamped "
+                          "to channel 0", req, NUM_AUDIO_CHANNELS - 1,
+                     (unsigned)audio_entry->time_ms);
+            req = 0;
+        }
+        audio_entry->channel = req;
+    }
 
     // Token 6 (optional): freq_r — right-ear frequency for binaural beat. '-'/absent
     // → leave (present bit clear); 0/out-of-range → 0.0 ("same as left").
@@ -2179,7 +2198,7 @@ static const config_audio_entry_t *find_next_audio_with(const config_timeline_t 
 
 static const config_audio_entry_t *find_next_audio_for_bit(const config_timeline_t *timeline,
                                                             size_t current_idx,
-                                                            uint8_t channel_bit)
+                                                            uint16_t channel_bit)
 {
     if (!timeline) {
         return NULL;
@@ -2187,7 +2206,7 @@ static const config_audio_entry_t *find_next_audio_for_bit(const config_timeline
     for (size_t i = current_idx + 1; i < timeline->count; i++) {
         const config_entry_t *e = &timeline->entries[i];
         if (e->type == CONFIG_ENTRY_AUDIO) {
-            if ((uint8_t)(1u << e->data.audio.channel) & channel_bit) {
+            if ((uint16_t)(1u << e->data.audio.channel) & channel_bit) {
                 return &e->data.audio;
             }
         }
@@ -2471,7 +2490,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             // on the SAME channel to determine the window duration and target.
             // Per-bit independent per the Q1 decision (multi-bit channel maps
             // are not used for audio, but the helper is written generically).
-            uint8_t ch_bit = (uint8_t)(1u << audio->channel);
+            uint16_t ch_bit = (uint16_t)(1u << audio->channel);
             const config_audio_entry_t *next = find_next_audio_for_bit(timeline, entry_idx, ch_bit);
 
             if (next != NULL) {
@@ -2598,7 +2617,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
              * drive the pulse to 0% instead of holding. A field with no later
              * setter simply doesn't ramp — the same "holds" the web table shows. */
             {
-                const uint8_t pulse_bit = (uint8_t)(1u << audio->channel);
+                const uint16_t pulse_bit = (uint16_t)(1u << audio->channel);
                 const struct {
                     uint16_t               present_bit;
                     config_interpolation_t interp;
