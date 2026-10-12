@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Techniques beyond the four modalities — Session developer — ESP32 AVE</title>
+<meta name="description" content="Antiphase invisible flicker, EEG-contour carriers, AM noise, split-field, traveling waves, anti-habituation jitter, harmonic stacking, breath LFO, envelope shaping and colour — the techniques this firmware implements, with the .ledc columns that produce them.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
+<main class="page">
+
+<div class="hero">
+  <span class="eyebrow">Session developer</span>
+  <h1>Techniques beyond the four modalities</h1>
+  <p class="lead">Binaural, monaural, isochronic and photic are the four ways to
+  <em>carry</em> a rhythm, and each has its own page. This page is everything
+  else the firmware can do with them: how to make flicker that drives the retina
+  without being seen, how to give each eye its own frequency, how to stop a
+  response adapting away, and six more. None of these are modes you switch on —
+  every one is a pattern of ordinary columns.</p>
+</div>
+
+<div class="note">
+  <p><strong>Everything on this page is implemented and reachable from a session
+  file today.</strong> Where a technique is only partly supported, or where the
+  obvious way to write it does not do what it looks like it does, that is called
+  out in the section itself. Techniques that were researched but
+  <em>not</em> built are listed at the end under
+  <a href="#notbuilt">What is not implemented</a>, so you do not go looking for
+  a column that was never added.</p>
+</div>
+
+<!-- =================================================================== -->
+<h2 id="antiphase">Antiphase “invisible” flicker</h2>
+
+<p>The problem with photic entrainment is that it is unpleasant. A bank of LEDs
+strobing at 40&nbsp;Hz in front of closed eyes drives the retina well and feels
+like being inside a fault. The way out is to split the field into two banks of
+complementary colour and run them exactly half a cycle apart. Each bank is
+flickering at full depth, so the retina still receives a 40&nbsp;Hz oscillation
+in both colour channels — but the <em>sum</em> of the two banks is almost
+constant, so the overall brightness of the field barely moves and the flicker
+largely disappears from conscious view.</p>
+
+<p>This works on this firmware because the LED carrier shapes are
+luminance-linear: no perceptual gamma is applied on the way out, specifically so
+that a 180°-antiphase pair of raised sines sums to a constant rather than to a
+residual ripple. That is a deliberate property of the flicker engine, not a
+happy accident.</p>
+
+<div class="figure">
+<svg viewBox="0 0 760 240" role="img" aria-labelledby="antiT antiD">
+  <title id="antiT">Two complementary banks half a cycle apart sum to a flat field</title>
+  <desc id="antiD">Top lane: an amber bank rising and falling as a raised sine.
+  Middle lane: a cyan bank doing the same but half a cycle later, so its peaks
+  land on the amber troughs. Bottom lane: their sum, drawn as a nearly straight
+  line, because what one bank takes away the other puts back. The retina sees
+  two full-depth oscillations; the viewer sees a steady field.</desc>
+
+  <g stroke="var(--fig-line)" opacity=".22" stroke-width="1">
+    <line x1="112" y1="52" x2="744" y2="52"/>
+    <line x1="112" y1="132" x2="744" y2="132"/>
+    <line x1="112" y1="206" x2="744" y2="206"/>
+  </g>
+  <g fill="currentColor" font-size="12.5">
+    <text x="0" y="40">amber bank</text>
+    <text x="0" y="56" opacity=".6">phase 0</text>
+    <text x="0" y="120">cyan bank</text>
+    <text x="0" y="136" opacity=".6">phase 180</text>
+    <text x="0" y="200">sum</text>
+    <text x="0" y="216" opacity=".6">what you see</text>
+  </g>
+
+  <path d="M112 76 q19.75 -48 39.5 0 t39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0
+           39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0"
+        fill="none" stroke="var(--amber)" stroke-width="2.2"/>
+  <path d="M112 132 q19.75 48 39.5 0 t39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0
+           39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0 39.5 0"
+        fill="none" stroke="var(--cyan)" stroke-width="2.2"/>
+  <line x1="112" y1="206" x2="744" y2="206" stroke="var(--violet)" stroke-width="2.6"/>
+  <text x="428" y="228" text-anchor="middle" fill="var(--fg-faint)" font-size="11">
+    residual ripple is the two shapes' mismatch, not their amplitude
+  </text>
+</svg>
+<figcaption><strong>Why it is invisible.</strong> Both banks run at full depth —
+the retina is driven exactly as hard as by a single strobing bank. Only the
+luminance sum is flat, and that is the thing conscious vision tracks.</figcaption>
+</div>
+
+<h3>Writing it</h3>
+
+<p>Two LED lines at the same timestamp, on disjoint masks, with complementary
+colour and a 180° difference in the <code>phase</code> column. Use
+<code>env&nbsp;1</code> (raised sine): square edges cannot sum flat.</p>
+
+<pre><code># time freq duty bright  R   G   B  mask env phase
+# amber bank, zones 1-2
+0      40   50   60    255 150  40   3   1    0
+# cyan bank, zones 3-4, half a cycle later
+0      40   50   60     40 170 255  12   1  180</code></pre>
+
+<div class="warn">
+<p><strong>The two lines must share a timestamp.</strong> LED phase is applied at
+use-time from the live period, so it stays a fixed phase relationship through a
+frequency ramp — but only if both channels were anchored together. Start them a
+few hundred milliseconds apart and you get the phase difference you asked for
+<em>plus</em> whatever the start offset happened to be.</p>
+</div>
+
+<p>Brightness-match the two banks by eye at the colours you actually chose. The
+sum is flat only if the two banks are equally bright; an amber bank at 60&nbsp;%
+against a cyan bank at 40&nbsp;% leaves a 20&nbsp;% ripple at the flicker rate,
+which is visible and defeats the point.</p>
+
+<!-- =================================================================== -->
+<h2 id="eeg-contour">EEG-contour carrier</h2>
+
+<p>Wave type 7 is not a geometric waveform. It is a single-cycle lookup table
+shaped like a recorded EEG trace — the “replicated EEG waveform” of Monroe
+US&nbsp;5,213,562 — and its harmonic series is fixed by the table rather than by
+a formula:</p>
+
+<div class="spec-table">
+<table>
+<caption>Measured harmonic amplitudes, 200&nbsp;Hz carrier, 10&nbsp;s capture.</caption>
+<thead><tr><th>h1</th><th>h2</th><th>h3</th><th>h4</th><th>h5</th><th>h6</th></tr></thead>
+<tbody><tr>
+<td>1.000</td><td>0.500</td><td>0.331</td><td>0.221</td><td>0.140</td><td>0.091</td>
+</tr></tbody>
+</table>
+</div>
+
+<p>It is a <strong>carrier</strong>, not a noise type, and it needs a real
+frequency. Two places in the code are careful about that: the test that waives
+the frequency check for noise is a range test over wave types 4–6 written
+specifically so 7 falls outside it, and the carrier scaling likewise leaves 7
+unscaled. The practical consequence is that <strong>an EEG channel is about
+6&nbsp;dB hotter than a noise channel at the same <code>vol</code></strong>.
+Budget for that when you mix one in.</p>
+
+<pre><code># A time freq pan vol mod ch freqR waveType
+A   0   200   0  55   0   1   206       7</code></pre>
+
+<p>Its binaural beat comes from left/right detune exactly like a sine's, because
+both ears read the same table at their own phase. The line above is a 6&nbsp;Hz
+binaural beat on an EEG-contour carrier.</p>
+
+<!-- =================================================================== -->
+<h2 id="am-noise">AM noise</h2>
+
+<p>Gating a broadband noise source at the target rate drives a much wider swathe
+of the cochlea than a single tone does, and is markedly less fatiguing over a
+long session — which is why it is the usual choice for sleep work, where a pure
+tone becomes irritating long before the session ends.</p>
+
+<p>Wave types 4, 5 and 6 are white, pink and brown noise, measured at
++0.05&nbsp;dB/oct, −3.04&nbsp;dB/oct and −6.07&nbsp;dB/oct respectively over
+60&nbsp;Hz–3&nbsp;kHz. These are <strong>the only wave types for which
+<code>freq&nbsp;0</code> is meaningful</strong> — a noise generator has no pitch
+to set.</p>
+
+<pre><code># A time freq pan vol mod ch freqR wave duty env phase attack jitter depth
+A   0     0   0  60 2.0  3     0    5   50   3     0      4      0    90</code></pre>
+
+<p>That is pink noise gated at 2&nbsp;Hz with a trapezoid envelope, a 4&nbsp;ms
+edge and 90&nbsp;% depth — a delta-band sleep bed. Noise channels sit 6&nbsp;dB
+below tone channels by design, so <code>vol</code> runs higher than you would
+use for a sine.</p>
+
+<!-- =================================================================== -->
+<h2 id="split-field">Split-field, a frequency per eye</h2>
+
+<p>Because the LED <code>mask</code> selects which zones a line drives, and
+because the glasses build puts separate zones in front of each eye, two LED
+lines at the same timestamp can run the two eyes at different rates. The optic
+chiasm sends each hemifield predominantly to the opposite hemisphere, which is
+the mechanism the split-field patents (Siever, US&nbsp;5,709,645) are built on.</p>
+
+<pre><code># time freq duty bright  R   G  B  mask env
+# left eye (zones 1-2) at 16 Hz
+0      16   50   55    255 120 0    3   1
+# right eye (zones 3-4) at 6 Hz
+0       6   50   55    255 120 0   12   1</code></pre>
+
+<p>Which physical LED sits in which zone is a wiring decision — see
+<a href="../hardware/index.html#topology">LED topology and per-eye masks</a> for
+the mapping on both builds. Mask bit&nbsp;0 is LED&nbsp;1, so the left eye above
+is bits 0–1 (<code>3</code>) and the right is bits 2–3 (<code>12</code>).</p>
+
+<div class="note">
+<p><strong>Different frequencies work today; phase-locked same-frequency
+split-field also works</strong>, using the <code>phase</code> column exactly as
+the antiphase section does. What you cannot do is give the two eyes different
+<em>colours of the same flicker</em> on the direct-PWM backend, which has no
+per-pixel colour at all.</p>
+</div>
+
+<!-- =================================================================== -->
+<h2 id="traveling">Traveling-wave phase gradients</h2>
+
+<p>Give each of N zones a phase of 360°·k/N and the field stops being a set of
+zones flashing together and becomes a wave moving across it. At around
+10&nbsp;Hz this interacts with the visual system's own spatial dynamics and is
+the usual route to the rotating, mandala-like closed-eye form constants.</p>
+
+<p>Eight zones, 45° apart:</p>
+
+<pre><code># time freq duty bright  R   G   B  mask env phase
+0      10   50   50    180  80 255    1   1   315
+0      10   50   50    180  80 255    2   1   270
+0      10   50   50    180  80 255    4   1   225
+0      10   50   50    180  80 255    8   1   180
+0      10   50   50    180  80 255   16   1   135
+0      10   50   50    180  80 255   32   1    90
+0      10   50   50    180  80 255   64   1    45
+0      10   50   50    180  80 255  128   1     0</code></pre>
+
+<div class="warn">
+<p><strong>Note the descending phase column.</strong> <code>phase</code> is a
+<em>lead</em>, not a lag: the firmware adds <code>phase × period / 360</code> to
+elapsed time, so a larger number makes the edge arrive <em>earlier</em>. To make
+the wave travel from zone&nbsp;1 towards zone&nbsp;8 you therefore count
+<em>down</em>. Writing <code>0 45 90 …</code> gives a wave travelling the other
+way, which is a perfectly good effect but not the one you asked for. To delay a
+zone by N degrees, write <code>360 − N</code>.</p>
+</div>
+
+<p>This convention has never bitten anyone in the shipped library because across
+all of <code>sessions/library</code> the phase column only ever takes the values
+0 and 180, which are symmetric under negation. The moment you reach for 45 or 90
+it matters.</p>
+
+<!-- =================================================================== -->
+<h2 id="jitter">Anti-habituation jitter</h2>
+
+<p>A steady-state response to an absolutely fixed rhythm decays over a long
+hold: the system adapts to anything perfectly predictable. The counter is to
+make the rate wander slowly — enough that it never settles, little enough that
+it stays in band. The <code>jitter</code> column takes <code>amp</code> or
+<code>amp:period_ms</code>, where amp is in Hz and period is the full cycle
+(default 45&nbsp;000&nbsp;ms).</p>
+
+<p><strong>The two line types do genuinely different things</strong>, and this is
+the single most misunderstood column in the format:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th></th><th>LED line</th><th>Audio line</th></tr></thead>
+<tbody>
+<tr><td>Scope</td><td>per channel-mask</td><td><strong>global — one setting for the whole session</strong></td></tr>
+<tr><td>What it moves</td><td>the flicker rate</td><td>the <strong>binaural detune</strong>, never the <code>mod</code> rate</td></tr>
+<tr><td>Shape</td><td>bipolar triangle</td><td>bipolar sine</td></tr>
+<tr><td>Amplitude limit</td><td>clamped to 5 Hz</td><td>none</td></tr>
+<tr><td>Period limit</td><td colspan="2">under 1000 ms is silently ignored — the previous value stays</td></tr>
+</tbody>
+</table>
+</div>
+
+<pre><code># LED: wander the flicker rate +/- 0.4 Hz over a 60 s cycle
+# time freq duty bright  R   G  B  mask env phase attack jitter
+0      10   50    60    255 150 40  255   1     0      3  0.4:60000
+
+# Audio: wander the binaural detune +/- 0.3 Hz over 53 s
+# A time freq pan vol mod ch freqR wave duty env phase attack jitter
+A   0   200   0  70   0   1   206    0   50   4     0      3  0.3:53000</code></pre>
+
+<p>Choosing non-commensurate periods for the two (60&nbsp;s and 53&nbsp;s above)
+keeps them from re-aligning into a slow super-rhythm of their own.</p>
+
+<div class="warn">
+<p>Three consequences of audio jitter being global. The <strong>last</strong>
+audio line in the file carrying a jitter column sets it for the whole session. A
+channel that sets no jitter column still wanders, if some other line turned it
+on. And a <strong>mono channel never wanders at all</strong>, because the offset
+is only ever added to the right carrier — if <code>freqR</code> is 0 there is
+nothing to move.</p>
+<p><strong>End a session by writing jitter explicitly back to 0.</strong> The
+global is not reset between sessions, so it leaks into whatever runs next.</p>
+</div>
+
+<p>If you want the <em>isochronic pulse rate</em> to wander, jitter is the wrong
+tool — it never touches <code>mod</code>. Modulate <code>mod</code> with a
+periodic glyph instead: <code>~9.6:10.4:40000</code>.</p>
+
+<!-- =================================================================== -->
+<h2 id="harmonic">Harmonic / octave stacking</h2>
+
+<p>One carrier at one pitch is a thin sound to sit inside for an hour. Running
+the same beat frequency on several octave-spaced carriers gives a far richer
+bed, and reinforces the frequency-following response at the beat rate rather
+than at any one carrier.</p>
+
+<p>The detune is <strong>absolute, not proportional</strong> — you want the same
+Δf at every octave, so the beat is the same everywhere:</p>
+
+<pre><code># A time freq pan vol mod ch freqR
+A   0   100   0  70   0   1   106      # 6 Hz beat, fundamental
+A   0   200   0  50   0   2   206      # 6 Hz beat, one octave up, quieter
+A   0   400   0  35   0   3   406      # 6 Hz beat, two octaves up, quieter still</code></pre>
+
+<p>Doubling <code>freqR</code> along with <code>freq</code> would give you 6, 12
+and 24&nbsp;Hz beats — three different rhythms, not one reinforced one.</p>
+
+<p>Attenuating the upper octaves by roughly 3–6&nbsp;dB each matches how the ear
+weights them and keeps the stack from turning shrill. Note that
+<code>vol</code> is an <strong>absolute</strong> quantity on this device, not a
+share of a mix: every channel is scaled by a fixed 1/16 regardless of how many
+are running, so adding a fourth channel does not make the first three quieter.
+See <a href="../sessions/reference.html#mixing">the mixing model</a>.</p>
+
+<!-- =================================================================== -->
+<h2 id="breath">The breath layer</h2>
+
+<p>A slow envelope at about 0.1&nbsp;Hz — six cycles a minute — laid over the
+top of whatever entrainment is running, on brightness or volume rather than on
+rate. It paces breathing without instructing it, and it is independent of the
+entrainment frequency underneath.</p>
+
+<p>There is no dedicated breath parameter; you write it as an ordinary sine
+modulation on the <code>bright</code> or <code>vol</code> column. 0.1&nbsp;Hz is
+a 10&nbsp;000&nbsp;ms period:</p>
+
+<pre><code># LED brightness breathing 25 % to 65 % every 10 s, under a 10 Hz alpha flicker
+# time freq duty bright            R   G   B  mask env
+0      10   50   ~25:65:10000     255 150  40  255   1
+
+# the same breath on an audio channel's volume
+# A time freq pan vol             mod ch freqR
+A   0   200   0  ~40:70:10000      0   1   206</code></pre>
+
+<p>Keep it fixed for the whole segment — a breath pacer that changes period is
+worse than none. Individual resonant frequencies sit between about 0.075 and
+0.117&nbsp;Hz (13.3&nbsp;s to 8.5&nbsp;s), so 10&nbsp;s is a reasonable default
+and 4&nbsp;s-in / 6&nbsp;s-out is the usual calming asymmetry — though the
+<code>~</code> glyph is symmetric, so a true 4/6 split needs the saw glyphs
+<code>/</code> or <code>\</code> instead.</p>
+
+<!-- =================================================================== -->
+<h2 id="envelopes">Envelope shaping</h2>
+
+<p>The <code>env</code> column sets the shape of the pulse — the thing that is
+actually doing the entraining. It matters more than most authors expect, because
+a gate with sharp corners injects its own harmonics <em>into the brain</em>: an
+8&nbsp;Hz square gate is simultaneously driving 24&nbsp;Hz at a third of the
+fundamental, which is beta content inside what you intended as an alpha
+session.</p>
+
+<div class="spec-table">
+<table>
+<thead><tr>
+  <th><code>env</code></th><th>Shape</th><th>Uses <code>duty</code>?</th>
+  <th>Uses <code>attack</code>?</th><th>Measured h3</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td>square gate</td><td>yes</td><td>no</td><td>0.332</td></tr>
+<tr><td>1</td><td>raised sine</td><td><strong>no</strong></td><td>no</td><td>0.001</td></tr>
+<tr><td>2</td><td>triangle</td><td><strong>no</strong></td><td>no</td><td>0.110</td></tr>
+<tr><td>3</td><td>trapezoid</td><td>yes</td><td>yes</td><td>0.321</td></tr>
+<tr><td>4</td><td>sine tremolo (bipolar, audio only)</td><td>no</td><td>no</td><td>0.001</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="warn">
+<p><strong><code>duty</code> alongside <code>env 1</code> or <code>env 2</code>
+is a silent no-op.</strong> Neither shape reads it — the raised sine spans the
+whole cycle and the triangle is symmetric, so its on-fraction is always exactly
+50&nbsp;%. A duty <em>modulation</em> next to them is equally inert: the
+modulation engine will dutifully animate a value that nothing reads. If duty
+matters, use <code>env 0</code> or <code>env 3</code>.</p>
+</div>
+
+<p><code>env 3</code> is the useful middle ground: a trapezoid keeps a real,
+settable duty cycle but takes the corners off with an <code>attack</code> ramp.
+Click-safe is ≥&nbsp;2&nbsp;ms; the default is 3&nbsp;ms on both paths. The
+stepped LED path caps attack at 60&nbsp;ms — if you want an edge longer than
+that, what you are really asking for is <code>env 1</code>.</p>
+
+<p>Defaults differ by line type, which catches people: an absent <code>env</code>
+column means <strong>0 (square) on an LED line and 4 (tremolo) on an audio
+line</strong>, and an out-of-range value falls back the same way.</p>
+
+<!-- =================================================================== -->
+<h2 id="colour">Colour, and why it is not decoration</h2>
+
+<p>At matched luminance, the colours at the ends of the spectrum drive a
+substantially stronger steady-state visual response than the ones in the middle.
+Measured by alternating pairs: amber/red 8.06&nbsp;dB, blue/red 6.82&nbsp;dB,
+green/lime 2.85&nbsp;dB. The pattern is that any pair containing a red or a blue
+beats any pair without one — which is convenient, because the spectral extremes
+are also the complementary ones, so the strongest-driving pairs are the same
+pairs that work for <a href="#antiphase">antiphase</a>.</p>
+
+<p>For eyes-closed use there is a second, blunter consideration: the eyelid is a
+red filter. It passes roughly 14.5&nbsp;% at 700&nbsp;nm and under 3&nbsp;% below
+580&nbsp;nm, so a blue bank behind a closed eyelid is doing a small fraction of
+the work the same bank does with eyes open. Bias closed-eye presets towards amber
+and red.</p>
+
+<pre><code># time freq duty bright  R   G   B  mask env
+0      10   50   55    255 150  40  255   1    # amber - good through eyelids
+0      10   50   55     40 170 255  255   1    # cyan  - strong SSVEP, eyes open</code></pre>
+
+<div class="warn">
+<p><strong>Saturated red is a special case.</strong> Deep red flicker where
+R/(R+G+B) ≥ 0.8 is a recognised seizure trigger at rates above about 3&nbsp;Hz,
+independent of brightness. The firmware does not check this. Keep saturated red
+below 3&nbsp;Hz, or desaturate it.</p>
+</div>
+
+<!-- =================================================================== -->
+<h2 id="notbuilt">What is not implemented</h2>
+
+<p>These were researched and specified for this project but do not exist in the
+firmware. They are listed here so you do not go hunting for a column that was
+never added, and so the gap between the research notes and the device is written
+down somewhere a session author will actually see it.</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Technique</th><th>Status</th><th>What you can do instead</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Photosensitivity safety interlock</strong></td>
+  <td>Designed, deliberately not built. There is no <code>safety_mode</code>
+      setting, no brightness clamp in the 15–25&nbsp;Hz band and no
+      saturated-red throttle anywhere in the firmware.</td>
+  <td>Nothing automatic. The only gate that ships is a one-time notice in the
+      browser, and <strong>a session played from the SD card never sees it</strong>.
+      Author within the limits yourself.</td>
+</tr>
+<tr>
+  <td><strong>Monaural beat mode</strong></td>
+  <td>No engine mode. There is no <code>beat_mode</code> field; the generator
+      knows only “detuned carriers routed to separate ears”.</td>
+  <td>Write it as two centre-panned channels with different carriers — they sum
+      acoustically in each ear, which is what a monaural beat is. See
+      <a href="../sessions/monaural.html">the monaural page</a>.</td>
+</tr>
+<tr>
+  <td><strong>Dedicated breath LFO</strong></td>
+  <td>No breath parameter or envelope type.</td>
+  <td>A <code>~</code> modulation on <code>bright</code> or <code>vol</code>,
+      as in <a href="#breath">the breath layer</a> above. Functionally equivalent;
+      you just write the period yourself.</td>
+</tr>
+<tr>
+  <td><strong><code>WAVE</code> directive</strong> for traveling waves</td>
+  <td>No directive that spreads a phase gradient across masked channels
+      automatically.</td>
+  <td>Write the per-zone <code>phase</code> values by hand, as in
+      <a href="#traveling">traveling waves</a>. Eight lines instead of one.</td>
+</tr>
+<tr>
+  <td><strong>AudioStrobe / SpectraStrobe emission</strong></td>
+  <td>Not implemented at all — no inaudible 18–20&nbsp;kHz carrier is generated,
+      so the device cannot drive third-party glasses that expect one.</td>
+  <td>Nothing. Use the device's own LED outputs.</td>
+</tr>
+<tr>
+  <td><strong>Periodic modulation on <code>freqR</code> and <code>depth</code></strong></td>
+  <td>Partly implemented. Both accept <code>&gt;</code> and <code>*</code> ramps,
+      but a periodic glyph (<code>~ ^ / \ _</code>) is accepted by the tokenizer
+      and then dropped: the parser logs a warning and holds the start value.</td>
+  <td>Use a ramp, or step the value at successive timestamps.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="next">Next</h2>
+
+<p>The <a href="../sessions/reference.html">complete <code>.ledc</code>
+reference</a> has every column, every accepted value and every default. The
+<a href="../sessions/authoring.html">authoring guide</a> covers session
+structure — arcs, ramp slopes, endings — and the linter findings that catch most
+of the mistakes above before you ever play a file.</p>
+
+</main>
+
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

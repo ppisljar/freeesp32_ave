@@ -17,6 +17,10 @@
   <a href="../hardware/index.html" aria-current="page">Hardware</a>
 </nav>
 
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
 <main class="page">
 
   <header class="hero">
@@ -41,29 +45,12 @@
     <p>
       Everything on this page exists to flash light at the eyes. Before you
       build or power anything, read the
-      <a href="../index.html#photosensitivity">photosensitivity and epilepsy
+      <a href="../index.html#safety">photosensitivity and epilepsy
       warning</a> — flicker in the 3–30&nbsp;Hz band is a real seizure trigger,
       the 15–25&nbsp;Hz region is the risk peak, and the firmware enforces no
       limit of its own.
     </p>
   </div>
-
-  <nav class="toc" aria-label="On this page">
-    <h2>On this page</h2>
-    <ul>
-      <li><a href="#builds">The two builds at a glance</a></li>
-      <li><a href="#s3">Build A — ESP32-S3 (YB-ESP32-S3-DAC)</a></li>
-      <li><a href="#s3-wiring">Build A wiring</a></li>
-      <li><a href="#classic">Build B — classic ESP32</a></li>
-      <li><a href="#topology">LED topology and per-eye masks</a></li>
-      <li><a href="#formfactor">Form factors: glasses and lamp</a></li>
-      <li><a href="#power">Power</a></li>
-      <li><a href="#hazards">Hazards worth knowing before you power up</a></li>
-      <li><a href="#flashing">Flashing and first boot</a></li>
-      <li><a href="#variant">Making your own variant</a></li>
-      <li><a href="#unknowns">What this page could not establish</a></li>
-    </ul>
-  </nav>
 
   <h2 id="builds">The two builds at a glance</h2>
 
@@ -145,6 +132,218 @@
   </p>
 
   <h3>Parts</h3>
+
+  <div class="partgrid">
+
+    <div class="part">
+      <svg viewBox="0 0 160 152" role="img" aria-label="Illustration of the YelloByte YB-ESP32-S3-DAC board: a rectangular PCB with a USB-C port on one edge, a shielded ESP32-S3 module with PCB antenna, a codec chip, a microSD slot and two rows of castellated pin headers.">
+        <rect x="16" y="20" width="128" height="112" rx="6" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.6"/>
+        <!-- castellated pin rows -->
+        <g fill="currentColor" opacity=".55">
+          <rect x="20" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="30" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="40" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="50" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="60" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="70" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="80" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="90" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="100" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="110" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="120" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="130" y="21" width="7" height="4" rx="1.4"/>
+          <rect x="20" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="30" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="40" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="50" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="60" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="70" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="80" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="90" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="100" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="110" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="120" y="127" width="7" height="4" rx="1.4"/>
+          <rect x="130" y="127" width="7" height="4" rx="1.4"/>
+        </g>
+        <!-- USB-C -->
+        <rect x="64" y="14" width="32" height="9" rx="4.5" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.4"/>
+        <!-- RF shield + antenna -->
+        <rect x="26" y="34" width="56" height="42" rx="3" fill="rgba(255,180,84,.12)" stroke="var(--amber)" stroke-width="1.5"/>
+        <text x="54" y="58" text-anchor="middle" fill="var(--amber)" font-size="9" font-weight="650">ESP32-S3</text>
+        <text x="54" y="69" text-anchor="middle" fill="var(--fg-muted)" font-size="7.5">N16R8</text>
+        <path d="M86 38h16v6h-10v6h10v6h-16" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".8"/>
+        <!-- codec -->
+        <rect x="26" y="86" width="40" height="30" rx="3" fill="rgba(95,216,232,.12)" stroke="var(--cyan)" stroke-width="1.5"/>
+        <text x="46" y="99" text-anchor="middle" fill="var(--cyan)" font-size="7.5" font-weight="650">TLV320</text>
+        <text x="46" y="109" text-anchor="middle" fill="var(--cyan)" font-size="7.5">DAC3101</text>
+        <!-- microSD slot -->
+        <rect x="76" y="86" width="52" height="30" rx="3" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.4"/>
+        <text x="102" y="104" text-anchor="middle" fill="currentColor" font-size="8" opacity=".85">microSD</text>
+        <!-- 3.5 mm jack -->
+        <rect x="104" y="40" width="30" height="28" rx="4" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.4"/>
+        <circle cx="119" cy="54" r="7" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <circle cx="119" cy="54" r="2.6" fill="currentColor" opacity=".6"/>
+      </svg>
+      <span class="pill accent">Build A core</span>
+      <h4>YelloByte YB-ESP32-S3-DAC</h4>
+      <p>MCU, codec, headphone jack, speaker amp, microSD and USB on one board — the
+      whole combination this project would otherwise need a custom PCB for.</p>
+    </div>
+
+    <div class="part">
+      <svg viewBox="0 0 160 152" role="img" aria-label="Illustration of an M5Stack NeoHEX board: thirty-seven addressable LEDs arranged as a centre pixel surrounded by hexagonal rings of six, twelve and eighteen. The centre and inner ring are drawn amber as the inner zone, the two outer rings cyan as the outer zone.">
+        <path d="M80 10 L142 46 L142 118 L80 154 L18 118 L18 46 Z"
+              fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.6" opacity=".9"/>
+        <circle cx="80.0" cy="76.0" r="4.4" fill="var(--amber)" opacity="1"/>
+        <circle cx="70.5" cy="92.5" r="4.4" fill="var(--amber)" opacity=".9"/>
+        <circle cx="89.5" cy="92.5" r="4.4" fill="var(--amber)" opacity=".9"/>
+        <circle cx="99.1" cy="76.0" r="4.4" fill="var(--amber)" opacity=".9"/>
+        <circle cx="89.5" cy="59.5" r="4.4" fill="var(--amber)" opacity=".9"/>
+        <circle cx="70.5" cy="59.5" r="4.4" fill="var(--amber)" opacity=".9"/>
+        <circle cx="60.9" cy="76.0" r="4.4" fill="var(--amber)" opacity=".9"/>
+        <circle cx="60.9" cy="109.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="80.0" cy="109.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="99.1" cy="109.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="108.6" cy="92.5" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="118.1" cy="76.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="108.6" cy="59.5" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="99.1" cy="43.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="80.0" cy="43.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="60.9" cy="43.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="51.4" cy="59.5" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="41.9" cy="76.0" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="51.4" cy="92.5" r="4.4" fill="var(--cyan)" opacity=".85"/>
+        <circle cx="51.4" cy="125.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="70.5" cy="125.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="89.5" cy="125.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="108.6" cy="125.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="118.1" cy="109.0" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="127.6" cy="92.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="137.2" cy="76.0" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="127.6" cy="59.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="118.1" cy="43.0" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="108.6" cy="26.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="89.5" cy="26.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="70.5" cy="26.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="51.4" cy="26.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="41.9" cy="43.0" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="32.4" cy="59.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="22.8" cy="76.0" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="32.4" cy="92.5" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <circle cx="41.9" cy="109.0" r="4.4" fill="var(--cyan)" opacity=".8"/>
+        <text x="80" y="144" text-anchor="middle" fill="var(--fg-muted)" font-size="8">37 px = 1 + 6 + 12 + 18</text>
+      </svg>
+      <span class="pill accent">Build A core</span>
+      <h4>2 × M5Stack NeoHEX</h4>
+      <p>The light source, one per eye. The ring structure is what gives each eye an
+      independent <strong>inner</strong> and <strong>outer</strong> zone, so a session can
+      drive them at different phases.</p>
+    </div>
+
+    <div class="part">
+      <svg viewBox="0 0 160 152" role="img" aria-label="Illustration of a diffuser: a dome over an LED board, with hard rays from the bare LED on the left becoming a soft even field on the right.">
+        <g stroke="var(--amber)" stroke-width="1.6" opacity=".75">
+          <path d="M44 112 L30 74"/><path d="M44 112 L44 70"/><path d="M44 112 L58 74"/>
+        </g>
+        <circle cx="44" cy="114" r="5" fill="var(--amber)"/>
+        <path d="M18 112 a26 30 0 0 1 52 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 3"/>
+        <text x="44" y="134" text-anchor="middle" fill="var(--fg-muted)" font-size="8.5">bare</text>
+        <circle cx="116" cy="114" r="5" fill="var(--amber)" opacity=".85"/>
+        <path d="M90 112 a26 30 0 0 1 52 0" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M90 112 a26 30 0 0 1 52 0" fill="rgba(255,180,84,.22)" stroke="none"/>
+        <g stroke="var(--amber)" stroke-width="1.3" opacity=".4">
+          <path d="M116 82 v-16"/><path d="M98 88 l-9 -13"/><path d="M134 88 l9 -13"/>
+        </g>
+        <text x="116" y="134" text-anchor="middle" fill="var(--fg-muted)" font-size="8.5">diffused</text>
+      </svg>
+      <span class="pill accent">Not optional</span>
+      <h4>Diffuser</h4>
+      <p>Ping-pong-ball halves, thin opal acrylic, or 2–3 layers of tracing paper. Bare LEDs
+      are uncomfortably bright and the visible dot pattern defeats the effect.</p>
+    </div>
+
+    <div class="part">
+      <svg viewBox="0 0 160 152" role="img" aria-label="Illustration of light-blocking goggles: two rounded eye cups joined by a bridge with a head strap, and a marked clearance gap of at least twenty-five millimetres between the LED board and the eye.">
+        <path d="M6 64 h12 M142 64 h12" stroke="currentColor" stroke-width="2.4"/>
+        <rect x="18" y="40" width="56" height="48" rx="16" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.8"/>
+        <rect x="86" y="40" width="56" height="48" rx="16" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M74 62 q6 -7 12 0" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <circle cx="46" cy="64" r="13" fill="rgba(255,180,84,.2)" stroke="var(--amber)" stroke-width="1.4"/>
+        <circle cx="114" cy="64" r="13" fill="rgba(255,180,84,.2)" stroke="var(--amber)" stroke-width="1.4"/>
+        <g stroke="var(--cyan)" stroke-width="1.4">
+          <path d="M46 104 v22" marker-end="url(#gapar)"/>
+        </g>
+        <defs><marker id="gapar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--cyan)"/></marker></defs>
+        <text x="80" y="122" fill="var(--cyan)" font-size="9">≥ 25 mm to the eyelid</text>
+      </svg>
+      <span class="pill">Enclosure + audio</span>
+      <h4>Sleep mask with built-in headphones</h4>
+      <p>Bought whole and reused: it is the light-blocking enclosure <em>and</em> the
+      headphones in one. A 3D-printed frame or lens-less swim goggles work too, but then
+      you supply the headphones separately.</p>
+    </div>
+
+    <div class="part">
+      <svg viewBox="0 0 160 152" role="img" aria-label="Illustration of over-ear headphones with a 3.5 millimetre TRS plug, labelled left and right.">
+        <path d="M34 78 a46 46 0 0 1 92 0" fill="none" stroke="currentColor" stroke-width="2.4"/>
+        <rect x="22" y="70" width="26" height="40" rx="9" fill="rgba(255,180,84,.14)" stroke="var(--amber)" stroke-width="1.8"/>
+        <rect x="112" y="70" width="26" height="40" rx="9" fill="rgba(95,216,232,.14)" stroke="var(--cyan)" stroke-width="1.8"/>
+        <text x="35" y="95" text-anchor="middle" fill="var(--amber)" font-size="10" font-weight="650">L</text>
+        <text x="125" y="95" text-anchor="middle" fill="var(--cyan)" font-size="10" font-weight="650">R</text>
+        <path d="M125 110 q6 24 -16 28" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="100" y="136" width="14" height="7" rx="2" fill="currentColor" opacity=".75"/>
+        <path d="M114 139.5 h12" stroke="currentColor" stroke-width="1.5"/>
+      </svg>
+      <span class="pill accent">Required for binaural</span>
+      <h4>Headphones (3.5 mm TRS)</h4>
+      <p>A binaural beat is produced by the listener's own auditory system from two
+      separated carriers, so <strong>a speaker physically cannot deliver one</strong>.</p>
+    </div>
+
+    <div class="part">
+      <svg viewBox="0 0 160 152" role="img" aria-label="Illustration of a microSD card with its bevelled corner and contact pads, labelled FAT32.">
+        <path d="M50 24 h50 a6 6 0 0 1 6 6 v92 a6 6 0 0 1 -6 6 h-46 a6 6 0 0 1 -6 -6 v-82 z"
+              fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M50 24 l-2 16 h18 z" fill="currentColor" opacity=".25"/>
+        <g fill="currentColor" opacity=".5">
+          <rect x="58" y="46" width="5" height="16" rx="1.5"/>
+          <rect x="65" y="46" width="5" height="16" rx="1.5"/>
+          <rect x="72" y="46" width="5" height="16" rx="1.5"/>
+          <rect x="79" y="46" width="5" height="16" rx="1.5"/>
+          <rect x="86" y="46" width="5" height="16" rx="1.5"/>
+          <rect x="93" y="46" width="5" height="16" rx="1.5"/>
+          <rect x="100" y="46" width="5" height="16" rx="1.5"/>
+        </g>
+        <text x="78" y="92" text-anchor="middle" fill="var(--fg-muted)" font-size="9">microSD</text>
+        <text x="78" y="106" text-anchor="middle" fill="var(--amber)" font-size="9" font-weight="650">FAT32</text>
+      </svg>
+      <span class="pill">Optional</span>
+      <h4>microSD card</h4>
+      <p>Holds the speech phrase library and background tracks, so a session runs with
+      <strong>no browser attached at all</strong>. Optional, but transformative.</p>
+    </div>
+
+    <div class="part">
+      <svg viewBox="0 0 160 152" role="img" aria-label="Illustration of a USB power bank with a USB-C output and a four-segment charge indicator, rated five volts.">
+        <rect x="38" y="24" width="84" height="104" rx="10" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.8"/>
+        <rect x="68" y="18" width="24" height="8" rx="4" fill="var(--fig-fill)" stroke="currentColor" stroke-width="1.5"/>
+        <g fill="var(--amber)">
+          <rect x="52" y="52" width="12" height="7" rx="2"/>
+          <rect x="68" y="52" width="12" height="7" rx="2"/>
+          <rect x="84" y="52" width="12" height="7" rx="2"/>
+          <rect x="100" y="52" width="12" height="7" rx="2" opacity=".25"/>
+        </g>
+        <text x="80" y="92" text-anchor="middle" fill="var(--fg)" font-size="15" font-weight="650">5 V</text>
+        <text x="80" y="110" text-anchor="middle" fill="var(--fg-muted)" font-size="8.5">board + both LED boards</text>
+      </svg>
+      <span class="pill">Power</span>
+      <h4>5 V USB supply or power bank</h4>
+      <p>Powers the board and both LED strings. Size it from the LED count, not the
+      MCU — see <a href="#power">Power</a>.</p>
+    </div>
+
+  </div>
+
 
   <div class="spec-table">
   <table>
@@ -532,6 +731,9 @@
         both pin maps above describe, and the one the session library is authored
         for.
       </p>
+
+
+
     </div>
     <div class="card">
       <h3>Lamp (room device)</h3>
@@ -544,7 +746,92 @@
         dual-channel warm/cold COB pair gives four driver channels, one per
         <code>LED_DIRECT_PIN_CH1..CH4</code>.
       </p>
+
+
     </div>
+  </div>
+
+
+  <h3 id="wearable-build">The wearable build, built</h3>
+
+  <figure class="photo">
+    <img src="../assets/hw/mask.jpg" loading="lazy" decoding="async"
+         alt="A padded black sleep mask with a wide elastic strap, seen from the inside. Two circular windows sit where the eyes go, and behind each is a square grid of white LED emitters visible through a perforated diffuser. A white USB-C cable leaves the top edge between the eye cups.">
+    <figcaption><strong>The wearable build.</strong> A commercial sleep mask with built-in
+    headphones, opened up and fitted with one NeoHEX board per eye — the pixels are visible
+    through the mask's own perforated panel, which doubles as the diffuser. The mask supplies
+    the light blocking and the audio; one USB-C cable leaves the top for power and data.</figcaption>
+  </figure>
+
+  <h3 id="shopping">Shopping list for the mask build</h3>
+
+  <p>Five things, around €50–60 all in. Marketplace listings rot quickly, so each row gives
+  a durable source where one exists and a <strong>search term</strong> where it does not —
+  search the term rather than trusting a link that may already be dead.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Item</th><th>Qty</th><th>Where / what to search for</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>YelloByte YB-ESP32-S3-DAC</strong></td>
+        <td>1</td>
+        <td><a href="https://www.ricardo.ch/en/s/YB-ESP32-S3/">ricardo.ch</a> (the maker's own
+            marketplace listings). Also on AliExpress for roughly €15 — search
+            <code>YB-ESP32-S3-DAC</code>. Make sure you get the <em>DAC</em> variant; the
+            plain YB-ESP32-S3 has no codec.</td>
+      </tr>
+      <tr>
+        <td><strong>M5Stack NeoHEX</strong>, 37 × WS2812</td>
+        <td>2</td>
+        <td><a href="https://shop.m5stack.com/products/neo-hex-37-rgb-led-board-ws2812">shop.m5stack.com</a>
+            — one per eye. Clones are on AliExpress; search
+            <code>NeoHEX 37 RGB LED WS2812</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>Sleep mask with built-in headphones</strong></td>
+        <td>1</td>
+        <td>The enclosure and the audio in one purchase. Search
+            <code>sleep mask bluetooth headphones 3D eye mask</code> and pick one with
+            <em>moulded eye cups</em> — the recess is what gives you the ≥ 25 mm standoff
+            and somewhere to put the boards. Wired or Bluetooth both work; you are using
+            the shell and the drivers, not its electronics.</td>
+      </tr>
+      <tr><td><strong>USB-C cable</strong></td><td>1</td>
+          <td>Power, flashing and serial log. Any data-capable cable — charge-only cables
+              will power the board but will not flash it.</td></tr>
+      <tr><td><strong>microSD card</strong>, FAT32</td><td>1</td>
+          <td>Optional. Any small card; capacity is irrelevant next to the few MB a speech
+              library needs.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <p><strong>No battery yet.</strong> The device runs from a USB power bank today.
+    On-board battery support — a cell, charging and a fuel gauge the firmware can read — is
+    not implemented, so there is no low-battery handling and nothing to report state of
+    charge. Treat it as a tethered device for now.</p>
+  </div>
+
+  <h3 id="lamp-build">The lamp build, built</h3>
+
+  <div class="photos">
+    <figure class="photo">
+      <img src="../assets/hw/lamp-full.jpg" loading="lazy" decoding="async"
+           alt="The lamp build seen side-on: a long aluminium LED fixture on a horizontal boom clamped to a chromed microphone stand. A pair of Sony over-ear headphones hangs from the boom, and a white sealed enclosure at the right end carries the electronics, with a USB cable leaving it.">
+      <figcaption><strong>Lamp build, assembled.</strong> The emitter and the electronics
+      enclosure share a boom on a mic stand, so the whole device aims at a seated
+      listener and the headphones hang where they are reached without looking.</figcaption>
+    </figure>
+    <figure class="photo">
+      <img src="../assets/hw/lamp-optics.jpg" loading="lazy" decoding="async"
+           alt="Close-up of the lamp's optics: two round lensed high-power LED modules bolted to an aluminium plate, their phosphor visible as yellow discs. Beside them are screw terminal blocks, several in-line driver modules, and bundles of red, black, yellow, green, blue and white wire gathered with cable ties and hook-and-loop wraps.">
+      <figcaption><strong>Lamp build, optics and drive.</strong> Two lensed high-power
+      emitters on an aluminium plate — the plate <em>is</em> the heatsink. The terminal
+      blocks and in-line modules beside them are the constant-current drivers; the ESP32
+      only ever sends them a PWM dimming signal.</figcaption>
+    </figure>
   </div>
 
   <div class="warn">
@@ -889,6 +1176,8 @@ idf.py build
 
 </main>
 
+</div>
+
 <footer class="site-foot">
   <p>
     Every pin, address and gain value on this page was read out of
@@ -902,5 +1191,6 @@ idf.py build
   </p>
 </footer>
 
+<script src="../assets/site.js"></script>
 </body>
 </html>

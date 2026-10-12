@@ -15,6 +15,10 @@
   <a href="../hardware/index.html">Hardware</a>
 </nav>
 
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
 <main class="page">
 
   <div class="hero">
@@ -28,6 +32,13 @@
   <h2>How saving works</h2>
 
   <p>The buttons at the bottom of the <span class="kbd">Settings</span> tab:</p>
+
+<figure class="shot">
+  <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>esp32-ave.local/#settings</span></div>
+  <img src="../assets/ui/settings.png" alt="The Device Settings tab showing the LED group with backend neopixel, data pin 18, LED count 16 and a channel map, and the Audio I2S group with BCK, WS, DATA, MCLK, DIN and amp enable pins." loading="lazy" decoding="async">
+  <figcaption><strong>Device Settings.</strong> Each group maps to one subsystem. The grey <em>(reboot to apply)</em> and <em>(applies immediately)</em> notes next to a field tell you which of the two kinds of setting you are touching — see below for why that distinction matters.</figcaption>
+</figure>
+
 
   <div class="spec-table">
   <table>
@@ -300,5 +311,8 @@
   the air</a>.</p>
 
 </main>
+
+</div>
+<script src="../assets/site.js"></script>
 </body>
 </html>

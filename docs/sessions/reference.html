@@ -17,6 +17,10 @@
   <a href="../hardware/index.html">Hardware</a>
 </nav>
 
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
 <main class="page">
 
 <div class="hero">
@@ -25,33 +29,6 @@
   every interpolation prefix. This page mirrors <code>ledc_format.md</code> revision v3, which was
   itself written by reading <code>main/config_parser.c</code> line by line. Where this page and the
   device disagree, the device is right and this page is a bug.</p>
-</div>
-
-<div class="toc">
-  <ul>
-    <li><a href="#lines">Line types and token counts</a></li>
-    <li><a href="#limits">Parse-time limits</a></li>
-    <li><a href="#order">Ordering and dispatch</a></li>
-    <li><a href="#led">LED line — column reference</a></li>
-    <li><a href="#audio">Audio line — column reference</a></li>
-    <li><a href="#bg">BG — background audio</a></li>
-    <li><a href="#speech">S — speech</a></li>
-    <li><a href="#dash">The <code>-</code> sentinel and absent trailing columns</a></li>
-    <li><a href="#compound">Compound cells: ramps and modulations</a></li>
-    <li><a href="#ranges">Ranges, and which path enforces them</a></li>
-    <li><a href="#env">
-      <code>env</code> — the pulse envelope</a></li>
-    <li><a href="#depth"><code>depth</code> — audio pulse depth</a></li>
-    <li><a href="#jitter"><code>jitter</code></a></li>
-    <li><a href="#phase"><code>phase</code></a></li>
-    <li><a href="#attack"><code>attack</code></a></li>
-    <li><a href="#wavetype"><code>waveType</code> — eight carriers</a></li>
-    <li><a href="#bright"><code>bright</code> and the drive curve</a></li>
-    <li><a href="#mixing">The mixing model — why <code>vol</code> is absolute</a></li>
-    <li><a href="#binaural">Binaural: two idioms</a></li>
-    <li><a href="#pathdep">Path-dependent behaviour</a></li>
-    <li><a href="#compat">Backward compatibility</a></li>
-  </ul>
 </div>
 
 <h2 id="lines">Line types and token counts</h2>
@@ -797,5 +774,8 @@ not format rules.</p>
 <a href="../sessions/authoring.html">authoring guide</a>.</p>
 
 </main>
+
+</div>
+<script src="../assets/site.js"></script>
 </body>
 </html>

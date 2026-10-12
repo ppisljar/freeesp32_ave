@@ -15,6 +15,10 @@
   <a href="../hardware/index.html">Hardware</a>
 </nav>
 
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
 <main class="page">
 
   <div class="hero">
@@ -48,6 +52,13 @@
   giving the partition it booted from and the ESP-IDF version it was built with.
   If it says <em>version unavailable</em> the device is not answering — fix that
   before attempting an update.</p>
+
+<figure class="shot">
+  <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>esp32-ave.local/#firmware</span></div>
+  <img src="../assets/ui/firmware-ota.png" alt="The Firmware Update tab. A banner reads "Current firmware: 1.4.2 (built Oct 12 2026 16:04:11), running: ota_0, IDF v5.5.2". Below it are an image file picker, a target dropdown set to Main app (ota_0), and a green Start Update button." loading="lazy" decoding="async">
+  <figcaption><strong>The Firmware tab.</strong> The banner names the running build and, crucially, <em>which partition</em> it booted from — <code>ota_0</code> here. That is the one number to write down before you update, because it is what you compare against afterwards to confirm the update actually took.</figcaption>
+</figure>
+
 
   <h2>Do the update</h2>
 
@@ -213,5 +224,8 @@
   <p><a href="../user-guide/troubleshooting.html">Troubleshooting</a>.</p>
 
 </main>
+
+</div>
+<script src="../assets/site.js"></script>
 </body>
 </html>

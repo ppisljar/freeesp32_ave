@@ -14,9 +14,11 @@ works if Pages is served from the repository root.*
 
 ---
 
-**Audio-Visual Entrainment (AVE) firmware** for the
-[`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer)
-ESP32 board.
+**Audio-Visual Entrainment (AVE) firmware** for off-the-shelf ESP32 audio
+boards. Developed and measured on the **YelloByte YB-ESP32-S3-DAC**, which
+carries the MCU, codec, headphone jack, speaker amp and microSD slot on one
+board; it also runs on classic ESP32 audio boards (AI-Thinker ESP32-A1S and
+generic ESP32 + I2S DAC).
 
 A **low-cost, open-source alternative** to commercial AVE / mind machines such as:
 
@@ -228,13 +230,16 @@ Speaker output is deliberately configured at the **minimum** class-D gain
 (6 dB), not the 24 dB the datasheet suggests — these boards are usually driven
 into small speakers right next to someone's head.
 
-### Original reference design
+### A note on the custom board
 
-The project was originally designed for the
+An open-hardware board,
 [`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer)
-open-hardware board (XIAO ESP32-S3 + CS4344 DAC + APA2068 speaker amp +
-microSD + configurable LED headers). The firmware still runs there
-unchanged; the pin map for it lives in `sdkconfig.glasses`.
+(XIAO ESP32-S3 + CS4344 DAC + APA2068 speaker amp + microSD + configurable LED
+headers), was drawn up early on as the intended target. **It was never
+fabricated, and the firmware has never run on one.** The YB-ESP32-S3-DAC turned
+out to cover the same ground as an off-the-shelf part, so the custom board is
+unlikely to be built. The KiCad design stays in that repo as a starting point
+for anyone who does want a purpose-made board.
 
 ## Build & flash
 
@@ -609,7 +614,7 @@ BG  sdcard://bg/river.wav  0  30
 
 | Repo | Role |
 |---|---|
-| [`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer) | Open-hardware ESP32 board (KiCad) |
+| [`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer) | Open-hardware ESP32 board (KiCad) — **designed, never fabricated**; not a supported target |
 | [`freeesp32_ave`](https://github.com/ppisljar/freeesp32_ave) | **This repo** — firmware |
 | [`freeesp32_ave_generator`](https://github.com/ppisljar/freeesp32_ave_generator) | Web session editor / timeline generator |
 

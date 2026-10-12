@@ -15,6 +15,10 @@
   <a href="../hardware/index.html">Hardware</a>
 </nav>
 
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
 <main class="page">
 
   <div class="hero">
@@ -236,6 +240,16 @@
   <p>The <span class="kbd">Generator</span> tab has its own transport bar for
   when you are editing rather than listening:</p>
 
+<figure class="shot">
+  <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>esp32-ave.local/#generator</span></div>
+  <img src="../assets/ui/generator-lanes.png" alt="The Generator tab in Lanes view, showing a loaded 22-entry session as a DAW-style timeline. A ruler runs from 0ms to 20:00. Under Audio ch 1 are automation lanes for Carrier, Pan, Volume and Iso, each drawn as a line with draggable points; a red playhead sits just before 8:00." loading="lazy" decoding="async">
+  <figcaption><strong>The Generator, Lanes view.</strong> The same session as a timeline rather
+  than as text — one lane per parameter, with a point at every entry and the line between them
+  showing the ramp. Text, Table, Lanes and Wizard are four views of <em>one</em> model, so an edit
+  in any of them is an edit to the same session.</figcaption>
+</figure>
+
+
   <ul>
     <li><span class="kbd">▶ Play</span> — plays the session you are editing,
       through exactly the same path as Home's play button (speech and background
@@ -256,5 +270,8 @@
   card</a>.</p>
 
 </main>
+
+</div>
+<script src="../assets/site.js"></script>
 </body>
 </html>

@@ -10,20 +10,17 @@
 # unplugged, which is the one property this site is built around.
 #
 # ---------------------------------------------------------------------------
-# PUBLISHING SOURCE — read this before changing the Pages setting
+# PUBLISHING SOURCE
 #
-# Every page links its siblings and its stylesheet with absolute paths that
-# include the folder name: /docs/index.html, /docs/assets/site.css. Those
-# resolve only when the published site root is the REPOSITORY root, i.e. the
-# Pages publishing source is "/ (root)" on the default branch, in which case
-# this file must be copied/moved to the repository root to take effect.
+# Every link in the site is RELATIVE (../assets/site.css, sessions/index.html),
+# so the site works unchanged whether Pages is served from "/docs" on the
+# default branch — which is the current setting — or from "/ (root)", in which
+# case this file must be copied to the repository root to take effect.
 #
-# If the publishing source is set to "/docs" instead, docs/ becomes the site
-# root, /docs/... gains an extra path segment and every link 404s. Fixing that
-# means one global edit — drop the /docs prefix from every href across
-# docs/index.html, docs/hardware/, docs/user-guide/ and docs/sessions/ — and it
-# has to be done in all four places at once, which is why the link style is a
-# documented convention and not a per-page choice. See docs/README.md.
+# An earlier revision of this comment claimed the pages used root-absolute
+# /docs/... hrefs and therefore required a root publishing source. That has not
+# been true for a long time, and acting on it would have broken a working site.
+# If you change the link style, change this paragraph in the same commit.
 # ---------------------------------------------------------------------------
 
 title: ESP32 AVE

@@ -15,6 +15,10 @@
   <a href="../hardware/index.html">Hardware</a>
 </nav>
 
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
 <main class="page">
 
   <div class="hero">
@@ -30,6 +34,13 @@
   <p>The <span class="kbd">Diagnostics</span> tab is deliberately a
   no-cable-needed substitute for a serial console. Before anything else, look
   at:</p>
+
+<figure class="shot">
+  <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>esp32-ave.local/#diagnostics</span></div>
+  <img src="../assets/ui/diagnostics.png" alt="The Diagnostics tab. Four green health pills read audio, led, wifi and sd. Tiles show last reset power-on, uptime 24m 40s, free heap 144.8 KB, free PSRAM 3.88 MB and log buffered 7.2 KB. An audio real-time row shows 0 underruns, 0 write errors, 88,412 buffers written and fill max 4932 microseconds at 21.2 percent of budget." loading="lazy" decoding="async">
+  <figcaption><strong>Diagnostics is the first place to look.</strong> Four health pills, the reset reason, memory, and the audio real-time counters. <em>Fill max as a percentage of budget</em> is the one to watch: it is how close the generator came to missing a DMA deadline, and anything approaching 100&nbsp;% explains clicks and dropouts.</figcaption>
+</figure>
+
 
   <ul>
     <li>the row of subsystem chips — a red chip names the subsystem that failed
@@ -445,5 +456,8 @@
   </ol>
 
 </main>
+
+</div>
+<script src="../assets/site.js"></script>
 </body>
 </html>

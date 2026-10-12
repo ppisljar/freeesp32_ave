@@ -15,6 +15,10 @@
   <a href="../hardware/index.html">Hardware</a>
 </nav>
 
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
 <main class="page">
 
   <div class="hero">
@@ -29,6 +33,13 @@
 
   <p>The page is titled <strong>ESP32 Audio/Video Entrainment</strong> and has a
   single row of tabs across the top, plus one button that is not a tab.</p>
+
+<figure class="shot">
+  <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>esp32-ave.local/#home</span></div>
+  <img src="../assets/ui/home-config.png" alt="The device web interface on the Home tab: seven tabs across the top, a red STOP button, and a Config panel with Upload, Play, a session dropdown and the session text." loading="lazy" decoding="async">
+  <figcaption><strong>The Home tab.</strong> Seven tabs across the top, and the red <span class="kbd">STOP</span> always in reach. The Config panel is where a session is chosen, uploaded or pasted; the box below shows the raw <code>.ledc</code> text of whatever is loaded.</figcaption>
+</figure>
+
 
   <div class="spec-table">
   <table>
@@ -75,6 +86,13 @@
   <p>Live Control talks straight to the running engine. It is the most
   interesting screen on the device and the easiest one to misread, because it is
   a mixing desk, not a form you submit — every drag takes effect immediately.</p>
+
+<figure class="shot">
+  <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>esp32-ave.local/#live</span></div>
+  <img src="../assets/ui/live-control.png" alt="The Live Control tab showing eight audio channel rows. A1 reads freq 200.000 and R-freq 206.000 with a green active dot; A2 reads 250.000 with mod-f 10. The remaining channels are greyed out at zero." loading="lazy" decoding="async">
+  <figcaption><strong>Live Control during a session.</strong> A1 is a binaural pair — 200.000&nbsp;Hz left against 206.000&nbsp;Hz right, a 6&nbsp;Hz beat — and A2 is a 250&nbsp;Hz carrier gated at 10&nbsp;Hz. The green dot marks an active channel; idle channels stay greyed. Sliders animate over one second and pause polling while you drag them.</figcaption>
+</figure>
+
 
   <p>Three things to know before you touch anything:</p>
 
@@ -402,5 +420,8 @@
   session</a>.</p>
 
 </main>
+
+</div>
+<script src="../assets/site.js"></script>
 </body>
 </html>
