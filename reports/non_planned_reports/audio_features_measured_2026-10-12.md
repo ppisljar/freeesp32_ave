@@ -107,3 +107,48 @@ painful jump. Sensible options, in increasing caution:
 
 Any of these should be verified by re-measuring the int16 peak at vol 100 before
 and after, and by confirming no `short_writes` / clipping in `/api/audiostats`.
+
+
+## Isochronic gating: env 1 "SINE" was a parabola (FIXED)
+
+400 Hz carrier gated at 8 Hz, duty 50, envelope harmonics measured from the
+demodulated carrier amplitude:
+
+| env | h2 before | h2 after | h3 before | h3 after |
+|---|---|---|---|---|
+| 0 SQUARE | 0.001 | 0.000 | 0.333 | 0.332 |
+| **1 SINE** | **0.251** | **0.002** | **0.112** | **0.001** |
+| 2 TRIANGLE | 0.001 | 0.001 | 0.114 | 0.110 |
+| 3 TRAPEZOID | 0.076 | 0.076 | 0.321 | 0.321 |
+| 4 TREMOLO | 0.000 | 0.002 | 0.000 | 0.001 |
+
+`iso_gate()` returned `4*ph*(1-ph)` for ISO_ENV_SINE, with a comment claiming it
+"matches (1-cos)/2". It does not: the parabola looks like a similar hump but has
+a derivative discontinuity at the cycle boundary, so its harmonics fall as 1/n^2
+instead of vanishing.
+
+**This is the same defect that was fixed on the LED side earlier the same day**
+(`led_carrier_level_iram`), and the numbers confirm it is literally the same
+shape: the LED path measured h2 = 0.286 / h3 = 0.145 before its fix, the audio
+path 0.251 / 0.112.
+
+Why it matters therapeutically rather than cosmetically: an 8 Hz (alpha)
+isochronic "sine" gate was simultaneously driving **16 Hz at a quarter of the
+fundamental** and 24 Hz at a ninth -- beta-band content inside an alpha session.
+For a device whose purpose is brainwave entrainment at a chosen frequency, a
+quarter-amplitude neighbour two octaves of band away is a real contaminant.
+
+Fixed by reading the carrier's existing sine LUT: `0.5 - 0.5*cos(2*pi*ph)` via
+`fast_sin_q32(phase + 0x40000000)`, since `cos(x) = sin(x + pi/2)`. A float gate
+avoids the trap the LED fix hit, where the replacement LUT had to be clamped to
+65535 because the Q16 peak of 65536 does not fit a uint16_t.
+
+The other four envelopes are unchanged, which is the point: square still 0.332
+(theory 0.333), triangle 0.110 (theory 0.111), trapezoid identical, tremolo ~0.
+
+Also verified in the same capture: the gate RATE is 8.0107 Hz against a commanded
+8.000, and the `duty` field is accurate -- commanded 25% / 75% measured 25.08% /
+75.03%. Note `duty` does NOT apply to env 1 or 2 (the shape spans the full cycle
+by construction), which is why env 1's apparent "duty" reads 66.67%: that is the
+fraction of the cycle a raised sine spends above its own mid-level, not a
+setting being ignored.

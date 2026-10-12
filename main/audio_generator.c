@@ -169,6 +169,9 @@ static inline float iso_trapezoid_env(uint32_t mod_phase_q32, float duty, float 
 
 // Unified unipolar pulse gate g∈[0,1] for env 0..3 (square/sine/triangle/trapezoid).
 // square uses `duty`; sine/triangle are full-cycle shapes; trapezoid uses duty+attack.
+/* Needed by iso_gate below, which sits above the LUT helpers. */
+static inline float fast_sin_q32(uint32_t phase_q32);
+
 static inline float iso_gate(uint32_t mod_phase_q32, uint8_t env, float duty, float attack_frac) {
     float ph = (float)mod_phase_q32 * (1.0f / 4294967296.0f); // 0..1
     switch (env) {
@@ -176,10 +179,28 @@ static inline float iso_gate(uint32_t mod_phase_q32, uint8_t env, float duty, fl
         case ISO_ENV_TRIANGLE: return (ph < 0.5f) ? (2.0f * ph) : (2.0f - 2.0f * ph);
         case ISO_ENV_TRAPEZOID:return iso_trapezoid_env(mod_phase_q32, duty, attack_frac);
         case ISO_ENV_SINE:
-        default: {             // raised sine ≈ 4·ph·(1−ph) (matches (1−cos)/2)
-            float g = 4.0f * ph * (1.0f - ph);
-            return g > 1.0f ? 1.0f : g;
-        }
+        default:
+            /* TRUE raised sine, 0.5 - 0.5*cos(2*pi*ph), read from the carrier's
+             * own LUT. cos(x) = sin(x + pi/2), hence the quarter-cycle offset.
+             *
+             * This was `4*ph*(1-ph)` with a comment claiming it "matches
+             * (1-cos)/2". It does not. The parabola looks like a similar hump but
+             * has a DERIVATIVE DISCONTINUITY at the cycle boundary, so its
+             * harmonics fall as 1/n^2 instead of vanishing. The identical defect
+             * was fixed on the LED side earlier (led_carrier_level_iram, where
+             * the replacement LUT then had to be clamped to 65535 because 65536
+             * does not fit a uint16_t -- a float gate has no such trap).
+             *
+             * Measured on this audio path BEFORE the fix, an 8 Hz isochronic
+             * "sine" gate: h2/h1 = 0.251, h3/h1 = 0.112. So an 8 Hz alpha gate
+             * was also driving 16 Hz at a QUARTER of the fundamental and 24 Hz at
+             * a ninth -- beta-band content inside an alpha session, which for
+             * brainwave entrainment is not a cosmetic difference. The LED side
+             * measured 0.286 / 0.145 before its fix, confirming the same shape.
+             *
+             * A true raised sine has only DC and the fundamental, so h2 and h3
+             * should measure ~0 after this. */
+            return 0.5f - 0.5f * fast_sin_q32(mod_phase_q32 + 0x40000000u);
     }
 }
 
