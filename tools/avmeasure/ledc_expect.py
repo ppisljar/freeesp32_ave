@@ -1112,20 +1112,27 @@ class _Simulator:
                                    f"channel's +46.4 ms cycle anchor arrives, so "
                                    f"it never emits a single edge")
                         else:
-                            why = (f"leaves the channel flickering at "
+                            live_hz = self._live_led(ch, "freq", t_end)
+                            how = ("holds the channel steady-on (DC)"
+                                   if live_hz == 0.0 else
+                                   "leaves the channel flickering")
+                            why = (f"{how} at "
                                    f"{live_bright:.0f}% brightness, but the "
-                                   f"end-of-timeline handler stops all flicker "
-                                   f"in the same dispatch, so that final state "
-                                   f"lasts zero time")
+                                   f"end-of-timeline handler stops EVERY channel "
+                                   f"in the same dispatch "
+                                   f"(config_parser.c:2164, mask 0xFF -- a DC "
+                                   f"channel is stopped too), so that final "
+                                   f"state lasts zero time")
                         self.lints.append(Finding(
                             code="LEDC_LAST_ENTRY_CANCELLED", severity="warning",
                             domain="led", channel=ch + 1, t_ms=float(last_ms),
                             observed=live_bright, unit="%",
                             message=f"LED ch{ch + 1}: the final entry at "
                                     f"t={last_ms} ms {why}. End the session with "
-                                    f"brightness 0 (or freq 0) to make the intent "
-                                    f"explicit.",
-                            detail="config_parser.c:2104-2111, "
+                                    f"brightness 0 (or freq -1) to make the "
+                                    f"intent explicit -- note that freq 0 is a DC "
+                                    f"channel now, not a stop.",
+                            detail="config_parser.c:2164, "
                                    "led_matrix_example.c:712"))
                     # freq/duty/bright/rgb are RETAINED across a stop
                     # (led_matrix_example.c:1532-1545 clears only led_state,

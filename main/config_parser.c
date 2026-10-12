@@ -2157,10 +2157,17 @@ static void timeline_execution_task(void *pvParameters)
             timeline_running = false;
             // Session ended: stop any LED flicker still running on masks the
             // timeline didn't explicitly zero, so the device returns to idle
-            // instead of flickering forever. Real sessions fade brightness to 0
-            // at the end, so this is a no-op for them; it fixes sessions/tests
-            // that leave a mask active (audio is left as-is — it's already faded
-            // to silence and abrupt teardown here would risk a click).
+            // instead of flickering forever. Audio is left as-is — it has
+            // already faded to silence and an abrupt teardown here would risk a
+            // click.
+            //
+            // This is NOT a no-op for DC channels. The mask is 0xFF, so a
+            // session that deliberately ends with a steady lamp on (freq 0 at a
+            // high brightness — 05_focus_smr and 06_energize both do, "light
+            // STAYS ON and BRIGHTENS") has that final state cancelled in the
+            // same dispatch and the lamp snaps dark. Cosmetic, since the session
+            // is over, but it does defeat the authored "alert end" intent.
+            // avmeasure flags it as LEDC_LAST_ENTRY_CANCELLED.
             led_matrix_stop_flicker_masked(0xFF);
             // Lock-free operation - no mutex needed
         }
