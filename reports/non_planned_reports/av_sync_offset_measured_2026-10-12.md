@@ -291,3 +291,25 @@ Armed unconditionally for an already-running channel rather than gating on
 `freq_curve == LED_INTERP_NONE` at the call site: the ISR already decides whether
 a fixed lattice exists (no freq sweep, no freq mod, no jitter), so that judgement
 stays in one place instead of being duplicated.
+
+
+## Final verification (all four fixes on the device)
+
+Entry time swept across one old period, two runs each, both blocks measured:
+
+| entry | run | 8 Hz block (fresh start) | 6 Hz block (rate change) |
+|---|---|---|---|
+| 9000 ms | 1 | -2.52 ms | -2.68 ms |
+| 9000 ms | 2 | -3.09 ms | -2.80 ms |
+| 9040 ms | 1 | -3.04 ms | -2.95 ms |
+| 9040 ms | 2 | -3.17 ms | -3.05 ms |
+| 9080 ms | 1 | -3.53 ms | -3.03 ms |
+| 9080 ms | 2 | -2.99 ms | -3.01 ms |
+
+All twelve within -2.52..-3.53 ms (1.0 ms spread), independent of entry
+alignment and of whether the rate changed. Audio health across the run:
+0 write_errors, 0 short_writes, 0 gen_fail, fill_avg 910 us of a 23220 us budget.
+
+Where this started: a random 0..23 ms offset re-rolled every session start, plus
+a 25-42 ms jump at every rate change, plus a further up-to-+/-62 ms depending on
+where the entry fell relative to the old period.
