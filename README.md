@@ -1,5 +1,19 @@
 # freeesp32_ave
 
+### 📖 [Documentation & project site → ppisljar.github.io/freeesp32_ave](https://ppisljar.github.io/freeesp32_ave/)
+
+| | |
+|---|---|
+| [**User guide**](https://ppisljar.github.io/freeesp32_ave/user-guide/) | connecting, the web UI, playing sessions, settings, OTA, troubleshooting |
+| [**Session developer**](https://ppisljar.github.io/freeesp32_ave/sessions/) | a page per entrainment modality, the complete `.ledc` reference, authoring guide |
+| [**Hardware**](https://ppisljar.github.io/freeesp32_ave/hardware/) | both builds — parts, wiring, LED topology, flashing, making your own |
+
+*Site source is in [`docs/`](docs/). GitHub Pages must be pointed at the `docs`
+folder on the default branch; every link in the site is relative, so it also
+works if Pages is served from the repository root.*
+
+---
+
 **Audio-Visual Entrainment (AVE) firmware** for the
 [`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer)
 ESP32 board.
