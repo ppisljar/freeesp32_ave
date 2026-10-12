@@ -186,3 +186,51 @@ the symptom reads as sample loss but is really truncation, and that the earlier
 
 Fixed by clearing any previous recorder at the START of a capture rather than
 after a failure.
+
+## 8. env carrier shapes re-measured; TRAPEZOID even harmonics unexplained (OPEN)
+
+Regression check on the `env` carriers after today's changes, 10 Hz, duty 50,
+bright 100, RGB 255 (effective drive 255, inside the linear region), default
+attack. Light ch1, signal gate +34..38 dB.
+
+| env | measured h2/h3/h4 | documented |
+|---|---|---|
+| 0 SQUARE | 0.004 / 0.345 / 0.003 | 0.004 / 0.346 / 0.003 |
+| 1 SINE | 0.084 / 0.020 / 0.052 | 0.058 / 0.004 / 0.010 |
+| 2 TRIANGLE | 0.043 / 0.106 / 0.034 | 0.061 / 0.139 / 0.022 |
+| 3 TRAPEZOID | 0.547 / 0.330 / 0.518 | 0.081 / 0.310 / 0.073 |
+
+SQUARE reproduces the documented values to the third decimal, which is what
+establishes that the measurement chain is sound here. The sine-LUT fix holds:
+h3 = 0.020 against the 0.145 the old 4x(1-x) parabola produced.
+
+TRAPEZOID is the open item: h2 = 0.547 and h4 = 0.518, roughly 6x the documented
+figures, while h3 (0.330 vs 0.310) agrees. Large EVEN harmonics mean the waveform
+is asymmetric, and a 50%-duty trapezoid with symmetric edges should have
+essentially none -- reading `led_carrier_level_iram`, the rise occupies
+`[0, a)` and the fall `(duty-a, duty]` with `a` clamped to `duty/2`, which is
+symmetric by construction. At duty 50 and attack 3 ms the clamp is not active
+(a = 1966 of 32768), so that is not the explanation either.
+
+NOT diagnosed, and deliberately not guessed at. Possibilities to separate:
+the documented row may have been taken at a different `attack` or duty; the
+NeoPixel backend's per-tick refresh may interact with the smooth carrier
+differently than with a gate; or the trapezoid really is asymmetric somewhere
+between `shape_q16` and the strip. Measure h2 against a sweep of `attack` and of
+`duty` before touching any code -- if h2 tracks attack, it is the shape; if it
+does not, look at the output path.
+
+## 9. Rig note: ch2 sensor connection is intermittent
+
+The ch2 photocell measured cleanly on a mask-15 session earlier in the day
+(percycle timing noise 0.063 ms, 0 anomalies) and then, an hour later on the same
+mask and a brighter setting, carried no usable flicker at all: the 10 Hz line sat
++1.1..+3.5 dB over its neighbourhood (below the 6 dB "NO SIGNAL" bar) and the
+waveform was visibly dominated by 50 Hz mains at +/-0.004 against ch1's +/-0.024.
+
+Analysing that channel without gating produced completely fictional harmonic
+ratios (h2/h1 of 3.59 for SINE, 12.84 for TRAPEZOID -- a second harmonic larger
+than the fundamental, which is physically impossible for those shapes). This is
+the same trap `signalcheck.py` exists to catch, and the lesson is to run the gate
+BEFORE interpreting, not after the numbers look odd. Resolder/reseat ch2 and
+re-check before trusting any two-channel result.
