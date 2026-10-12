@@ -1350,9 +1350,30 @@ static esp_err_t version_handler(httpd_req_t *req)
     if (desc) {
         cJSON_AddStringToObject(root, "version", desc->version);
         cJSON_AddStringToObject(root, "project", desc->project_name);
+        // compile_date/compile_time come from esp_app_desc.c's __DATE__/__TIME__,
+        // and IDF does NOT force that object to recompile -- so these stay at
+        // whenever esp_app_format last happened to build. A freshly flashed app
+        // can report a date days old, which makes them WORTHLESS for answering
+        // "did my deploy land?" (they reported Oct 10 for an Oct 12 image whose
+        // flash digest verified). Kept for continuity, but use elf_sha256.
         cJSON_AddStringToObject(root, "compile_date", desc->date);
         cJSON_AddStringToObject(root, "compile_time", desc->time);
         cJSON_AddStringToObject(root, "idf_ver", desc->idf_ver);
+
+        // THE reliable build identity: the ELF hash is recomputed at every link,
+        // so it changes whenever anything in the image changes. Compare it with
+        //   esp_app_desc of build/esp32_audioplayer.bin
+        // to confirm the running image is the one you just built.
+        {
+            char sha[17];
+            for (int i = 0; i < 8; i++) {
+                static const char hexd[] = "0123456789abcdef";
+                sha[i * 2]     = hexd[(desc->app_elf_sha256[i] >> 4) & 0xF];
+                sha[i * 2 + 1] = hexd[desc->app_elf_sha256[i] & 0xF];
+            }
+            sha[16] = '\0';
+            cJSON_AddStringToObject(root, "elf_sha256", sha);
+        }
     }
     if (running) {
         cJSON_AddStringToObject(root, "partition", running->label);
