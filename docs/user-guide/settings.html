@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>Settings</h1>
+    <p class="lead">What you are trying to achieve: change something about the
+    device without breaking it. Most of this page describes the hardware your
+    device is wired as, which you set once and then leave alone. A handful of
+    entries are genuinely day-to-day.</p>
+  </div>
+
+  <h2>How saving works</h2>
+
+  <p>The buttons at the bottom of the <span class="kbd">Settings</span> tab:</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Button</th><th>Does</th></tr></thead>
+    <tbody>
+      <tr><td><span class="kbd">Save</span></td>
+        <td>Writes the whole form to the device's permanent storage and reloads
+          it back into the page. Confirms <em>Settings saved (reboot to apply
+          hardware changes)</em>.</td></tr>
+      <tr><td><span class="kbd">Save &amp; Reboot</span></td>
+        <td>Saves, then restarts the device so hardware changes take effect. The
+          page will be unreachable for a few seconds.</td></tr>
+      <tr><td><span class="kbd">Restore Defaults</span></td>
+        <td>Asks <em>Restore all settings to firmware defaults?</em> and then
+          resets everything — including your WiFi credentials, which means the
+          device comes back on its own access point.</td></tr>
+      <tr><td><span class="kbd">Reload</span></td>
+        <td>Discards your unsaved edits and re-reads the device's current
+          values.</td></tr>
+      <tr><td><span class="kbd">⬇ Export settings</span></td>
+        <td>Downloads the live configuration as
+          <code>freeesp32_ave-settings-&lt;timestamp&gt;.json</code>. The WiFi
+          password is not included.</td></tr>
+      <tr><td><span class="kbd">⬆ Import settings</span></td>
+        <td>Loads a previously exported file <strong>into the form for
+          review</strong>. Nothing is applied until you press
+          <span class="kbd">Save</span>. Importing preserves the device's stored
+          password, since the export never contained it.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The form hides what does not apply to you. Choose the direct-GPIO LED
+  backend and the addressable-strip fields disappear; set the codec to
+  <em>none</em> and the codec I2C fields go away. Hidden fields keep their
+  values — they are just not in your way. Every field has an
+  <span class="kbd">ⓘ</span> icon with help text on hover.</p>
+
+  <p>Dropdown options your firmware was not built with appear greyed out and
+  marked <em>(not compiled in)</em>. That is information, not a fault: it tells
+  you which LED backends and audio codecs this particular build can actually
+  drive.</p>
+
+  <h2>Safe to change any time</h2>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Setting</th><th>Group</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Maximum volume (0-200)</strong></td>
+        <td>Audio I2S</td>
+        <td>A master gain in percent, applied to everything.
+          <strong>Takes effect immediately — no reboot.</strong> 100 means no
+          change; 10 would make a session authored at volume 80 play at 8&nbsp;%.
+          Above 100 it <em>boosts</em>, which is often what you want (see
+          below), at the cost of possible clipping on loud content.</td>
+      </tr>
+      <tr>
+        <td><strong>Default volume (0-1)</strong></td>
+        <td>Audio I2S</td>
+        <td>The output volume applied at startup, 0.0 to 1.0. A seed for the next
+          boot, not a live control.</td>
+      </tr>
+      <tr>
+        <td><strong>Store reports in</strong></td>
+        <td>Reports</td>
+        <td><em>none</em> (display only), <em>local</em> (this browser) or
+          <em>spiffs</em> (on the device). Reports are also uploaded to the
+          generator whenever its URL is set.</td>
+      </tr>
+      <tr>
+        <td><strong>Generator URL</strong></td>
+        <td>Network</td>
+        <td>Base URL of an external generator server used to load and save
+          sessions and upload reports. Leave blank to disable those features.
+          Read at boot.</td>
+      </tr>
+      <tr>
+        <td><strong>mDNS hostname</strong></td>
+        <td>WiFi</td>
+        <td>The name before <code>.local</code>. Needs a reboot, but entirely
+          safe — the device is still reachable by IP and on its access point if
+          you get it wrong. Only letters, digits and hyphens survive.</td>
+      </tr>
+      <tr>
+        <td><strong>WiFi SSID</strong> / <strong>WiFi password</strong></td>
+        <td>WiFi</td>
+        <td>Needs a reboot. Safe in the sense that it cannot brick anything: a
+          network it cannot join just sends it to its own access point, which you
+          can always reach. The stored password is never displayed — leave the
+          field blank to keep it.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Turning the volume up</h3>
+
+  <p><strong>Maximum volume</strong> is the setting most people need and the one
+  least obvious from its name. The audio engine permanently reserves headroom
+  for sixteen simultaneous channels, whether or not they are in use, so a single
+  tone at full channel volume with this cap at 100 leaves the device output at
+  about <strong>−27&nbsp;dBFS</strong> — some 24&nbsp;dB of range unused. No
+  shipped session uses more than four channels at once, so almost every session
+  is quieter than it needs to be.</p>
+
+  <div class="warn">
+    <strong>Raise it in small steps, with the headphones off your head.</strong>
+    This is a head-worn device. Go from 100 to 200 while wearing headphones set
+    for the quiet output and you get a sudden, possibly painful jump. Change the
+    number, check the level at arm's length, then put them on.
+  </div>
+
+  <h2>Hardware settings: set once, then leave alone</h2>
+
+  <p>Everything else on the page describes how your device is physically built,
+  and takes effect only after a reboot. These are the groups:</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Group</th><th>What it describes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>LED</strong></td>
+        <td><strong>Backend</strong> — <em>neopixel</em> (WS2812/SK6812, one data
+          wire), <em>dotstar</em> (APA102, data + clock), or <em>direct</em>
+          (eight discrete GPIOs driven by PWM, brightness only, no colour) —
+          plus the data and clock pins, LED count, channel map, logical grid
+          size, the eight direct-channel pins and their active-low mask, and the
+          DotStar SPI clock. Changing the backend changes what the
+          <span class="kbd">Live Control</span> LED rows can do.</td></tr>
+      <tr><td><strong>Audio I2S</strong></td>
+        <td>The digital audio pins — BCK, WS, DATA out, MCLK, DIN — the amplifier
+          enable pin, and the two volume settings above. <code>-1</code> means
+          "not wired" for the optional ones.</td></tr>
+      <tr><td><strong>Audio Codec</strong></td>
+        <td>Which external codec chip controls the audio output
+          (<em>none</em> for a passive DAC on raw I2S), and its I2C port, SDA,
+          SCL, bus frequency and reset pin.</td></tr>
+      <tr><td><strong>SD Card</strong></td>
+        <td>The four SPI pins for the microSD card. Only shown when the firmware
+          has SD support compiled in.</td></tr>
+      <tr><td><strong>Controls</strong></td>
+        <td><strong>Button GPIO</strong> — the momentary button (wired to ground,
+          internal pull-up). Short press logs a live-state snapshot, a
+          three-second hold stops everything, and holding it during power-on
+          forces setup mode. <code>-1</code> disables it, which also removes your
+          hardware escape route into setup mode.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <p><strong>If the audio is silent and the codec seems fine, check the codec
+    reset pin.</strong> A codec held in reset acknowledges nothing on I2C, so the
+    whole bus scans as empty and it looks like a wiring or a chip fault. Set
+    <strong>Codec ~RESET pin</strong> to <code>-1</code> if your board ties the
+    codec's reset to the board reset and the firmware should not touch it.</p>
+  </div>
+
+  <h2>The device refuses some pin numbers. That is on purpose.</h2>
+
+  <p>If you type certain GPIO numbers into a pin field and press
+  <span class="kbd">Save</span>, the save fails with an error naming the field,
+  something like:</p>
+
+  <p><code>Save failed: Error: HTTP 400</code> — and in the response body,
+  <code>settings apply failed: led_data_pin = GPIO 6: wired to the SPI flash or
+  PSRAM</code>.</p>
+
+  <p><strong>This is a guard, not a bug.</strong> Some of the chip's pins are
+  bonded to the flash memory the firmware lives in and to the PSRAM it runs
+  from. They are real, usable-looking pins, and the chip's own
+  "is this a valid GPIO" check says yes to them — it answers "does this pad
+  exist", not "is it safe to use". Assign one to an LED or an I2S line and the
+  bad value is written to permanent storage <em>before</em> the reboot that
+  would apply it. The device then reconfigures a flash line as an output at boot
+  and can no longer read its own firmware: a boot loop that cannot be fixed over
+  the network, only by plugging in a USB cable and reflashing it by hand.</p>
+
+  <p>So the firmware keeps a list of those pins, snapshotted at startup before
+  any driver has claimed anything, and refuses them outright. There is no
+  legitimate use for them, so there is no trade-off being made on your behalf.
+  Two possible reasons appear:</p>
+
+  <ul>
+    <li><code>wired to the SPI flash or PSRAM</code> — the pin exists but
+      belongs to the memory bus. Pick another.</li>
+    <li><code>not a GPIO on this chip</code> — the pin number is out of range or
+      that pad is not present on your chip variant.</li>
+  </ul>
+
+  <div class="warn">
+    <strong>A rejected save discards the whole form.</strong> The request is
+    all-or-nothing, so one bad pin number means none of your other edits were
+    applied either — including the <strong>WiFi password</strong>, which the
+    device never sends back to the page and which therefore cannot be
+    re-populated for you. After a rejection: fix the pin, <strong>re-type the
+    WiFi password if you had entered one</strong>, and save again. The error
+    always names the first offending field, so you know where to look.
+  </div>
+
+  <p>Two related behaviours worth knowing about:</p>
+
+  <ul>
+    <li><strong>Stored bad pins get disarmed at boot.</strong> If a value from an
+      older firmware or a build-time default happens to name one of these pins,
+      the firmware forces it to <code>-1</code> at startup — that feature goes
+      quiet instead of fighting the memory bus — and writes the correction back
+      so it does not reappear every boot. You will see it in the device log on
+      the <span class="kbd">Diagnostics</span> tab. A feature that mysteriously
+      stopped working after an update is worth checking for here.</li>
+    <li><strong>Two settings claiming the same pin is only a warning.</strong>
+      The firmware logs <code>GPIO 5 claimed by BOTH 'button' and 'i2s_bck' —
+      peripherals will interfere; fix one in Settings</code> and carries on,
+      because an inactive backend's pins are harmless. This has caused
+      genuinely baffling symptoms before — a button on the audio bit clock gave
+      perfect clocks and total silence — so if something is inexplicably dead,
+      read the boot log for that line before suspecting the hardware.</li>
+  </ul>
+
+  <h2>Browser preferences</h2>
+
+  <p>Below the device settings is a separate section stored in your browser, not
+  on the device. Different laptop, different settings.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Setting</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Speech (TTS) engine</strong></td>
+        <td>Which engine speaks the narration in sessions that have it.
+          <em>Puter.js (browser, neural — no key)</em> runs in your browser and
+          needs internet there, and may prompt a Puter sign-in.
+          <em>Google (proxied via the device)</em> needs the <em>device</em> to
+          be online. Changing it changes the voice.</td></tr>
+      <tr><td><span class="kbd">⤓ Preload all speech</span></td>
+        <td>Synthesises every phrase in every session now and caches it in this
+          browser, so you can play speech sessions later with no internet. Run it
+          again after changing the engine or adding sessions.</td></tr>
+      <tr><td><span class="kbd">⇪ Sync speech to SD card</span></td>
+        <td>Uploads those phrases to the device's card so sessions run with no
+          browser at all. See
+          <a href="../user-guide/offline-sd.html">offline playback</a>.</td></tr>
+      <tr><td><span class="kbd">Show safety info again</span></td>
+        <td>Clears this browser's acknowledgement of the
+          epilepsy/photosensitivity notice, so it is shown again before the next
+          flicker session. The status line above the button tells you which state
+          you are in.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="warn">
+    <strong>Reset the safety notice before lending the device to someone.</strong>
+    The acknowledgement is per browser, not per person — once you have clicked
+    through it, nobody else using that browser will ever see it.
+  </div>
+
+  <h2>A note on security</h2>
+
+  <p>None of the device's interface is authenticated. Anyone who can reach it on
+  the network can change every setting here, upload files, start a session or
+  push firmware to it. Keep it on a network you trust and never expose it to the
+  internet.</p>
+
+  <h2>Next</h2>
+
+  <p><a href="../user-guide/firmware-update.html">Updating the firmware over
+  the air</a>.</p>
+
+</main>
+</body>
+</html>

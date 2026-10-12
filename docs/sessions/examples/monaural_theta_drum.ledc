@@ -1,0 +1,52 @@
+# monaural_theta_drum.ledc — documentation example, ~20 min
+# Monaural beat: two centre-panned carriers that SUM IN THE AIR, so the beat is
+# already present in the acoustic signal before it reaches the ear.
+#
+# ch1 holds 200 Hz. ch2 starts at 208 Hz (beat 8 Hz) and ramps to 204.5 Hz
+# (beat 4.5 Hz) — the shamanic-drum rate. Both are pan 0: with any other pan the
+# two carriers reach the ears at different levels and the acoustic sum is no
+# longer a clean 100%-depth beat.
+#
+# NO HEADPHONES NEEDED. A single speaker, or one earbud, carries the full beat.
+# The modulation is ~100% of the summed envelope, against a binaural beat's
+# roughly 3 dB of effective modulation, which is why monaural is the more robust
+# driver for waking states.
+#
+# SAFETY: not a medical device. Do not use if you have photosensitive epilepsy,
+# a seizure disorder or a history of photic migraine; never while driving.
+# All flicker is <= 8 Hz, below the 15-25 Hz photosensitive band; brightness is
+# capped at 22% and ramps in over 15 s / out over 60 s.
+#
+# LED   : time freq duty bright R G B mask env phase attack
+# Audio : A time freq pan vol mod ch freqR waveType
+
+# --- Induction, 8 Hz (00:00-02:00) ---
+0 8 50 >0 220 110 0 15 3 0 6          # amber trapezoid "drum flash", 6 ms edge; bright 0 -> 22
+A 0 200 0 >0 0 1 0 0                  # ch1 anchor carrier 200 Hz, centre; vol ramps 0 -> 45
+A 0 208 0 >0 0 2 0 0                  # ch2 carrier 208 Hz, centre => 8 Hz beat in the air
+15000 8 50 22 220 110 0 15 3 0 6      # brightness reaches the 22% cap
+A 60000 200 0 45 0 1 0 0              # ch1 vol settled 45
+A 60000 208 0 45 0 2 0 0              # ch2 vol settled 45 (matched levels => deepest beat)
+
+# --- Deepen, beat 8 -> 4.5 Hz over 5 min (~0.7 Hz/min) (02:00-07:00) ---
+A 120000 200 0 45 0 1 0 0             # ch1 stays put: only ONE carrier moves
+A 120000 >208 0 45 0 2 0 0            # ch2 ramps 208 -> 204.5 => beat 8 -> 4.5
+120000 >8 50 22 220 110 0 15 3 0 6    # light tracks the beat 1:1
+
+# --- Hold, 4.5 Hz, 10 min (07:00-17:00) ---
+A 420000 200 0 45 0 1 0 0             # anchor held
+A 420000 204.5 0 45 0 2 0 0           # beat held flat at 4.5 Hz
+420000 4.5 50 22 220 110 0 15 3 0 6   # 4.5 Hz amber flash, 1:1 with the drum
+
+# --- Callback, 4.5 -> 9 Hz (17:00-19:00) ---
+A 1020000 200 0 45 0 1 0 0
+A 1020000 >204.5 0 45 0 2 0 0         # ch2 204.5 -> 209 => beat 4.5 -> 9
+1020000 >4.5 50 22 220 110 0 15 3 0 6
+
+# --- Close (19:00-20:00) ---
+A 1140000 200 0 >45 0 1 0 0           # both carriers fade together
+A 1140000 209 0 >45 0 2 0 0
+1140000 9 50 >22 220 110 0 15 3 0 6
+A 1200000 200 0 0 0 1 0 0
+A 1200000 209 0 0 0 2 0 0
+1200000 9 50 0 220 110 0 15 3 0 6

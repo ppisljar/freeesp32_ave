@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connecting to the device — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>Connecting to the device</h1>
+    <p class="lead">What you are trying to achieve: get the device's control
+    page open in a browser. The whole interface is served by the device itself,
+    so there is nothing to install — you just need to reach it.</p>
+  </div>
+
+  <h2>The short answer</h2>
+
+  <p>Type <code>http://esp32-ave.local</code> into a browser on the same
+  network as the device. That name works whether the device joined your WiFi or
+  is running its own, so it is the one address worth remembering.</p>
+
+  <div class="note">
+    <p>Plain <code>http</code>, not <code>https</code> — the device does not do
+    TLS. Browsers sometimes "helpfully" upgrade a bare hostname to
+    <code>https</code> and then report that the site is unreachable; typing the
+    <code>http://</code> prefix explicitly avoids that.</p>
+  </div>
+
+  <h2>First run: there is no WiFi configured yet</h2>
+
+  <p>A device that has no network stored — or that cannot join the one it has —
+  brings up its own access point instead. This is also the recovery path for
+  "I moved house and the old SSID is gone".</p>
+
+  <ol>
+    <li>Power the device on and give it a few seconds.</li>
+    <li>On your phone or laptop, join the WiFi network
+      <code>ESP32-AVE-Setup</code>. The WPA2 password is
+      <code>entrain123</code>.</li>
+    <li>Browse to <code>http://192.168.4.1</code> (or
+      <code>http://esp32-ave.local</code>, which also works here).</li>
+    <li>Open the <span class="kbd">Settings</span> tab and find the
+      <strong>WiFi</strong> group. Fill in <strong>WiFi SSID</strong> and
+      <strong>WiFi password</strong>.</li>
+    <li>Press <span class="kbd">Save &amp; Reboot</span>. The device restarts and
+      joins your network — which also means it drops its own access point, so
+      your phone will fall back to whatever it was on before.</li>
+    <li>Reconnect your phone or laptop to your normal WiFi and browse to
+      <code>http://esp32-ave.local</code>.</li>
+  </ol>
+
+  <div class="warn">
+    <strong>The ESP32 is 2.4&nbsp;GHz only.</strong> It cannot see a 5&nbsp;GHz
+    network at all. If your router publishes both bands under one name this is
+    usually fine; if you have a separate 5&nbsp;GHz SSID, do not give the device
+    that one.
+  </div>
+
+  <h2>Finding the device on your network</h2>
+
+  <p>Once it joins your WiFi, your router hands the device a DHCP address that
+  you cannot predict and that can change. Rather than hunting for it, the
+  device advertises itself over mDNS, so a name always works.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th>Situation</th><th>Address</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Joined your WiFi (normal use)</td>
+        <td><code>http://esp32-ave.local</code></td>
+        <td>Works regardless of which IP the router gave it.</td>
+      </tr>
+      <tr>
+        <td>Running its own access point</td>
+        <td><code>http://192.168.4.1</code></td>
+        <td>Fixed address. <code>esp32-ave.local</code> resolves here too.</td>
+      </tr>
+      <tr>
+        <td>mDNS blocked or unsupported</td>
+        <td><code>http://&lt;device IP&gt;</code></td>
+        <td>Read the IP from your router's client list, or from the serial log
+          at boot if you have a cable attached.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The hostname is configurable: <span class="kbd">Settings</span> →
+  <strong>WiFi</strong> → <strong>mDNS hostname</strong>. The default is
+  <code>esp32-ave</code>, giving <code>esp32-ave.local</code>. Only letters,
+  digits and hyphens survive — anything else is stripped — and the change needs
+  a reboot.</p>
+
+  <div class="note">
+    <p>mDNS (<code>.local</code>) works out of the box on macOS, iOS, modern
+    Windows and most Linux desktops running Avahi. Some corporate and guest
+    networks block the multicast traffic it depends on; some Android versions
+    are unreliable about it. If the name does not resolve, nothing is wrong with
+    the device — use the IP.</p>
+  </div>
+
+  <h2>Forcing setup mode on purpose</h2>
+
+  <p>If the configured network is unreachable and you want to change the
+  credentials, you do not have to wait for the join to time out:</p>
+
+  <ol>
+    <li>Hold the device's hardware button down.</li>
+    <li>While still holding it, power the device on (or press reset).</li>
+    <li>It boots straight into access-point setup mode, skipping the attempt to
+      join your WiFi, and logs that it did so.</li>
+    <li>Join <code>ESP32-AVE-Setup</code> and configure it as in the first-run
+      steps above.</li>
+  </ol>
+
+  <p>This is the same momentary button used during a session (short press logs a
+  state snapshot, three-second hold stops everything). It is the GPIO named by
+  <strong>Button GPIO</strong> in <span class="kbd">Settings</span> →
+  <strong>Controls</strong>; if that is set to <code>-1</code> the button is
+  disabled and this trick is not available.</p>
+
+  <h2>In the field: use a phone hotspot</h2>
+
+  <p>Away from home, the tidiest arrangement is to make your phone the network.
+  The device joins the hotspot, and because you are on the same hotspot you can
+  reach it by name <em>and</em> the device gets internet through your phone —
+  which is what speech synthesis, the Generator's Community session browser and
+  <code>http://</code> background audio all need.</p>
+
+  <ol>
+    <li>Turn on your phone's hotspot. On an iPhone 12 or newer, also turn on
+      <strong>Maximize Compatibility</strong> so the hotspot runs 2.4&nbsp;GHz.</li>
+    <li>Set that SSID and password in <span class="kbd">Settings</span> →
+      <strong>WiFi</strong>, then <span class="kbd">Save &amp; Reboot</span>.</li>
+    <li>Browse to <code>http://esp32-ave.local</code> from the same phone.</li>
+  </ol>
+
+  <div class="note">
+    <p>The device's own access point has <strong>no internet</strong> behind it.
+    Everything local works there — playing sessions, live control, settings,
+    diagnostics, firmware updates — but anything that reaches out to the
+    internet does not. If you need speech or community sessions, be on a real
+    network or a hotspot.</p>
+  </div>
+
+  <h2>One browser tab is enough</h2>
+
+  <p>The device answers HTTP on a single task with a budget of seven sockets,
+  three of which are reserved internally. The web page is written to respect
+  that: all of its traffic is funnelled through one gate that allows at most two
+  requests in flight at a time, and its background pollers only schedule the
+  next request after the previous one finishes.</p>
+
+  <p>That budget is per page, though. Open the UI in four tabs and you have four
+  independent pollers competing for the same handful of sockets and for your
+  browser's six-connections-per-host limit, which is exactly how the interface
+  ends up looking frozen while the device is perfectly healthy. Keep one tab
+  open, and close stale ones. See
+  <a href="../user-guide/troubleshooting.html">troubleshooting</a> for what
+  that failure looks like and how to confirm it.</p>
+
+  <h2>Next</h2>
+
+  <p>With the page open, go to
+  <a href="../user-guide/main-screen.html">the main screen and live
+  controls</a>.</p>
+
+</main>
+</body>
+</html>

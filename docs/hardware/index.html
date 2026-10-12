@@ -1,0 +1,906 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hardware — ESP32 AVE builder guide</title>
+<meta name="description" content="Parts, pin maps, LED topology, power, first flash and variant-building for both freeesp32_ave hardware builds: the ESP32-S3 TLV320DAC3101 board and the classic ESP32 boards.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html" aria-current="page">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <header class="hero">
+    <h1>Hardware builder guide</h1>
+    <p class="lead">
+      The firmware supports <strong>two chip builds</strong>: the ESP32-S3 board
+      with a TI TLV320DAC3101 codec, which is where development happens, and the
+      <strong>classic ESP32</strong> boards, which still build and run. This page
+      is the pin-level record of both, taken from the config snapshots and
+      drivers in the repository rather than from memory.
+    </p>
+    <p>
+      <span class="pill accent">ESP32-S3 · YB-ESP32-S3-DAC</span>
+      <span class="pill accent">classic ESP32 · glasses / A1S</span>
+      <span class="pill">3 LED backends</span>
+      <span class="pill">4 codec drivers</span>
+    </p>
+  </header>
+
+  <div class="warn">
+    <strong>Flicker safety</strong>
+    <p>
+      Everything on this page exists to flash light at the eyes. Before you
+      build or power anything, read the
+      <a href="../index.html#photosensitivity">photosensitivity and epilepsy
+      warning</a> — flicker in the 3–30&nbsp;Hz band is a real seizure trigger,
+      the 15–25&nbsp;Hz region is the risk peak, and the firmware enforces no
+      limit of its own.
+    </p>
+  </div>
+
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#builds">The two builds at a glance</a></li>
+      <li><a href="#s3">Build A — ESP32-S3 (YB-ESP32-S3-DAC)</a></li>
+      <li><a href="#s3-wiring">Build A wiring</a></li>
+      <li><a href="#classic">Build B — classic ESP32</a></li>
+      <li><a href="#topology">LED topology and per-eye masks</a></li>
+      <li><a href="#formfactor">Form factors: glasses and lamp</a></li>
+      <li><a href="#power">Power</a></li>
+      <li><a href="#hazards">Hazards worth knowing before you power up</a></li>
+      <li><a href="#flashing">Flashing and first boot</a></li>
+      <li><a href="#variant">Making your own variant</a></li>
+      <li><a href="#unknowns">What this page could not establish</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="builds">The two builds at a glance</h2>
+
+  <p>
+    Four board snapshots exist (<code>sdkconfig.glasses</code>,
+    <code>sdkconfig.ac101</code>, <code>sdkconfig.es8388</code>,
+    <code>sdkconfig.yb_s3_dac</code>), selected with
+    <code>./switch_board.sh &lt;board&gt;</code>. Three of them are the same
+    chip; only the S3 snapshot changes the toolchain target, so switching to or
+    from it fully reconfigures the build directory.
+  </p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th></th><th>Build A — ESP32-S3</th><th>Build B — classic ESP32</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Board</td>
+          <td>YelloByte YB-ESP32-S3-DAC (ESP32-S3-WROOM-1 N16R8)</td>
+          <td>"glasses" (generic ESP32 + passive I2S DAC) or AI-Thinker ESP32-A1S, in AC101 or ES8388 variant</td></tr>
+      <tr><td>Flash / PSRAM</td>
+          <td>16&nbsp;MB flash, 8&nbsp;MB octal PSRAM</td>
+          <td>4&nbsp;MB flash; no PSRAM or 4&nbsp;MB quad</td></tr>
+      <tr><td>Partition table</td>
+          <td><code>partitions_16mb.csv</code></td>
+          <td><code>partitions.csv</code></td></tr>
+      <tr><td>Audio output stage</td>
+          <td>TLV320DAC3101 codec: headphone jack <em>and</em> stereo class-D speaker amp</td>
+          <td>Passive I2S DAC (glasses), or AC101 / ES8388 codec with onboard headphone and speaker amp (A1S)</td></tr>
+      <tr><td>Codec control</td>
+          <td>I2C, address <code>0x18</code></td>
+          <td>None (glasses) · AC101 <code>0x1A</code> · ES8388 <code>0x10</code></td></tr>
+      <tr><td>LED backend seeded</td>
+          <td>NeoPixel (WS2812) on one data pin</td>
+          <td>NeoPixel (glasses) · Direct LEDC PWM (A1S snapshots)</td></tr>
+      <tr><td>microSD</td>
+          <td>Onboard slot, enabled by default</td>
+          <td>Pins recorded; A1S boards have a slot, the glasses build depends on your wiring</td></tr>
+      <tr><td>mDNS name seeded</td>
+          <td><code>esp32-ave-mobile.local</code></td>
+          <td><code>esp32-ave.local</code></td></tr>
+      <tr><td>LED frame streaming</td>
+          <td>RMT over GDMA — no CPU refill to starve</td>
+          <td>No DMA on RMT; the CPU refills the FIFO mid-frame, mitigated by claiming all 8 memory blocks for one channel</td></tr>
+      <tr><td>I2S clocking</td>
+          <td>Fractional divider synthesises exact audio rates from PLL_F160M</td>
+          <td>Needs the APLL whenever MCLK is wired; the default 160&nbsp;MHz PLL cannot integer-divide to 44100&nbsp;×&nbsp;256</td></tr>
+      <tr><td>GPIO numbering</td>
+          <td>0–48, no 22–25</td>
+          <td>0–39, no 24 and no 28–31; 34–39 input-only</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <strong>Why the two targets are separate code, not one tunable</strong>
+    <p>
+      Divergences are deliberately kept as per-target modules selected by
+      <code>IDF_TARGET</code> in <code>main/CMakeLists.txt</code>, and every one
+      of them is catalogued in <code>legacyesp32.md</code>, which doubles as the
+      removal checklist for the day classic support is dropped. The LED driver is
+      the clearest case: the S3's <em>non-DMA</em> RMT path would actually be
+      worse than the classic chip's (192 versus 512 symbols of FIFO), so it is
+      DMA that makes the S3 better, not the peripheral — which is exactly why it
+      cannot be one file with a constant in it.
+    </p>
+  </div>
+
+  <h2 id="s3">Build A — ESP32-S3 (YB-ESP32-S3-DAC)</h2>
+
+  <p>
+    This board is an off-the-shelf part that happens to carry the whole
+    combination the project would otherwise need a custom PCB for: an ESP32-S3
+    module, a TLV320DAC3101 codec driving both a headphone jack and a stereo
+    class-D speaker amp, and a microSD slot. Select it with
+    <code>./switch_board.sh yb_s3_dac</code>; the pin seeds live in
+    <code>sdkconfig.defaults.esp32s3</code>.
+  </p>
+
+  <h3>Parts</h3>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Part</th><th>What it is for</th></tr></thead>
+    <tbody>
+      <tr><td>YelloByte YB-ESP32-S3-DAC board</td>
+          <td>MCU, codec, headphone jack, speaker amp, microSD slot and USB in one. 16&nbsp;MB flash holds the app, the web UI and an 8&nbsp;MB session filesystem.</td></tr>
+      <tr><td>2 × M5Stack NeoHEX (37 × WS2812 each)</td>
+          <td>The light source, one per eye. 37 pixels = 1 centre + rings of 6, 12 and 18, which is what gives each eye an independent inner and outer zone.</td></tr>
+      <tr><td>Diffuser</td>
+          <td>Spreads the light into a field instead of visible dots. White ping-pong-ball halves, thin opal acrylic, or 2–3 layers of tracing paper. Not optional — bare LEDs are uncomfortably bright and the dot pattern defeats the effect.</td></tr>
+      <tr><td>Frame or goggles that block ambient light</td>
+          <td>3D-printed, or modified swim/safety goggles with the lenses removed. Keep the LEDs ≥&nbsp;25&nbsp;mm from closed eyelids to avoid focal discomfort, and leave a cutout so the USB port stays reachable.</td></tr>
+      <tr><td>Headphones (3.5&nbsp;mm TRS)</td>
+          <td>Required for binaural beats — the beat is produced by the listener's own auditory system, so a speaker cannot deliver it.</td></tr>
+      <tr><td>microSD card, FAT32</td>
+          <td>Optional but transformative: holds the speech phrase library and background tracks so a session runs with no browser attached.</td></tr>
+      <tr><td>5&nbsp;V USB supply or power bank</td>
+          <td>Powers the board and the LED strings. See <a href="#power">Power</a>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Pin map</h3>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Function</th><th>GPIO</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td>I2S BCLK (bit clock)</td><td><code>5</code></td><td>Also the codec's PLL reference on this board — see MCLK below</td></tr>
+      <tr><td>I2S LRCLK / WS</td><td><code>6</code></td><td></td></tr>
+      <tr><td>I2S data, ESP32 → codec</td><td><code>7</code></td><td>Playback only; <code>DIN</code> is <code>-1</code></td></tr>
+      <tr><td>I2S MCLK</td><td><code>-1</code> (unused)</td><td>GPIO4 reaches the codec's MCLK only through solder bridge <code>JP2</code>, which ships <strong>open</strong></td></tr>
+      <tr><td>Codec I2C SDA / SCL</td><td><code>8</code> / <code>9</code></td><td>Port 0 at 100&nbsp;kHz, 7-bit address <code>0x18</code></td></tr>
+      <tr><td>Codec <code>~RESET</code></td><td><code>21</code></td><td>The 3-pad jumper's default-closed side. Must be pulsed by firmware — see <a href="#hazards">hazards</a></td></tr>
+      <tr><td>microSD CS / MOSI / CLK / MISO</td><td><code>10</code> / <code>11</code> / <code>12</code> / <code>13</code></td><td>SPI; <code>CONFIG_BG_SDCARD_ENABLED=y</code> on this board</td></tr>
+      <tr><td>LED data</td><td><code>18</code></td><td>Both NeoHEX boards chained in series, 74 pixels total</td></tr>
+      <tr><td>Snapshot / stop button</td><td><code>-1</code> (disabled)</td><td>The Kconfig default of 5 is this board's I2S bit clock. The board's own <span class="kbd">B</span> button is GPIO0, which is also a strapping pin</td></tr>
+      <tr><td>Onboard status LED</td><td><code>47</code></td><td>Board feature, not driven by the flicker engine</td></tr>
+      <tr><td>Amplifier enable</td><td><code>-1</code></td><td>No external amp enable line on this board</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Audio output, and the gain choices behind it</h3>
+
+  <p>
+    The codec is a paged register device: register <code>0x00</code> on every
+    page is <code>PAGE_SELECT</code>, and playback init touches page 0 (clocks,
+    I2S format, DAC power, digital volume) and page 1 (analog routing, output
+    drivers, analog volume). Three choices in that driver are deliberate and
+    worth understanding before you change anything:
+  </p>
+
+  <ul>
+    <li>
+      <strong>The codec PLL runs from BCLK, not MCLK.</strong> Because
+      <code>JP2</code> ships open the chip receives no MCLK at all, so the
+      driver clocks its PLL from BCLK — which is also what the board vendor's
+      own shipping example does. BCLK is Fs&nbsp;×&nbsp;32 here, because I2S is
+      configured as 16-bit stereo. Only set an MCLK pin if you have actually
+      closed that bridge.
+    </li>
+    <li>
+      <strong>It wants Philips I2S framing</strong>, not the left-justified
+      framing the other supported codecs use. <code>audio_manager.c</code>
+      selects this per codec.
+    </li>
+    <li>
+      <strong>The class-D gain is held low on purpose.</strong> The gain field
+      is two bits with four values (6 / 12 / 18 / 24&nbsp;dB). It sits at
+      <strong>12&nbsp;dB</strong> — raised one step from the 6&nbsp;dB minimum at
+      the owner's request, which is +6&nbsp;dB and four times the electrical
+      power, because the field cannot express the 9&nbsp;dB that was actually
+      wanted. TI's datasheet example uses 24&nbsp;dB. This amp can deliver
+      <strong>1.3&nbsp;W into 8&nbsp;Ω</strong> at full tilt, which will destroy
+      the small speakers typically wired to the JST connectors. Set listening
+      level with the digital DAC volume and the −9&nbsp;dB analog stage, both
+      reversible from the web UI; if you ever need a finer step than the coarse
+      field allows, the speaker analog volume is the 0.5&nbsp;dB lever on that
+      path.
+    </li>
+  </ul>
+
+  <h2 id="s3-wiring">Build A wiring</h2>
+
+  <figure class="figure">
+    <div class="scroll-x">
+    <svg viewBox="0 0 920 470" role="img" aria-labelledby="wire-title wire-desc"
+         preserveAspectRatio="xMidYMid meet">
+      <title id="wire-title">Wiring of the ESP32-S3 build</title>
+      <desc id="wire-desc">The ESP32-S3 module connects over I2S and I2C to the
+        TLV320DAC3101 codec, over SPI to the microSD slot, and over one data pin
+        to two chained NeoHEX LED boards, one per eye.</desc>
+
+      <defs>
+        <marker id="hwarrow" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/>
+        </marker>
+      </defs>
+
+      <!-- MCU -->
+      <rect x="330" y="120" width="250" height="230" rx="10"
+            fill="var(--fig-fill)" stroke="var(--accent)" stroke-width="2.5"/>
+      <g fill="currentColor" font-family="system-ui, sans-serif" text-anchor="middle">
+        <text x="455" y="162" font-size="15" font-weight="650">ESP32-S3-WROOM-1</text>
+        <text x="455" y="182" font-size="13">N16R8</text>
+        <text x="455" y="210" font-size="11.5" fill="var(--fig-line)">16 MB flash</text>
+        <text x="455" y="227" font-size="11.5" fill="var(--fig-line)">8 MB octal PSRAM</text>
+        <text x="455" y="256" font-size="11.5" fill="var(--fig-line)">on the YelloByte</text>
+        <text x="455" y="273" font-size="11.5" fill="var(--fig-line)">YB-ESP32-S3-DAC board</text>
+        <text x="455" y="308" font-size="11.5" fill="var(--fig-line)">USB-C: power,</text>
+        <text x="455" y="325" font-size="11.5" fill="var(--fig-line)">flashing, serial log</text>
+      </g>
+
+      <!-- codec -->
+      <rect x="30" y="60" width="222" height="130" rx="10"
+            fill="var(--fig-fill)" stroke="var(--fig-line)" stroke-width="1.5"/>
+      <g fill="currentColor" font-family="system-ui, sans-serif" text-anchor="middle">
+        <text x="141" y="90" font-size="14" font-weight="650">TLV320DAC3101</text>
+        <text x="141" y="110" font-size="11.5" fill="var(--fig-line)">I2C slave 0x18</text>
+        <text x="141" y="134" font-size="12">3.5 mm headphone out</text>
+        <text x="141" y="154" font-size="12">2 × class-D speaker out</text>
+        <text x="141" y="174" font-size="11.5" fill="var(--fig-line)">1.3 W into 8 Ω per ch</text>
+      </g>
+
+      <!-- sd -->
+      <rect x="30" y="268" width="222" height="104" rx="10"
+            fill="var(--fig-fill)" stroke="var(--fig-line)" stroke-width="1.5"/>
+      <g fill="currentColor" font-family="system-ui, sans-serif" text-anchor="middle">
+        <text x="141" y="298" font-size="14" font-weight="650">microSD slot</text>
+        <text x="141" y="320" font-size="11.5" fill="var(--fig-line)">FAT32, long filenames</text>
+        <text x="141" y="340" font-size="11.5" fill="var(--fig-line)">/speech/*.wav</text>
+        <text x="141" y="358" font-size="11.5" fill="var(--fig-line)">/bg/*.wav</text>
+      </g>
+
+      <!-- LED boards -->
+      <rect x="690" y="70" width="200" height="104" rx="10"
+            fill="var(--fig-fill)" stroke="var(--fig-line)" stroke-width="1.5"/>
+      <g fill="currentColor" font-family="system-ui, sans-serif" text-anchor="middle">
+        <text x="790" y="98" font-size="14" font-weight="650">NeoHEX — eye A</text>
+        <text x="790" y="119" font-size="11.5" fill="var(--fig-line)">37 × WS2812</text>
+        <text x="790" y="138" font-size="12">zones ch0 inner</text>
+        <text x="790" y="156" font-size="12">+ ch1 outer</text>
+      </g>
+      <rect x="690" y="256" width="200" height="104" rx="10"
+            fill="var(--fig-fill)" stroke="var(--fig-line)" stroke-width="1.5"/>
+      <g fill="currentColor" font-family="system-ui, sans-serif" text-anchor="middle">
+        <text x="790" y="284" font-size="14" font-weight="650">NeoHEX — eye B</text>
+        <text x="790" y="305" font-size="11.5" fill="var(--fig-line)">37 × WS2812</text>
+        <text x="790" y="324" font-size="12">zones ch2 outer</text>
+        <text x="790" y="342" font-size="12">+ ch3 inner</text>
+      </g>
+
+      <!-- buses -->
+      <g stroke="var(--fig-line)" stroke-width="2.4" fill="none" marker-end="url(#hwarrow)">
+        <path d="M 328 170 H 290 V 110 H 256"/>
+        <path d="M 328 200 H 272 V 150 H 256"/>
+        <path d="M 328 300 H 290 V 320 H 256"/>
+        <path d="M 582 160 H 640 V 122 H 686"/>
+        <path d="M 790 176 V 252"/>
+      </g>
+
+      <g font-family="ui-monospace, monospace" font-size="11.5" fill="currentColor">
+        <text x="262" y="96" text-anchor="end">BCLK 5 · LRCLK 6 · DOUT 7</text>
+        <text x="262" y="200" text-anchor="end">SDA 8 · SCL 9 · ~RESET 21</text>
+        <text x="262" y="258" text-anchor="end">CS 10 · MOSI 11 · CLK 12 · MISO 13</text>
+        <text x="648" y="148" text-anchor="start">DIN ← GPIO 18</text>
+        <text x="802" y="212" text-anchor="start">DOUT → DIN</text>
+      </g>
+      <g font-family="system-ui, sans-serif" font-size="11" fill="var(--fig-line)">
+        <text x="262" y="78" text-anchor="end">I2S, 44.1 kHz / 16-bit stereo</text>
+        <text x="262" y="218" text-anchor="end">I2C control, 100 kHz</text>
+        <text x="262" y="240" text-anchor="end">SPI</text>
+        <text x="802" y="230" text-anchor="start">chained in series:</text>
+        <text x="802" y="246" text-anchor="start">74 pixels on one pin</text>
+      </g>
+
+      <!-- power rail -->
+      <rect x="330" y="400" width="250" height="48" rx="8"
+            fill="none" stroke="var(--fig-line)" stroke-width="1.5"
+            stroke-dasharray="6 4"/>
+      <g fill="currentColor" font-family="system-ui, sans-serif" text-anchor="middle">
+        <text x="455" y="420" font-size="12">5 V and GND shared by board</text>
+        <text x="455" y="438" font-size="12">and both LED boards</text>
+      </g>
+      <path d="M 455 352 V 398" stroke="var(--fig-line)" stroke-width="1.5"
+            stroke-dasharray="6 4" fill="none"/>
+      <path d="M 585 424 H 700 V 376" stroke="var(--fig-line)" stroke-width="1.5"
+            stroke-dasharray="6 4" fill="none"/>
+    </svg>
+    </div>
+    <figcaption class="figcap">
+      <strong>Build A wiring.</strong> The ESP32-S3 module is I2S master and the
+      codec is the slave: three signals carry audio (BCLK on GPIO5, LRCLK on
+      GPIO6, data out on GPIO7) at 44.1&nbsp;kHz, 16-bit stereo, and no MCLK is
+      wired. Three more signals control the codec: I2C SDA on GPIO8 and SCL on
+      GPIO9 at 100&nbsp;kHz to address <code>0x18</code>, plus the active-low
+      hardware reset on GPIO21, which firmware must pulse before the first
+      transaction. The microSD slot sits on SPI (CS&nbsp;10, MOSI&nbsp;11,
+      CLK&nbsp;12, MISO&nbsp;13). The light side is a single data pin: GPIO18
+      feeds the first NeoHEX board's DIN, and that board's DOUT feeds the
+      second, so 74 WS2812 pixels hang off one wire. 5&nbsp;V and ground are
+      shared between the board and both LED boards. Note that GPIO12 is the SD
+      clock and GPIO21 is the codec reset, so neither is available for LEDs on
+      this board.
+    </figcaption>
+  </figure>
+
+  <h2 id="classic">Build B — classic ESP32</h2>
+
+  <p>
+    Three snapshots cover the classic chip. The <strong>glasses</strong> build is
+    a generic ESP32 driving a WS2812 matrix with a passive I2S DAC and no codec
+    driver at all; the two <strong>A1S</strong> builds target the AI-Thinker
+    ESP32-A1S audio board, which exists in AC101 and ES8388 codec variants and
+    has an onboard headphone amp and speaker amp. Cheap and widely available,
+    but bulkier than the S3 board.
+  </p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th>Function</th><th><code>glasses</code></th><th><code>ac101</code></th><th><code>es8388</code></th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Codec</td><td>none (passive I2S DAC)</td><td>AC101, I2C <code>0x1A</code></td><td>ES8388, I2C <code>0x10</code></td></tr>
+      <tr><td>I2S BCK</td><td><code>26</code></td><td><code>27</code></td><td><code>26</code></td></tr>
+      <tr><td>I2S WS</td><td><code>25</code></td><td><code>26</code></td><td><code>25</code></td></tr>
+      <tr><td>I2S data out</td><td><code>22</code></td><td><code>25</code></td><td><code>22</code></td></tr>
+      <tr><td>I2S MCLK</td><td><code>-1</code></td><td><code>-1</code></td><td><code>-1</code> in the snapshot — but the ES8388 driver documents MCLK as required, see below</td></tr>
+      <tr><td>Codec I2C SDA / SCL</td><td>—</td><td><code>33</code> / <code>32</code></td><td><code>33</code> / <code>32</code></td></tr>
+      <tr><td>LED backend</td><td>NeoPixel</td><td>Direct LEDC PWM</td><td>Direct LEDC PWM</td></tr>
+      <tr><td>LED pins</td><td>data <code>12</code>, 48 pixels as a 12&nbsp;×&nbsp;4 grid</td>
+          <td>ch1–4 = <code>22</code>, <code>23</code>, <code>18</code>, <code>21</code>; ch5–8 disabled</td>
+          <td>ch1–8 = <code>12</code>, <code>13</code>, <code>14</code>, <code>15</code>, <code>2</code>, <code>4</code>, <code>16</code>, <code>17</code></td></tr>
+      <tr><td>microSD SPI</td><td>CS <code>5</code>, MOSI <code>23</code>, MISO <code>19</code>, CLK <code>18</code></td><td colspan="2">Same Kconfig defaults; check them against your board before enabling</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    Two classic-chip constraints shape those numbers. MCLK can only be routed to
+    GPIO&nbsp;0, 1 or 3 — a hard pin-mux limit, which is why the ES8388 boards
+    are stuck with MCLK on GPIO0 when they use it at all; the S3 has no such
+    restriction. And the <code>es8388</code> snapshot can legitimately drive LEDs
+    on GPIO&nbsp;16 and 17 precisely because that board has no PSRAM, which on a
+    PSRAM-equipped board those pins would be part of.
+  </p>
+
+  <h2 id="topology">LED topology and per-eye masks</h2>
+
+  <p>
+    The engine exposes <strong>eight logical LED channels</strong>, addressed by
+    a bitmask in the session file where bit&nbsp;0 is LED1. A channel is not a
+    pixel: <code>CONFIG_LED_CHANNEL_MAP</code> assigns a channel index to every
+    physical pixel, so a channel is a <em>zone</em> of arbitrary shape. The eye
+    builds populate four of the eight — two zones per eye.
+  </p>
+
+  <p>
+    The eye split was established by measurement rather than by reading the
+    harness: each channel was driven at its own distinct rate in one session and
+    each eye's photocell spectrum then named the channels it could see, with
+    30–43&nbsp;dB of separation. The result is unambiguous —
+    <strong>{LED1,&nbsp;LED2} is one eye and {LED3,&nbsp;LED4} is the other</strong>,
+    so the per-eye masks are <strong>3</strong> and <strong>12</strong>.
+  </p>
+
+  <figure class="figure">
+    <div class="scroll-x">
+    <svg viewBox="0 0 920 420" role="img" aria-labelledby="topo-title topo-desc"
+         preserveAspectRatio="xMidYMid meet">
+      <title id="topo-title">LED zone topology and the four useful channel masks</title>
+      <desc id="topo-desc">Each eye carries two concentric zones. Eye A holds
+        LED1 as its inner zone and LED2 as its outer ring; eye B holds LED3 as
+        its outer ring and LED4 as its inner zone — mirrored on purpose. Mask 3
+        selects eye A alone, mask 12 eye B alone, mask 9 both inner zones and
+        mask 6 both outer rings.</desc>
+
+      <!-- eye A -->
+      <circle cx="215" cy="150" r="108" fill="var(--fig-fill)"
+              stroke="var(--fig-line)" stroke-width="1.5"/>
+      <circle cx="215" cy="150" r="66" fill="var(--bg)"
+              stroke="var(--fig-line)" stroke-width="1.5"/>
+      <circle cx="215" cy="150" r="34" fill="var(--accent-soft)"
+              stroke="var(--accent)" stroke-width="2"/>
+      <!-- eye B -->
+      <circle cx="705" cy="150" r="108" fill="var(--fig-fill)"
+              stroke="var(--fig-line)" stroke-width="1.5"/>
+      <circle cx="705" cy="150" r="66" fill="var(--bg)"
+              stroke="var(--fig-line)" stroke-width="1.5"/>
+      <circle cx="705" cy="150" r="34" fill="var(--accent-soft)"
+              stroke="var(--accent)" stroke-width="2"/>
+
+      <g fill="currentColor" font-family="system-ui, sans-serif" text-anchor="middle">
+        <text x="215" y="36" font-size="14" font-weight="650">EYE A</text>
+        <text x="705" y="36" font-size="14" font-weight="650">EYE B</text>
+
+        <text x="215" y="148" font-size="12.5" font-weight="650">LED1</text>
+        <text x="215" y="165" font-size="11">ch0 · 19 px</text>
+        <text x="215" y="106" font-size="12.5" font-weight="650">LED2</text>
+        <text x="215" y="123" font-size="11">ch1 · 18 px</text>
+
+        <text x="705" y="148" font-size="12.5" font-weight="650">LED4</text>
+        <text x="705" y="165" font-size="11">ch3 · 19 px</text>
+        <text x="705" y="106" font-size="12.5" font-weight="650">LED3</text>
+        <text x="705" y="123" font-size="11">ch2 · 18 px</text>
+
+        <text x="215" y="282" font-size="11.5" fill="var(--fig-line)">inner = centre + rings 1–2</text>
+        <text x="705" y="282" font-size="11.5" fill="var(--fig-line)">outer = ring 3</text>
+      </g>
+
+      <!-- daisy chain -->
+      <path d="M 325 150 H 593" stroke="var(--fig-line)" stroke-width="2"
+            stroke-dasharray="7 5" fill="none"/>
+      <text x="459" y="140" font-family="ui-monospace, monospace" font-size="11.5"
+            fill="currentColor" text-anchor="middle">GPIO 18 → eye A → eye B</text>
+      <text x="459" y="162" font-family="system-ui, sans-serif" font-size="11"
+            fill="var(--fig-line)" text-anchor="middle">one data wire, 74 pixels</text>
+
+      <!-- mask legend -->
+      <g font-family="system-ui, sans-serif" font-size="12.5" fill="currentColor">
+        <rect x="60" y="312" width="800" height="86" rx="8"
+              fill="var(--fig-fill)" stroke="var(--fig-line)" stroke-width="1.2"/>
+        <text x="80" y="336" font-weight="650">mask 3</text>
+        <text x="146" y="336" fill="var(--fig-line)">= LED1+LED2 = eye A only</text>
+        <text x="80" y="360" font-weight="650">mask 12</text>
+        <text x="146" y="360" fill="var(--fig-line)">= LED3+LED4 = eye B only</text>
+        <text x="80" y="384" font-weight="650">mask 15</text>
+        <text x="146" y="384" fill="var(--fig-line)">= all four zones, both eyes</text>
+        <text x="480" y="336" font-weight="650">mask 9</text>
+        <text x="546" y="336" fill="var(--fig-line)">= LED1+LED4 = both INNER zones</text>
+        <text x="480" y="360" font-weight="650">mask 6</text>
+        <text x="546" y="360" fill="var(--fig-line)">= LED2+LED3 = both OUTER rings</text>
+        <text x="480" y="384" fill="var(--accent)">9 and 6 antiphase → luminance-flat flicker</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption class="figcap">
+      <strong>Zone topology.</strong> Each eye is covered by a 37-pixel NeoHEX
+      board split into two concentric zones: an inner zone of 19 pixels (the
+      centre plus the first two rings) and an outer ring of 18. The channel
+      numbering is <em>mirrored</em> between the eyes on purpose — eye A is
+      inner&nbsp;=&nbsp;ch0 / outer&nbsp;=&nbsp;ch1 while eye B is
+      outer&nbsp;=&nbsp;ch2 / inner&nbsp;=&nbsp;ch3 — because that is the
+      convention the whole shipped session library is authored against. The
+      payoff is in the masks: mask&nbsp;3 and mask&nbsp;12 address one eye each
+      (useful for split-field sessions that run a different rate per eye), while
+      mask&nbsp;9 addresses <em>both</em> inner zones and mask&nbsp;6
+      <em>both</em> outer rings, which is how a session drives the two rings in
+      antiphase for a luminance-flat field. Number ch2 as inner instead and the
+      two eyes behave opposite to each other. In the shipped library masks 9 and
+      6 are used 216 times each; the per-eye masks 3 and 12 only 9 times each.
+    </figcaption>
+  </figure>
+
+  <div class="note">
+    <strong>Measuring an antiphase session needs one sensor per eye</strong>
+    <p>
+      A photocell that can see both an inner and an outer zone measures the
+      <em>residual of a near-cancellation</em>, not the flicker. On a verified
+      antiphase session the two sensors read fundamentals 25.8&nbsp;dB apart with
+      a relative phase of +178.1° against a commanded 180 — the design working,
+      not a fault — and per-cycle timing analysis of the cancelling channel
+      becomes impossible. Point each sensor at one zone.
+    </p>
+  </div>
+
+  <h2 id="formfactor">Form factors: glasses and lamp</h2>
+
+  <p>
+    The chip build and the physical build are independent choices. Two end
+    products are documented:
+  </p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Glasses (wearable)</h3>
+      <p>
+        LEDs mounted in front of the eyes behind a diffuser, audio through the
+        board's headphone jack, powered from USB or a battery. Uses the
+        <strong>NeoPixel</strong> backend on a single data pin. This is the build
+        both pin maps above describe, and the one the session library is authored
+        for.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Lamp (room device)</h3>
+      <p>
+        A high-power COB emitter aimed at the room instead of the eyes, plus
+        speaker output; mains-powered and fixed in place. Uses the
+        <strong>Direct LEDC PWM</strong> backend: the ESP32 emits only a 0–100%
+        PWM control signal at 25&nbsp;kHz into a constant-current LED driver's
+        dimming input, and the driver does all the high-current switching. A
+        dual-channel warm/cold COB pair gives four driver channels, one per
+        <code>LED_DIRECT_PIN_CH1..CH4</code>.
+      </p>
+    </div>
+  </div>
+
+  <div class="warn">
+    <strong>The lamp build adds three hazards the glasses build does not have</strong>
+    <ul>
+      <li>
+        <strong>Mains.</strong> The AC side must live in an insulated enclosure
+        with strain relief on the cord and no exposed conductors, and the DC rail
+        wants an inline fuse sized around 1.5× expected draw.
+      </li>
+      <li>
+        <strong>Emitter brightness.</strong> A 100&nbsp;W COB is intense enough
+        to damage eyes. Never look at the bare emitter without its diffuser,
+        even briefly.
+      </li>
+      <li>
+        <strong>Heat.</strong> The heatsink runs at 60–90&nbsp;°C in operation.
+        Active cooling is required at 100&nbsp;W; passive is feasible to roughly
+        50&nbsp;W with a large finned sink.
+      </li>
+    </ul>
+  </div>
+
+  <h2 id="power">Power</h2>
+
+  <ul>
+    <li>
+      <strong>Glasses, USB.</strong> A 5&nbsp;V USB supply or power bank feeds
+      the board, and the LED boards share that 5&nbsp;V rail and ground. A
+      1000&nbsp;mAh-plus bank runs a session comfortably. Keep the USB port
+      reachable through the frame so you can re-flash without disassembly.
+    </li>
+    <li>
+      <strong>Glasses, battery.</strong> A single 18650 Li-ion cell with a
+      protection board, or AA/AAA cells through a boost converter. Whether the
+      cell can connect directly depends on the board: some audio boards have a
+      JST-PH battery input and an onboard charger, others do not. Check your
+      board's documentation rather than assuming.
+    </li>
+    <li>
+      <strong>Lamp, mains.</strong> A 220&nbsp;V AC adapter produces a 12&nbsp;V
+      DC rail that splits between the constant-current LED drivers and a
+      12&nbsp;V&nbsp;→&nbsp;5&nbsp;V buck converter feeding the ESP32 board. Trim
+      the buck's output to exactly 5.0&nbsp;V <em>before</em> connecting it —
+      over-voltage destroys the board. Do not feed 12&nbsp;V to a 3.3&nbsp;V
+      input; most ESP32 dev boards expect 5&nbsp;V upstream of their own
+      regulator.
+    </li>
+    <li>
+      <strong>Signal-wire note.</strong> On LED data runs longer than about
+      10&nbsp;cm, a 470&nbsp;Ω resistor in series with DIN helps signal
+      integrity. For a driver's dimming input, remember to share ground between
+      the driver and the ESP32.
+    </li>
+  </ul>
+
+  <h2 id="hazards">Hazards worth knowing before you power up</h2>
+
+  <h3>GPIOs the firmware refuses outright</h3>
+
+  <p>
+    Pin assignments are runtime settings reachable over an unauthenticated
+    <code>POST /api/settings</code>, and the IDF helper
+    <code>GPIO_IS_VALID_GPIO</code> answers "does this pad exist on this die",
+    <em>not</em> "is this pad free" — so the pads bonded to the SPI flash and the
+    PSRAM pass it. Assigning one of those is not a bad setting, it is a remote
+    brick: the value reaches NVS before the reboot that applies it, no driver
+    stops it (RMT, LEDC, I2S and I2C each log a warning about a reserved pin and
+    then mux it anyway), and <strong>a board that cannot read its own flash
+    cannot be talked out of it over the air</strong> — it needs USB and a boot
+    button. Nothing legitimate wants those pins, so the firmware refuses them.
+  </p>
+
+  <p>
+    Two details make that guard non-obvious. The reserved-pin mask has to be
+    <em>snapshotted at boot</em>, before any driver starts, because the same mask
+    is what drivers use to record "I own this pad now" — validated live it would
+    reject the very pin map the device is currently running on. And on this
+    particular S3 board the snapshot has a hole: the PSRAM data lines
+    <code>D4..DQS</code> are driven on every PSRAM access but are absent from the
+    mask, because IDF only reserves the MSPI data lines when the <em>flash</em>
+    is octal, and here DIO flash sits next to OPI PSRAM. They are patched in from
+    the SoC's own pin header. There is deliberately no classic-ESP32 equivalent —
+    there the quad-PSRAM driver reserves the full set at runtime.
+  </p>
+
+  <h3>Pin defaults that are claims on real pins</h3>
+
+  <p>
+    A default written for one board is not inert on another, and a collision does
+    not fail loudly — it degrades the peripheral that was already there. This cost
+    hours twice during S3 bring-up:
+  </p>
+
+  <ul>
+    <li>
+      <code>button_gpio</code> defaulted to <strong>5</strong>, which on the
+      YB-ESP32-S3-DAC is the I2S <strong>bit clock</strong>. Configuring it as a
+      button input degraded BCLK just enough that the codec still locked its PLL
+      — a PLL averages over many cycles — but could never latch a sample. The
+      symptom was perfect clocks, a working internal beep, a verified data line,
+      and total silence.
+    </li>
+    <li>
+      <code>sd_cs</code> defaulted to <strong>5</strong> too, because the SD pin
+      symbols used to be gated on the SD feature being enabled. With SD off the
+      symbols did not exist, so the seed fell through to hardcoded classic-board
+      pins. Those gates are gone: pins must be seedable even when the feature is
+      off.
+    </li>
+  </ul>
+
+  <p>
+    <code>settings_init()</code> now runs a conflict check that logs an ERROR
+    naming <em>both</em> claimants of any shared GPIO. It only warns — an inactive
+    backend's pins are harmless — but it turns this failure mode into one line in
+    the boot log. Read that line.
+  </p>
+
+  <h3>The codec that answers nothing</h3>
+
+  <p>
+    On the S3 board GPIO21 is wired to the codec's <code>~RESET</code> through a
+    solder bridge that ships <strong>closed</strong>, and the pin comes up
+    floating — which holds the codec in reset so it ACKs nothing. The whole I2C
+    bus then reads as empty. It presents as "no I2C devices found", which looks
+    exactly like a wiring fault, and a software reset over I2C cannot help
+    because it needs working I2C to begin with. The driver pulses the pin before
+    the first transaction; if you move the jumper to its other side, set
+    <code>AUDIO_CODEC_RESET_GPIO</code> to <code>-1</code>.
+  </p>
+
+  <h3>Speaker power versus speaker size</h3>
+
+  <p>
+    Covered in <a href="#s3">Build&nbsp;A</a> above, and worth repeating as a
+    hazard: 1.3&nbsp;W into 8&nbsp;Ω from the class-D amp will destroy the small
+    speakers usually wired to this board's JST connectors, and these boards are
+    typically used right next to someone's head. The coarse gain is at
+    12&nbsp;dB of a possible 24. Raise it only after checking what your speakers
+    can take.
+  </p>
+
+  <h2 id="flashing">Flashing and first boot</h2>
+
+  <p>
+    The first deploy <strong>must</strong> be over USB, because OTA cannot change
+    a partition table. After that, app updates go over the air.
+  </p>
+
+<pre><code>source ./activate.sh              # ESP-IDF v5.5.2 environment
+./switch_board.sh yb_s3_dac       # or glasses | ac101 | es8388
+idf.py build
+./flash_all.sh --port /dev/tty.usbserial-XXXX</code></pre>
+
+  <p>
+    <code>flash_all.sh</code> is the only thing that lays down the whole layout:
+    bootloader, partition table, the otadata seed, the main app into
+    <code>ota_0</code>, the standalone minimal OTA updater into <code>ota_1</code>,
+    and the web UI into the <code>storage</code> SPIFFS partition. It derives
+    every offset at run time from the build rather than hardcoding them — which
+    matters, because the bootloader offset is <code>0x1000</code> on the classic
+    ESP32 and <code>0x0</code> on the S3 — and it re-targets the updater project
+    to the same chip, since a wrong-chip updater in <code>ota_1</code> would leave
+    the board unable to recover over the air. Use <code>--dry-run</code> to see
+    the esptool command without flashing.
+  </p>
+
+  <div class="note">
+    <strong>One build warning is expected, not a fault</strong>
+    <p>
+      <code>idf.py build</code> prints a standing
+      <code>Part 'ota_1' ... too small for binary</code> on both targets.
+      <code>ota_1</code> deliberately holds the minimal OTA updater, not a second
+      copy of the app, so it is sized for the updater. Both partition tables use
+      that same dual-boot model.
+    </p>
+  </div>
+
+  <h3>Partition layout</h3>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Partition</th><th>4&nbsp;MB (classic)</th><th>16&nbsp;MB (S3)</th><th>Holds</th></tr></thead>
+    <tbody>
+      <tr><td><code>nvs</code></td><td>16&nbsp;KB</td><td>16&nbsp;KB</td><td>Runtime settings: every pin, codec and backend choice</td></tr>
+      <tr><td><code>ota_0</code></td><td>2&nbsp;MB</td><td>3&nbsp;MB</td><td>The main app</td></tr>
+      <tr><td><code>ota_1</code></td><td>704&nbsp;KB</td><td>704&nbsp;KB</td><td>The minimal OTA updater only</td></tr>
+      <tr><td><code>storage</code></td><td>512&nbsp;KB</td><td>2&nbsp;MB</td><td>Web UI bundle (SPIFFS) — <em>not</em> updated by OTA</td></tr>
+      <tr><td><code>cfgfs</code></td><td>512&nbsp;KB</td><td>8&nbsp;MB</td><td>The <code>.ledc</code> session library</td></tr>
+      <tr><td><code>coredump</code></td><td>256&nbsp;KB</td><td>256&nbsp;KB</td><td>Panic dumps, retrievable over Wi-Fi</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    The S3's extra flash buys filesystem room rather than a second app slot, with
+    about 2&nbsp;MB of tail left unallocated for a future dedicated audio
+    partition. Both filesystems are SPIFFS, whose mount time grows with
+    partition size — if an 8&nbsp;MB <code>cfgfs</code> ever makes boot
+    noticeably slower, the recorded intent is to migrate it to LittleFS rather
+    than shrink it. Bulk audio belongs on the SD card, not in
+    <code>cfgfs</code>.
+  </p>
+
+  <h3>First boot</h3>
+
+  <ol>
+    <li>
+      With no Wi-Fi configured, the device raises a SoftAP named
+      <code>ESP32-AVE-Setup</code> (WPA2 password <code>entrain123</code>).
+      Connect and browse to <code>http://192.168.4.1</code>.
+    </li>
+    <li>
+      Set your SSID and password in Settings. On the next boot it joins as a
+      station and advertises itself over mDNS, so
+      <code>http://esp32-ave.local</code> reaches it whatever address DHCP
+      handed out. The S3 snapshot seeds a different name,
+      <code>esp32-ave-mobile.local</code>, deliberately — two devices claiming
+      one <code>.local</code> name knock each other offline.
+    </li>
+    <li>
+      Confirm the LED boards light on boot, and check the log for the
+      pin-conflict ERROR line described above.
+    </li>
+    <li>
+      To force setup mode later, hold the configured button during power-on or
+      reset. It is active-low against the chip's internal pull-up. On a board
+      where the button is <code>-1</code>, that escape hatch does not exist —
+      recover over USB.
+    </li>
+  </ol>
+
+  <p>
+    Afterwards: <code>./ota_flash.sh &lt;ip&gt;</code> pushes a new app over
+    Wi-Fi, and <code>./flash_web.sh</code> rebuilds the web UI and flashes only
+    the <code>storage</code> partition. The web UI lives in SPIFFS, not in the
+    app image, so OTA alone leaves the device serving the old bundle.
+  </p>
+
+  <h2 id="variant">Making your own variant</h2>
+
+  <p>
+    The firmware is built to be re-pinned rather than forked. Every codec driver
+    and all three LED backends are compiled into a single image, and the
+    <em>active</em> one is a runtime setting; the Kconfig options only seed NVS on
+    first boot or after a settings reset. So in many cases a new board needs no
+    code at all — just the Settings page.
+  </p>
+
+  <ol>
+    <li>
+      <strong>Start from the closest snapshot.</strong> Copy the
+      <code>sdkconfig.&lt;board&gt;</code> that matches your chip and codec, give
+      it your own name, and edit the pin seeds. If you are bringing up a new chip
+      target, add a <code>sdkconfig.defaults.&lt;target&gt;</code> too — ESP-IDF
+      loads it automatically and it is the right home for flash size, PSRAM mode
+      and the partition table.
+    </li>
+    <li>
+      <strong>Check every pin against the chip, then against the board.</strong>
+      The classic ESP32 has holes at 24 and 28–31 and is input-only above 33; the
+      S3 has holes at 22–25. Beyond that, a pin can exist and still be spoken for
+      by flash, PSRAM, or another peripheral on your board.
+    </li>
+    <li>
+      <strong>Lay out the zones with <code>LED_CHANNEL_MAP</code>.</strong> It is
+      a comma-separated channel index per pixel, as long as
+      <code>LED_COUNT</code>; pixels past the end of the list fall back to
+      channel 0. This is where a physical strip becomes logical zones, so it is
+      also where a geometry change lands.
+    </li>
+    <li>
+      <strong>Keep the mirrored eye convention.</strong> Number the zones
+      inner/outer on one eye and outer/inner on the other, as described in
+      <a href="#topology">LED topology</a>. Every shipped session's use of
+      mask&nbsp;9 and mask&nbsp;6 depends on it; break it and the two eyes do
+      opposite things.
+    </li>
+    <li>
+      <strong>Verify the map by measurement, not by inspection.</strong> Drive
+      each channel at a distinct rate in one session and read the spectrum at
+      each eye. That identifies the whole map in a single capture and needs no
+      knowledge of how the strip was wired — which is exactly how the current map
+      was established.
+    </li>
+    <li>
+      <strong>For a direct-PWM build</strong>, set
+      <code>LED_DIRECT_PIN_CH1..CH8</code> to the GPIOs going to your driver
+      dimming inputs, and use <code>LED_DIRECT_ACTIVE_LOW_MASK</code> for
+      channels where driving the pin high turns the LED <em>off</em> — common on
+      integrated audio dev boards. Test each channel individually with a session
+      that exercises <code>mask=1</code>, <code>2</code>, <code>4</code>,
+      <code>8</code> in turn.
+    </li>
+  </ol>
+
+  <h2 id="unknowns">What this page could not establish</h2>
+
+  <p>
+    Four things are recorded here as open rather than guessed at, because the
+    source does not settle them:
+  </p>
+
+  <ul>
+    <li>
+      <strong>LED5 produces no light either sensor can see</strong> (at the noise
+      floor on both). No shipped session uses a mask above 15, so a four-zone
+      build is consistent and the channel is probably simply unpopulated — but
+      that is an inference, not a confirmation.
+    </li>
+    <li>
+      <strong>LED6 <em>is</em> visible</strong> to one eye at about 8&nbsp;dB
+      below LED1/LED2, despite never being addressed by any shipped session. If
+      channels map onto ranges of one physical pixel chain, channel 6 may alias
+      onto pixels in that eye. Unverified.
+    </li>
+    <li>
+      <strong>Inner versus outer within an eye rests on the wiring, not on
+      measurement.</strong> A single sensor per eye established the eye split
+      conclusively but cannot separate the inner zone from the outer one inside
+      that eye. The ring assignment comes from the channel map's own comments.
+    </li>
+    <li>
+      <strong>The <code>es8388</code> snapshot and its driver disagree about
+      MCLK.</strong> The Kconfig help and the driver both state that the ES8388
+      requires MCLK from the ESP32 (GPIO0 on the classic chip, the only pins MCLK
+      can reach being 0, 1 and 3), yet <code>sdkconfig.es8388</code> ships
+      <code>AUDIO_I2S_MCLK_GPIO=-1</code>. One of the two is stale. If you are
+      bringing up an ES8388 board and get silence, this is the first thing to
+      check.
+    </li>
+  </ul>
+
+  <p>
+    Likewise, the project README describes the original reference design as a
+    XIAO ESP32-S3 board and points at <code>sdkconfig.glasses</code> for its pin
+    map, but that snapshot is a classic-ESP32 configuration. The pin values in
+    the Build&nbsp;B table above are what the file actually contains; treat the
+    board attribution in the README as unresolved.
+  </p>
+
+</main>
+
+<footer class="site-foot">
+  <p>
+    Every pin, address and gain value on this page was read out of
+    <code>sdkconfig.defaults.esp32s3</code>,
+    <code>sdkconfig.{glasses,ac101,es8388}</code>,
+    <code>main/Kconfig.projbuild</code>,
+    <code>main/audio_driver_tlv320dac3101.c</code>,
+    <code>main/settings.c</code>, <code>legacyesp32.md</code> and the
+    measurement write-ups under <code>reports/</code>. Where those sources
+    disagree or fall silent, it says so above.
+  </p>
+</footer>
+
+</body>
+</html>

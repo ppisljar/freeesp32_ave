@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Isochronic tones — Session developer — ESP32 AVE</title>
+<meta name="description" content="What an isochronic tone is, what depth and duty actually control, and how to configure a click-free full-depth gate in .ledc.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+<div class="hero">
+  <h1>Isochronic tones</h1>
+  <p class="lead">One carrier, switched on and off at the entrainment rate. No second carrier, no
+  interference, no perceptual assembly — just a gate. The sharpest and most adjustable audio
+  stimulus the device makes, and the one where a single column decides whether you get a pulse or a
+  barely-audible wobble.</p>
+</div>
+
+<h2 id="what">What the phenomenon is</h2>
+
+<p>Take any carrier — a 250&nbsp;Hz sine, a 10&nbsp;kHz click train, a band of pink noise — and
+multiply it by a periodic gate. The result is a train of discrete bursts at the gate rate. Three
+parameters describe the gate completely: how fast it repeats (<code>mod</code>), how much of each
+cycle it is up (<code>duty</code>), and how far down it pulls the carrier (<code>depth</code>). A
+fourth, the edge shape, is set by <code>env</code> and <code>attack</code>.</p>
+
+<div class="figure">
+<svg viewBox="0 0 760 320" role="img" aria-labelledby="isoTitle isoDesc" width="100%">
+  <title id="isoTitle">A gated carrier: what duty and depth each control</title>
+  <desc id="isoDesc">Upper lane, the gate waveform. The solid trace is depth 100, falling all the way to zero between pulses; the dashed trace is depth 40, which never leaves a floor at 60 percent and is heard as a tremolo rather than a pulse. The raised part of each cycle occupies 40 percent of the period, which is what duty 40 means, and its edges are sloped by attack. Lower lane, the carrier multiplied by the full-depth gate: real silence between pulses.</desc>
+  <g stroke="var(--fig-line, currentColor)" fill="none" opacity="0.22" stroke-width="1">
+    <line x1="120" y1="108" x2="730" y2="108"/>
+    <line x1="120" y1="236" x2="730" y2="236"/>
+  </g>
+  <g stroke="var(--fig-line, currentColor)" fill="none" opacity="0.18" stroke-width="1" stroke-dasharray="2 4">
+    <line x1="120" y1="40" x2="120" y2="300"/>
+    <line x1="272" y1="40" x2="272" y2="300"/>
+    <line x1="425" y1="40" x2="425" y2="300"/>
+    <line x1="578" y1="40" x2="578" y2="300"/>
+    <line x1="730" y1="40" x2="730" y2="300"/>
+  </g>
+  <g fill="currentColor" font-size="13" opacity="0.85">
+    <text x="0" y="62">gate</text>
+    <text x="0" y="78" opacity="0.6">env 3</text>
+    <text x="0" y="230">output</text>
+    <text x="0" y="246" opacity="0.6">depth 100</text>
+  </g>
+  <path d="M 120 80.4 L 120 80.4 L 128 62.0 L 173 62.0 L 181 80.4 L 272 80.4 L 272 80.4 L 280 62.0 L 326 62.0 L 334 80.4 L 425 80.4 L 425 80.4 L 433 62.0 L 478 62.0 L 486 80.4 L 578 80.4 L 578 80.4 L 585 62.0 L 631 62.0 L 638 80.4 L 730 80.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="5 4" opacity="0.55"/>
+  <path d="M 120 108.0 L 120 108.0 L 128 62.0 L 173 62.0 L 181 108.0 L 272 108.0 L 272 108.0 L 280 62.0 L 326 62.0 L 334 108.0 L 425 108.0 L 425 108.0 L 433 62.0 L 478 62.0 L 486 108.0 L 578 108.0 L 578 108.0 L 585 62.0 L 631 62.0 L 638 108.0 L 730 108.0" fill="none" stroke="currentColor" stroke-width="2" opacity="0.95"/>
+  <path d="M 120 236.0 L 121 234.3 L 122 229.6 L 122 222.7 L 123 215.2 L 124 208.6 L 125 204.8 L 126 205.0 L 126 210.3 L 127 220.8 L 128 236.0 L 129 252.1 L 130 266.6 L 130 278.1 L 131 285.5 L 132 288.0 L 133 285.5 L 134 278.1 L 134 266.6 L 135 252.1 L 136 236.0 L 137 219.9 L 138 205.4 L 138 193.9 L 139 186.5 L 140 184.0 L 141 186.5 L 142 193.9 L 142 205.4 L 143 219.9 L 144 236.0 L 145 252.1 L 146 266.6 L 146 278.1 L 147 285.5 L 148 288.0 L 149 285.5 L 150 278.1 L 150 266.6 L 151 252.1 L 152 236.0 L 153 219.9 L 154 205.4 L 155 193.9 L 155 186.5 L 156 184.0 L 157 186.5 L 158 193.9 L 159 205.4 L 159 219.9 L 160 236.0 L 161 252.1 L 162 266.6 L 163 278.1 L 163 285.5 L 164 288.0 L 165 285.5 L 166 278.1 L 167 266.6 L 167 252.1 L 168 236.0 L 169 219.9 L 170 205.4 L 171 193.9 L 171 186.5 L 172 184.0 L 173 186.5 L 174 196.1 L 175 210.3 L 175 224.2 L 176 236.0 L 177 244.5 L 178 248.9 L 179 249.3 L 179 246.4 L 180 241.5 L 181 236.0 L 182 236.0 L 183 236.0 L 183 236.0 L 184 236.0 L 185 236.0 L 186 236.0 L 187 236.0 L 187 236.0 L 188 236.0 L 189 236.0 L 190 236.0 L 191 236.0 L 191 236.0 L 192 236.0 L 193 236.0 L 194 236.0 L 195 236.0 L 195 236.0 L 196 236.0 L 197 236.0 L 198 236.0 L 199 236.0 L 199 236.0 L 200 236.0 L 201 236.0 L 202 236.0 L 203 236.0 L 203 236.0 L 204 236.0 L 205 236.0 L 206 236.0 L 207 236.0 L 207 236.0 L 208 236.0 L 209 236.0 L 210 236.0 L 211 236.0 L 212 236.0 L 212 236.0 L 213 236.0 L 214 236.0 L 215 236.0 L 216 236.0 L 216 236.0 L 217 236.0 L 218 236.0 L 219 236.0 L 220 236.0 L 220 236.0 L 221 236.0 L 222 236.0 L 223 236.0 L 224 236.0 L 224 236.0 L 225 236.0 L 226 236.0 L 227 236.0 L 228 236.0 L 228 236.0 L 229 236.0 L 230 236.0 L 231 236.0 L 232 236.0 L 232 236.0 L 233 236.0 L 234 236.0 L 235 236.0 L 236 236.0 L 236 236.0 L 237 236.0 L 238 236.0 L 239 236.0 L 240 236.0 L 240 236.0 L 241 236.0 L 242 236.0 L 243 236.0 L 244 236.0 L 244 236.0 L 245 236.0 L 246 236.0 L 247 236.0 L 248 236.0 L 248 236.0 L 249 236.0 L 250 236.0 L 251 236.0 L 252 236.0 L 252 236.0 L 253 236.0 L 254 236.0 L 255 236.0 L 256 236.0 L 256 236.0 L 257 236.0 L 258 236.0 L 259 236.0 L 260 236.0 L 260 236.0 L 261 236.0 L 262 236.0 L 263 236.0 L 264 236.0 L 264 236.0 L 265 236.0 L 266 236.0 L 267 236.0 L 268 236.0 L 268 236.0 L 269 236.0 L 270 236.0 L 271 236.0 L 272 236.0 L 272 236.0 L 273 237.7 L 274 242.4 L 275 249.3 L 276 256.8 L 277 263.4 L 277 267.2 L 278 267.0 L 279 261.7 L 280 251.2 L 281 236.0 L 281 219.9 L 282 205.4 L 283 193.9 L 284 186.5 L 285 184.0 L 285 186.5 L 286 193.9 L 287 205.4 L 288 219.9 L 289 236.0 L 289 252.1 L 290 266.6 L 291 278.1 L 292 285.5 L 293 288.0 L 293 285.5 L 294 278.1 L 295 266.6 L 296 252.1 L 297 236.0 L 297 219.9 L 298 205.4 L 299 193.9 L 300 186.5 L 301 184.0 L 301 186.5 L 302 193.9 L 303 205.4 L 304 219.9 L 305 236.0 L 305 252.1 L 306 266.6 L 307 278.1 L 308 285.5 L 309 288.0 L 309 285.5 L 310 278.1 L 311 266.6 L 312 252.1 L 313 236.0 L 313 219.9 L 314 205.4 L 315 193.9 L 316 186.5 L 317 184.0 L 317 186.5 L 318 193.9 L 319 205.4 L 320 219.9 L 321 236.0 L 321 252.1 L 322 266.6 L 323 278.1 L 324 285.5 L 325 288.0 L 325 285.5 L 326 275.9 L 327 261.7 L 328 247.8 L 329 236.0 L 329 227.5 L 330 223.1 L 331 222.7 L 332 225.6 L 333 230.5 L 334 236.0 L 334 236.0 L 335 236.0 L 336 236.0 L 337 236.0 L 338 236.0 L 338 236.0 L 339 236.0 L 340 236.0 L 341 236.0 L 342 236.0 L 342 236.0 L 343 236.0 L 344 236.0 L 345 236.0 L 346 236.0 L 346 236.0 L 347 236.0 L 348 236.0 L 349 236.0 L 350 236.0 L 350 236.0 L 351 236.0 L 352 236.0 L 353 236.0 L 354 236.0 L 354 236.0 L 355 236.0 L 356 236.0 L 357 236.0 L 358 236.0 L 358 236.0 L 359 236.0 L 360 236.0 L 361 236.0 L 362 236.0 L 362 236.0 L 363 236.0 L 364 236.0 L 365 236.0 L 366 236.0 L 366 236.0 L 367 236.0 L 368 236.0 L 369 236.0 L 370 236.0 L 370 236.0 L 371 236.0 L 372 236.0 L 373 236.0 L 374 236.0 L 374 236.0 L 375 236.0 L 376 236.0 L 377 236.0 L 378 236.0 L 378 236.0 L 379 236.0 L 380 236.0 L 381 236.0 L 382 236.0 L 382 236.0 L 383 236.0 L 384 236.0 L 385 236.0 L 386 236.0 L 386 236.0 L 387 236.0 L 388 236.0 L 389 236.0 L 390 236.0 L 390 236.0 L 391 236.0 L 392 236.0 L 393 236.0 L 394 236.0 L 394 236.0 L 395 236.0 L 396 236.0 L 397 236.0 L 398 236.0 L 399 236.0 L 399 236.0 L 400 236.0 L 401 236.0 L 402 236.0 L 403 236.0 L 403 236.0 L 404 236.0 L 405 236.0 L 406 236.0 L 407 236.0 L 407 236.0 L 408 236.0 L 409 236.0 L 410 236.0 L 411 236.0 L 411 236.0 L 412 236.0 L 413 236.0 L 414 236.0 L 415 236.0 L 415 236.0 L 416 236.0 L 417 236.0 L 418 236.0 L 419 236.0 L 419 236.0 L 420 236.0 L 421 236.0 L 422 236.0 L 423 236.0 L 423 236.0 L 424 236.0 L 425 236.0 L 426 234.3 L 427 229.6 L 427 222.7 L 428 215.2 L 429 208.6 L 430 204.8 L 431 205.0 L 431 210.3 L 432 220.8 L 433 236.0 L 434 252.1 L 435 266.6 L 435 278.1 L 436 285.5 L 437 288.0 L 438 285.5 L 439 278.1 L 439 266.6 L 440 252.1 L 441 236.0 L 442 219.9 L 443 205.4 L 443 193.9 L 444 186.5 L 445 184.0 L 446 186.5 L 447 193.9 L 447 205.4 L 448 219.9 L 449 236.0 L 450 252.1 L 451 266.6 L 451 278.1 L 452 285.5 L 453 288.0 L 454 285.5 L 455 278.1 L 456 266.6 L 456 252.1 L 457 236.0 L 458 219.9 L 459 205.4 L 460 193.9 L 460 186.5 L 461 184.0 L 462 186.5 L 463 193.9 L 464 205.4 L 464 219.9 L 465 236.0 L 466 252.1 L 467 266.6 L 468 278.1 L 468 285.5 L 469 288.0 L 470 285.5 L 471 278.1 L 472 266.6 L 472 252.1 L 473 236.0 L 474 219.9 L 475 205.4 L 476 193.9 L 476 186.5 L 477 184.0 L 478 186.5 L 479 196.1 L 480 210.3 L 480 224.2 L 481 236.0 L 482 244.5 L 483 248.9 L 484 249.3 L 484 246.4 L 485 241.5 L 486 236.0 L 487 236.0 L 488 236.0 L 488 236.0 L 489 236.0 L 490 236.0 L 491 236.0 L 492 236.0 L 492 236.0 L 493 236.0 L 494 236.0 L 495 236.0 L 496 236.0 L 496 236.0 L 497 236.0 L 498 236.0 L 499 236.0 L 500 236.0 L 500 236.0 L 501 236.0 L 502 236.0 L 503 236.0 L 504 236.0 L 504 236.0 L 505 236.0 L 506 236.0 L 507 236.0 L 508 236.0 L 508 236.0 L 509 236.0 L 510 236.0 L 511 236.0 L 512 236.0 L 512 236.0 L 513 236.0 L 514 236.0 L 515 236.0 L 516 236.0 L 516 236.0 L 517 236.0 L 518 236.0 L 519 236.0 L 520 236.0 L 521 236.0 L 521 236.0 L 522 236.0 L 523 236.0 L 524 236.0 L 525 236.0 L 525 236.0 L 526 236.0 L 527 236.0 L 528 236.0 L 529 236.0 L 529 236.0 L 530 236.0 L 531 236.0 L 532 236.0 L 533 236.0 L 533 236.0 L 534 236.0 L 535 236.0 L 536 236.0 L 537 236.0 L 537 236.0 L 538 236.0 L 539 236.0 L 540 236.0 L 541 236.0 L 541 236.0 L 542 236.0 L 543 236.0 L 544 236.0 L 545 236.0 L 545 236.0 L 546 236.0 L 547 236.0 L 548 236.0 L 549 236.0 L 549 236.0 L 550 236.0 L 551 236.0 L 552 236.0 L 553 236.0 L 553 236.0 L 554 236.0 L 555 236.0 L 556 236.0 L 557 236.0 L 557 236.0 L 558 236.0 L 559 236.0 L 560 236.0 L 561 236.0 L 561 236.0 L 562 236.0 L 563 236.0 L 564 236.0 L 565 236.0 L 565 236.0 L 566 236.0 L 567 236.0 L 568 236.0 L 569 236.0 L 569 236.0 L 570 236.0 L 571 236.0 L 572 236.0 L 573 236.0 L 573 236.0 L 574 236.0 L 575 236.0 L 576 236.0 L 577 236.0 L 578 236.0 L 578 237.7 L 579 242.4 L 580 249.3 L 581 256.8 L 582 263.4 L 582 267.2 L 583 267.0 L 584 261.7 L 585 251.2 L 586 236.0 L 586 219.9 L 587 205.4 L 588 193.9 L 589 186.5 L 590 184.0 L 590 186.5 L 591 193.9 L 592 205.4 L 593 219.9 L 594 236.0 L 594 252.1 L 595 266.6 L 596 278.1 L 597 285.5 L 598 288.0 L 598 285.5 L 599 278.1 L 600 266.6 L 601 252.1 L 602 236.0 L 602 219.9 L 603 205.4 L 604 193.9 L 605 186.5 L 606 184.0 L 606 186.5 L 607 193.9 L 608 205.4 L 609 219.9 L 610 236.0 L 610 252.1 L 611 266.6 L 612 278.1 L 613 285.5 L 614 288.0 L 614 285.5 L 615 278.1 L 616 266.6 L 617 252.1 L 618 236.0 L 618 219.9 L 619 205.4 L 620 193.9 L 621 186.5 L 622 184.0 L 622 186.5 L 623 193.9 L 624 205.4 L 625 219.9 L 626 236.0 L 626 252.1 L 627 266.6 L 628 278.1 L 629 285.5 L 630 288.0 L 630 285.5 L 631 275.9 L 632 261.7 L 633 247.8 L 634 236.0 L 634 227.5 L 635 223.1 L 636 222.7 L 637 225.6 L 638 230.5 L 638 236.0 L 639 236.0 L 640 236.0 L 641 236.0 L 642 236.0 L 643 236.0 L 643 236.0 L 644 236.0 L 645 236.0 L 646 236.0 L 647 236.0 L 647 236.0 L 648 236.0 L 649 236.0 L 650 236.0 L 651 236.0 L 651 236.0 L 652 236.0 L 653 236.0 L 654 236.0 L 655 236.0 L 655 236.0 L 656 236.0 L 657 236.0 L 658 236.0 L 659 236.0 L 659 236.0 L 660 236.0 L 661 236.0 L 662 236.0 L 663 236.0 L 663 236.0 L 664 236.0 L 665 236.0 L 666 236.0 L 667 236.0 L 667 236.0 L 668 236.0 L 669 236.0 L 670 236.0 L 671 236.0 L 671 236.0 L 672 236.0 L 673 236.0 L 674 236.0 L 675 236.0 L 675 236.0 L 676 236.0 L 677 236.0 L 678 236.0 L 679 236.0 L 679 236.0 L 680 236.0 L 681 236.0 L 682 236.0 L 683 236.0 L 683 236.0 L 684 236.0 L 685 236.0 L 686 236.0 L 687 236.0 L 687 236.0 L 688 236.0 L 689 236.0 L 690 236.0 L 691 236.0 L 691 236.0 L 692 236.0 L 693 236.0 L 694 236.0 L 695 236.0 L 695 236.0 L 696 236.0 L 697 236.0 L 698 236.0 L 699 236.0 L 700 236.0 L 700 236.0 L 701 236.0 L 702 236.0 L 703 236.0 L 704 236.0 L 704 236.0 L 705 236.0 L 706 236.0 L 707 236.0 L 708 236.0 L 708 236.0 L 709 236.0 L 710 236.0 L 711 236.0 L 712 236.0 L 712 236.0 L 713 236.0 L 714 236.0 L 715 236.0 L 716 236.0 L 716 236.0 L 717 236.0 L 718 236.0 L 719 236.0 L 720 236.0 L 720 236.0 L 721 236.0 L 722 236.0 L 723 236.0 L 724 236.0 L 724 236.0 L 725 236.0 L 726 236.0 L 727 236.0 L 728 236.0 L 728 236.0 L 729 236.0 L 730 236.0" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.9"/>
+  <g stroke="currentColor" opacity="0.7" stroke-width="1.4">
+    <line x1="120" y1="150" x2="181" y2="150"/>
+    <line x1="120" y1="145" x2="120" y2="155"/>
+    <line x1="181" y1="145" x2="181" y2="155"/>
+    <line x1="187" y1="150" x2="272" y2="150"/>
+    <line x1="272" y1="145" x2="272" y2="155"/>
+    <line x1="722" y1="108" x2="722" y2="62"/>
+    <line x1="717" y1="108" x2="727" y2="108"/>
+    <line x1="717" y1="62" x2="727" y2="62"/>
+  </g>
+  <g fill="currentColor" font-size="12" opacity="0.8">
+    <text x="150" y="168" text-anchor="middle">duty 40</text>
+    <text x="233" y="168" text-anchor="middle" opacity="0.75">off</text>
+    <text x="712" y="89" text-anchor="end">depth</text>
+  </g>
+  <text x="120" y="312" fill="currentColor" font-size="12" opacity="0.7">depth sets how far DOWN the gate pulls the carrier &#183; duty sets how long it stays up &#183; attack slopes both edges</text>
+</svg>
+<p class="figcap">Upper lane, the gate. The solid trace is <code>depth 100</code> — it falls all the
+way to zero between pulses, so the carrier reaches real silence and the result is a true isochronic
+pulse. The dashed trace is <code>depth 40</code>: it never drops below 60&nbsp;% of full, so the
+carrier is always audible and what you hear is a <em>tremolo</em>, a loudness wobble on a continuous
+tone, not a pulse train. The raised section occupies 40&nbsp;% of each period, which is
+<code>duty 40</code>, and its edges are sloped by <code>attack</code>. Lower lane, the carrier
+multiplied by the full-depth gate. Note that <code>duty</code> and <code>depth</code> are orthogonal:
+duty moves the edges in time, depth moves the floor in amplitude.</p>
+</div>
+
+<h2 id="mechanism">Mechanism, as currently understood</h2>
+
+<p>Of the three audio modalities this is the one whose mechanism needs the least hedging. A gated
+carrier contains an unambiguous amplitude modulation at the gate rate; the auditory periphery
+transduces it; the auditory steady-state response at that rate is large and easy to measure. There
+is nothing perceptual or inferential about the stimulus itself, unlike a
+<a href="../sessions/binaural.html">binaural beat</a>.</p>
+
+<p>Beyond that, the honest picture is the same as everywhere else in this field. The strongest result
+in the entrainment literature is the 40&nbsp;Hz gamma work — a 40&nbsp;Hz light flicker combined with
+a 40&nbsp;Hz click train, which is an isochronic tone, delivered for an hour a day. The
+<em>entrainment</em> in that protocol is solidly established; the disease-modifying claims built on
+top of it are contested and the human trials are early. For the slower bands the position is weaker
+still: the steady-state response is real and measurable, and the claim that producing it reconfigures
+your subjective state in the way band-to-state tables promise is practitioner convention with thin
+and mixed support.</p>
+
+<p>There is one mechanistic detail from the entrainment literature that does change how you author:
+what appears to drive the response is the <strong>attack steepness and the off-time</strong>, not the
+hold or the decay. That argues for shorter duties — more off-time — and for keeping the rising edge
+reasonably crisp. The commonly quoted working range is a duty between 25 and 50&nbsp;%, with an
+attack of a few milliseconds, and depth 0.7–1.0 for a frank isochronic pulse versus 0.1–0.3 for a
+modulation deliberately disguised inside music.</p>
+
+<h2 id="uses">What it is typically used for</h2>
+
+<ul>
+  <li><strong>Waking states — focus, SMR, energise.</strong> The strongest audio drive available, and
+  you can keep the beat entirely in audio when photic flicker in the 15–25&nbsp;Hz band would be
+  unsafe. <code>05_focus_smr.ledc</code> carries its 14&nbsp;Hz SMR beat 100&nbsp;% on an audio
+  isochronic for exactly that reason.</li>
+  <li><strong>The 40&nbsp;Hz gamma protocol.</strong> <code>07_genus_40hz.ledc</code> implements the
+  published click train faithfully: a 10&nbsp;kHz carrier gated at 40&nbsp;Hz with a
+  <strong>4&nbsp;% duty</strong>, which at a 25&nbsp;ms period is a 1&nbsp;ms click, square-gated,
+  held fixed for an hour.</li>
+  <li><strong>Amplitude-modulated noise beds.</strong> Gating pink or brown noise gives a broad
+  cochlear drive with low listening fatigue, which suits sleep content.
+  <code>28_noise_sleep_bed.ledc</code> uses a smooth 0.85&nbsp;Hz sine gate;
+  <code>29_noise_sleep_pulsed.ledc</code> uses a trapezoid gate at the same rate with a 40&nbsp;%
+  duty and a 50&nbsp;ms edge.</li>
+  <li><strong>Percussive reinforcement.</strong> A low-carrier isochronic layered under a
+  <a href="../sessions/monaural.html">monaural drum</a> adds a felt thump, as in
+  <code>36_shamanic_trance_drum.ledc</code>.</li>
+</ul>
+
+<div class="warn">
+  <p><strong>Rate-band safety.</strong> An isochronic tone is safe at any rate — it is light, not
+  sound, that triggers photosensitive seizures. But isochronic sessions are usually locked 1:1 to a
+  flickering LED, and that light is not safe at every rate. Any flicker in the 3–30&nbsp;Hz band is a
+  genuine seizure trigger for susceptible people, worst between 15 and 25&nbsp;Hz. If your target
+  rate is in that band, the right answer is usually to let the <em>audio</em> carry the beat and keep
+  the light out of it. See <a href="../index.html#safety">safety</a>. This is a DIY research
+  instrument, not a medical device.</p>
+</div>
+
+<h2 id="configure">How to configure it in <code>.ledc</code></h2>
+
+<p>An isochronic channel is a single audio line with a non-zero <code>mod</code>:</p>
+
+<pre><code>#         time  freq  pan  vol  mod  ch  freqR  wave  duty  env  phase  attack  jitter  depth
+A            0   250    0   70   10   1      0     0    40    3      0       5       0    100</code></pre>
+
+<p>That is a 250&nbsp;Hz sine on channel&nbsp;1, gated at 10&nbsp;Hz, on for 40&nbsp;% of each cycle,
+trapezoid-shaped with 5&nbsp;ms edges, at full depth.</p>
+
+<h3 id="depth">The <code>depth</code> column, which is the whole game</h3>
+
+<p><code>depth</code> is the fourteenth and last audio column, a compound cell clamped to
+<strong>0–100&nbsp;%</strong>. It is how far the gate pulls the carrier <em>down</em>:</p>
+
+<pre><code>unipolar gates (env 0..3):   sample *= (1 - depth) + depth * gate
+bipolar tremolo (env 4):     sample *= 1 + depth * sin(mod_phase)</code></pre>
+
+<p>So on a gate, <strong>100 means the carrier reaches silence between pulses</strong> — a true
+isochronic tone — and 0 means no modulation at all. On <code>env 4</code> it is the classic tremolo
+index.</p>
+
+<div class="note">
+  <p><strong>Why this column exists, and why old sessions sound weak.</strong> The depth used to be a
+  hardcoded <code>0.1</code> with no column at all and no mention in the format spec. Every
+  “isochronic” gate in every session therefore swung the amplitude only between 0.9 and 1.0 of its
+  carrier — an AM index of about 5&nbsp;%, which is a barely-perceptible tremolo rather than discrete
+  pulses. It was the single parameter that sets isochronic effect size, and it was invisible. Several
+  shipped session headers still carry a note along the lines of “engine note: AM depth is fixed
+  (~0.1) here, so the trapezoid pulse is a gentle buzz, not a hard on/off”. Those notes are now
+  historical; the column exists. Older files are untouched by design — see the default table
+  below.</p>
+</div>
+
+<div class="spec-table">
+<table>
+  <caption>What depth you get when you leave the column off. Source:
+  <code>execute_timeline_entry_ctx</code> (the <code>depth_arg</code> block) and
+  <code>audio_generator_set_iso_channel</code>.</caption>
+  <thead><tr><th><code>env</code> column</th><th><code>depth</code> column</th><th>Effective depth</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>absent</td><td>absent</td><td><strong>10&nbsp;%</strong></td>
+      <td>Legacy. A pre-column file is byte-for-byte unchanged in behaviour.</td></tr>
+    <tr><td>present, 0–3</td><td>absent</td><td><strong>100&nbsp;%</strong></td>
+      <td>A unipolar gate is meant to be a discrete pulse. Writing <code>env</code> is taken as
+      intent.</td></tr>
+    <tr><td>present, 4</td><td>absent</td><td><strong>10&nbsp;%</strong></td>
+      <td>The legacy bipolar tremolo is meant to be a gentle wobble.</td></tr>
+    <tr><td>any</td><td>present</td><td>the column, clamped 0–100 at parse</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Write the column explicitly anyway. A reader should not have to know a default table to tell what
+your file does, and the above is the single most surprising rule in the format.</p>
+
+<h3 id="loudness">Full depth is quieter — raise <code>vol</code></h3>
+
+<p>A 50&nbsp;%-duty gate at depth 100 is <strong>−3.01&nbsp;dB in mean power</strong> against the
+same tone ungated. That is not a bug or a scaling artifact: the carrier really is off half the time.
+A 40&nbsp;% duty costs about −4&nbsp;dB, and the 4&nbsp;% GENUS click costs about −14&nbsp;dB.
+Perceived loudness drops with the power, so <strong><code>vol</code> usually needs raising</strong>
+when you turn depth up. At the old 10&nbsp;% depth the difference was around 0.2&nbsp;dB, which is
+why nobody ever noticed it before.</p>
+
+<p>There is room to raise it. The mixer divides every channel by a fixed 1/16 regardless of how many
+are playing, so a single centre-panned sine at <code>vol 100</code> peaks at only
+−27.1&nbsp;dBFS, and <code>vol</code> is <em>not range-checked on any session path</em> — a value
+above 100 works and is simply louder. Use that deliberately and sparingly; see
+<a href="../sessions/reference.html#mixing">the mixing model</a>.</p>
+
+<h3 id="clicks">Full depth on a square gate clicks — use <code>env 3</code></h3>
+
+<p>A square gate at full depth puts a step discontinuity in the waveform at every edge, four times a
+second at 2&nbsp;Hz and eighty times a second at 40&nbsp;Hz. That is a click by construction, and at
+full depth it is loud.</p>
+
+<p><strong>The click-free route to full depth is <code>env 3</code> (trapezoid) with
+<code>attack</code> 3–10&nbsp;ms</strong>, which rounds both edges. Two helpful details: the edge is
+clamped to half the on-time, so a very short gate degrades gracefully into a triangle rather than
+misbehaving; and audio <code>attack</code> has no upper cap, unlike the LED side's 60&nbsp;ms.
+Anything at or above about 2&nbsp;ms is click-safe. The default on a fresh channel is 3&nbsp;ms.</p>
+
+<p>If you want the click — the 40&nbsp;Hz protocol specifies a 1&nbsp;ms click train, and a click is
+what it means — then <code>env 0</code> with a 4&nbsp;% duty is correct, and <code>attack</code> is
+simply ignored there. Write it as <code>0</code> so the file does not imply an edge shaping that
+never happens.</p>
+
+<h3 id="envelopes">The five envelopes, and which columns each one reads</h3>
+
+<div class="spec-table">
+<table>
+  <caption>Gate shapes. Measured columns are the demodulated carrier envelope of a 400&nbsp;Hz tone
+  gated at 8&nbsp;Hz, duty 50, from
+  <code>reports/non_planned_reports/audio_features_measured_2026-10-12.md</code>.</caption>
+  <thead><tr><th><code>env</code></th><th>Shape</th><th>Reads <code>duty</code>?</th><th>Reads <code>attack</code>?</th><th>Measured h2 / h3</th><th>Default depth</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td>square gate (unipolar)</td><td><strong>yes</strong></td><td>no</td><td>0.000 / 0.332</td><td>100&nbsp;%</td></tr>
+    <tr><td>1</td><td>sine gate — a true raised sine</td><td><strong>no</strong></td><td>no</td><td>0.002 / 0.001</td><td>100&nbsp;%</td></tr>
+    <tr><td>2</td><td>triangle gate</td><td><strong>no</strong></td><td>no</td><td>0.001 / 0.110</td><td>100&nbsp;%</td></tr>
+    <tr><td>3</td><td>trapezoid gate</td><td><strong>yes</strong></td><td><strong>yes</strong></td><td>0.076 / 0.321</td><td>100&nbsp;%</td></tr>
+    <tr><td>4</td><td>sine tremolo, bipolar <code>×(1+depth·sin)</code></td><td>no</td><td>no</td><td>0.002 / 0.001</td><td>10&nbsp;%</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>When the <code>env</code> column is absent an audio line defaults to <strong>4</strong>, the
+legacy tremolo — note that an LED line defaults to <strong>0</strong> instead. An out-of-range value
+also falls back to 4 on an audio line and to 0 on an LED line.</p>
+
+<div class="warn">
+  <p><strong><code>duty</code> is silently ignored by <code>env 1</code> and <code>env 2</code>.</strong>
+  The sine gate returns <code>0.5&nbsp;−&nbsp;0.5·cos(2πph)</code> and the triangle returns a fixed
+  symmetric ramp; neither function reads <code>duty</code> at all. So a <code>duty</code> column next
+  to <code>env 1</code> or <code>env 2</code> is a no-op, and a <code>duty</code>
+  <em>modulation</em> next to them is a no-op too — the modulation engine dutifully animates a value
+  that nothing reads. The triangle's on-fraction is always exactly 50&nbsp;%. <strong>If
+  <code>duty</code> matters, use <code>env 0</code> or <code>env 3</code>.</strong></p>
+  <p>Related curiosity, so you do not chase it: <code>env 1</code> <em>measures</em> an apparent duty
+  of 66.67&nbsp;%. That is just the fraction of a raised sine that sits above its own mid-level, not a
+  setting being ignored.</p>
+</div>
+
+<div class="note">
+  <p><strong>Both sine envelopes are now true raised sines</strong>, not the <code>4x(1−x)</code>
+  parabola their comments once advertised. The parabola looks like a similar hump but has a
+  derivative discontinuity at the cycle boundary, so its harmonics fell as 1/n²: an 8&nbsp;Hz alpha
+  gate was simultaneously driving 16&nbsp;Hz at a quarter of the fundamental and 24&nbsp;Hz at a
+  ninth — beta content inside an alpha session. Measured second harmonic went from 0.251 to 0.002
+  when it was fixed. If you measure h2 near 0.25 on an <code>env 1</code> channel, the lookup table
+  has regressed.</p>
+</div>
+
+<h3 id="gliding">Gliding the rate, duty and depth</h3>
+
+<p><code>mod</code>, <code>duty</code>, <code>attack</code>, <code>phase</code> and
+<code>depth</code> are all compound cells. <code>mod</code> takes every glyph; <code>depth</code>
+takes <code class="kbd">&gt;</code> and <code class="kbd">*</code> only — a periodic glyph on it logs
+a warning and holds the start value.</p>
+
+<pre><code>A       120000   250    0   70  &gt;10   1      0     0    40    3      0       5       0    &gt;60
+A       420000   250    0   70    6   1      0     0    40    3      0       5       0    100</code></pre>
+
+<p>That glides the pulse rate 10&nbsp;→&nbsp;6&nbsp;Hz and simultaneously deepens the gate from
+60&nbsp;% to 100&nbsp;% over five minutes. <code>env</code> is <strong>not</strong> compound: it is a
+step value, and a glyph on it is parsed and silently discarded by design.</p>
+
+<p>Two start-value rules differ by field class, and they matter here:</p>
+
+<ul>
+  <li><strong>Core fields</strong> (<code>freq</code>, <code>pan</code>, <code>vol</code>,
+  <code>mod</code>): a ramp on an already-running channel starts from the <em>live</em> value and
+  discards the literal in the file. That is deliberate — starting from the literal snaps audibly if
+  the previous ramp was interrupted — but it means a literal that disagrees with the live state is
+  lying to its reader. Write the live value; the linter flags the mismatch as
+  <code>LEDC_RAMP_START_SUBSTITUTED</code>.</li>
+  <li><strong>Pulse fields</strong> (<code>duty</code>, <code>phase</code>, <code>attack</code>,
+  <code>freqR</code>, <code>depth</code>): the start value <em>is</em> the literal, and the target is
+  found by scanning forward for the next entry that actually sets that field — so an intervening row
+  that omits the column does not break the ramp.</li>
+</ul>
+
+<h3 id="dutyzero">A stepped <code>duty 0</code> is a no-op</h3>
+
+<p>The setter only writes <code>duty&nbsp;&gt;&nbsp;0</code>, so writing <code>duty 0</code> leaves
+the previous duty in force. The linter reports it as <code>LEDC_AUDIO_DUTY_ZERO</code> (info). A
+<em>ramped</em> or modulated duty <em>can</em> reach 0, because the per-block evaluation takes a
+different path. To silence a channel entirely, use <code>vol 0</code>; to remove the modulation and
+keep the tone, use <code>mod 0</code>.</p>
+
+<h3 id="locking">Locking light to the pulse</h3>
+
+<p>Write the same rate in the LED line's <code>freq</code> column, and match the gate character:</p>
+
+<pre><code>A            0   250    0   70   10   1      0     0    40    3      0       5       0    100
+             0    10   40   25  255  170    40    15    3      0       6      # LED 10 Hz, env 3</code></pre>
+
+<p>Audio and LED <code>env</code> values mean the same shapes, which makes 1:1 locking easy to keep
+coherent — a trapezoid gate on both sides, with similar edge fractions, reads as one event rather
+than two. Measured audio-versus-light offset is a constant ~2–3&nbsp;ms with audio early, far below
+the 20–40&nbsp;ms cross-modal simultaneity threshold.</p>
+
+<p>Audio <code>phase</code> is stored as a fraction of the mod cycle, so it is frequency-independent
+by construction and survives a <code>mod</code> ramp. It is also, like LED phase, a
+<strong>lead</strong> — see <a href="../sessions/photic.html#phase">the photic page</a>.</p>
+
+<h2 id="example">Complete worked example</h2>
+
+<p><a href="../sessions/examples/isochronic_alpha_pulse.ledc"><code>isochronic_alpha_pulse.ledc</code></a>
+— 15 minutes at 10&nbsp;Hz, full-depth trapezoid gate, light locked 1:1. It reports <em>no static
+problems found</em> under <code>python3 tools/avmeasure/analyze.py lint</code>.</p>
+
+<pre><code># --- Induction (00:00-01:00): light and tone ease up together at 10 Hz ---
+0 10 40 &gt;0 255 170 40 15 3 0 6                 # amber trapezoid flash, 40% duty, 6 ms edge
+A 0 250 0 &gt;0 10 1 0 0 40 3 0 5 0 100           # ch1 250 Hz gated at 10 Hz, duty 40, FULL depth
+15000 10 40 25 255 170 40 15 3 0 6             # brightness reaches the 25% cap
+A 60000 250 0 70 10 1 0 0 40 3 0 5 0 100       # vol settled 70 (raised to pay for the gate)
+
+# --- Hold, 10 Hz alpha, 12 min (01:00-13:00) ---
+#   Anti-habituation lives on the LIGHT here: `jitter 0.3:53000` wanders the
+#   flicker rate +/-0.3 Hz over 53 s. Audio `jitter` would be useless on this
+#   channel — it only ever moves a binaural detune, and this channel is mono.
+#   To wander an isochronic pulse rate, modulate `mod` instead: ~9.7:10.3:53000.
+A 120000 250 0 70 10 1 0 0 40 3 0 5 0 100
+120000 10 40 25 255 170 40 15 3 0 6 0.3:53000
+
+# --- Close (13:00-15:00): simultaneous fade of light and tone ---
+A 780000 250 0 &gt;70 10 1 0 0 40 3 0 5 0 100     # volume fades 70 -&gt; 0 over 2 min
+780000 10 40 &gt;25 255 170 40 15 3 0 6 0         # LED jitter back off, brightness 25 -&gt; 0
+A 900000 250 0 0 10 1 0 0 40 3 0 5 0 100
+900000 10 40 0 255 170 40 15 3 0 6 0</code></pre>
+
+<p>Why that file looks the way it does:</p>
+
+<ol>
+  <li><strong><code>depth 100</code> is written out</strong> on every row, even though
+  <code>env 3</code> would default to it. The file states its own intent.</li>
+  <li><strong><code>vol 70</code>, not 50.</strong> A 40&nbsp;%-duty full-depth gate costs about
+  4&nbsp;dB of mean power.</li>
+  <li><strong><code>env 3</code> with <code>attack 5</code></strong> rather than <code>env 0</code>:
+  full depth plus a square edge would click eighty times a minute at 10&nbsp;Hz.</li>
+  <li><strong>Anti-habituation is on the light, not the audio.</strong> Audio <code>jitter</code> on
+  a mono channel does nothing, and the file says so in a comment rather than quietly carrying a dead
+  column.</li>
+  <li><strong>Jitter is written back to <code>0</code></strong> before the end, because the LED jitter
+  globals are not reset between sessions.</li>
+</ol>
+
+<p>Full column semantics are on the <a href="../sessions/reference.html">reference page</a>;
+pacing, testing and the trap list are in the
+<a href="../sessions/authoring.html">authoring guide</a>.</p>
+
+</main>
+</body>
+</html>

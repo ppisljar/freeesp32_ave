@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Binaural beats — Session developer — ESP32 AVE</title>
+<meta name="description" content="What a binaural beat is, what the evidence supports, and how to configure one in .ledc using either the freqR idiom or a hard-panned pair.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+<div class="hero">
+  <h1>Binaural beats</h1>
+  <p class="lead">Two steady tones, one in each ear, a few hertz apart. Neither tone pulses. The
+  pulsing you hear is assembled in your own auditory system from the difference between them — which
+  is why it needs headphones, and why you will never find it in a recording.</p>
+</div>
+
+<h2 id="what">What the phenomenon is</h2>
+
+<p>Play 370&nbsp;Hz into the left ear and 380&nbsp;Hz into the right, and most listeners report a
+slow 10&nbsp;Hz throb or “rotation” inside the head. The beat rate is exactly the difference between
+the two carriers. Change either carrier and the beat changes with it; change both by the same
+amount and the beat does not move at all.</p>
+
+<p>Mechanically, nothing beats. The left ear's cochlea sees a pure 370&nbsp;Hz tone and the right
+ear's a pure 380&nbsp;Hz tone. There is no 10&nbsp;Hz component anywhere in the acoustic signal, no
+amplitude modulation in either channel, and no 10&nbsp;Hz line in a spectrum of either ear's
+recording. The beat first exists at the point where the two ears' information is combined.</p>
+
+<div class="figure">
+<svg viewBox="0 0 760 300" role="img" aria-labelledby="binTitle binDesc" width="100%">
+  <title id="binTitle">Two carriers, one per ear, and a beat that is in neither of them</title>
+  <desc id="binDesc">Top lane, eight cycles of the left-ear carrier. Middle lane, nine cycles of the right-ear carrier over the same span. Bottom lane, the one-cycle beat envelope the listener perceives, drawn dashed because it appears nowhere in the signal: it is the difference between the two, and the two never meet except inside the head.</desc>
+  <g stroke="var(--fig-line, currentColor)" fill="none" opacity="0.25" stroke-width="1">
+    <line x1="120" y1="58" x2="730" y2="58"/>
+    <line x1="120" y1="148" x2="730" y2="148"/>
+    <line x1="120" y1="252" x2="730" y2="252"/>
+  </g>
+  <g fill="currentColor" font-size="13" opacity="0.85">
+    <text x="0" y="48">LEFT ear</text>
+    <text x="0" y="64" opacity="0.6">freq 370</text>
+    <text x="0" y="138">RIGHT ear</text>
+    <text x="0" y="154" opacity="0.6">freqR 380</text>
+    <text x="0" y="242">perceived</text>
+    <text x="0" y="258" opacity="0.6">beat 10 Hz</text>
+  </g>
+  <path d="M 120 58.0 L 122 53.9 L 124 50.0 L 126 46.2 L 128 42.7 L 130 39.6 L 131 37.0 L 133 34.8 L 135 33.3 L 137 32.3 L 139 32.0 L 141 32.3 L 143 33.3 L 145 34.8 L 147 37.0 L 149 39.6 L 150 42.7 L 152 46.2 L 154 50.0 L 156 53.9 L 158 58.0 L 160 62.1 L 162 66.0 L 164 69.8 L 166 73.3 L 168 76.4 L 170 79.0 L 171 81.2 L 173 82.7 L 175 83.7 L 177 84.0 L 179 83.7 L 181 82.7 L 183 81.2 L 185 79.0 L 187 76.4 L 189 73.3 L 191 69.8 L 192 66.0 L 194 62.1 L 196 58.0 L 198 53.9 L 200 50.0 L 202 46.2 L 204 42.7 L 206 39.6 L 208 37.0 L 210 34.8 L 212 33.3 L 213 32.3 L 215 32.0 L 217 32.3 L 219 33.3 L 221 34.8 L 223 37.0 L 225 39.6 L 227 42.7 L 229 46.2 L 231 50.0 L 232 53.9 L 234 58.0 L 236 62.1 L 238 66.0 L 240 69.8 L 242 73.3 L 244 76.4 L 246 79.0 L 248 81.2 L 250 82.7 L 252 83.7 L 253 84.0 L 255 83.7 L 257 82.7 L 259 81.2 L 261 79.0 L 263 76.4 L 265 73.3 L 267 69.8 L 269 66.0 L 271 62.1 L 272 58.0 L 274 53.9 L 276 50.0 L 278 46.2 L 280 42.7 L 282 39.6 L 284 37.0 L 286 34.8 L 288 33.3 L 290 32.3 L 292 32.0 L 293 32.3 L 295 33.3 L 297 34.8 L 299 37.0 L 301 39.6 L 303 42.7 L 305 46.2 L 307 50.0 L 309 53.9 L 311 58.0 L 313 62.1 L 314 66.0 L 316 69.8 L 318 73.3 L 320 76.4 L 322 79.0 L 324 81.2 L 326 82.7 L 328 83.7 L 330 84.0 L 332 83.7 L 334 82.7 L 335 81.2 L 337 79.0 L 339 76.4 L 341 73.3 L 343 69.8 L 345 66.0 L 347 62.1 L 349 58.0 L 351 53.9 L 353 50.0 L 354 46.2 L 356 42.7 L 358 39.6 L 360 37.0 L 362 34.8 L 364 33.3 L 366 32.3 L 368 32.0 L 370 32.3 L 372 33.3 L 374 34.8 L 375 37.0 L 377 39.6 L 379 42.7 L 381 46.2 L 383 50.0 L 385 53.9 L 387 58.0 L 389 62.1 L 391 66.0 L 393 69.8 L 394 73.3 L 396 76.4 L 398 79.0 L 400 81.2 L 402 82.7 L 404 83.7 L 406 84.0 L 408 83.7 L 410 82.7 L 412 81.2 L 414 79.0 L 415 76.4 L 417 73.3 L 419 69.8 L 421 66.0 L 423 62.1 L 425 58.0 L 427 53.9 L 429 50.0 L 431 46.2 L 433 42.7 L 435 39.6 L 436 37.0 L 438 34.8 L 440 33.3 L 442 32.3 L 444 32.0 L 446 32.3 L 448 33.3 L 450 34.8 L 452 37.0 L 454 39.6 L 456 42.7 L 457 46.2 L 459 50.0 L 461 53.9 L 463 58.0 L 465 62.1 L 467 66.0 L 469 69.8 L 471 73.3 L 473 76.4 L 475 79.0 L 476 81.2 L 478 82.7 L 480 83.7 L 482 84.0 L 484 83.7 L 486 82.7 L 488 81.2 L 490 79.0 L 492 76.4 L 494 73.3 L 496 69.8 L 497 66.0 L 499 62.1 L 501 58.0 L 503 53.9 L 505 50.0 L 507 46.2 L 509 42.7 L 511 39.6 L 513 37.0 L 515 34.8 L 516 33.3 L 518 32.3 L 520 32.0 L 522 32.3 L 524 33.3 L 526 34.8 L 528 37.0 L 530 39.6 L 532 42.7 L 534 46.2 L 536 50.0 L 537 53.9 L 539 58.0 L 541 62.1 L 543 66.0 L 545 69.8 L 547 73.3 L 549 76.4 L 551 79.0 L 553 81.2 L 555 82.7 L 557 83.7 L 558 84.0 L 560 83.7 L 562 82.7 L 564 81.2 L 566 79.0 L 568 76.4 L 570 73.3 L 572 69.8 L 574 66.0 L 576 62.1 L 578 58.0 L 579 53.9 L 581 50.0 L 583 46.2 L 585 42.7 L 587 39.6 L 589 37.0 L 591 34.8 L 593 33.3 L 595 32.3 L 597 32.0 L 598 32.3 L 600 33.3 L 602 34.8 L 604 37.0 L 606 39.6 L 608 42.7 L 610 46.2 L 612 50.0 L 614 53.9 L 616 58.0 L 618 62.1 L 619 66.0 L 621 69.8 L 623 73.3 L 625 76.4 L 627 79.0 L 629 81.2 L 631 82.7 L 633 83.7 L 635 84.0 L 637 83.7 L 638 82.7 L 640 81.2 L 642 79.0 L 644 76.4 L 646 73.3 L 648 69.8 L 650 66.0 L 652 62.1 L 654 58.0 L 656 53.9 L 658 50.0 L 659 46.2 L 661 42.7 L 663 39.6 L 665 37.0 L 667 34.8 L 669 33.3 L 671 32.3 L 673 32.0 L 675 32.3 L 677 33.3 L 679 34.8 L 680 37.0 L 682 39.6 L 684 42.7 L 686 46.2 L 688 50.0 L 690 53.9 L 692 58.0 L 694 62.1 L 696 66.0 L 698 69.8 L 700 73.3 L 701 76.4 L 703 79.0 L 705 81.2 L 707 82.7 L 709 83.7 L 711 84.0 L 713 83.7 L 715 82.7 L 717 81.2 L 719 79.0 L 720 76.4 L 722 73.3 L 724 69.8 L 726 66.0 L 728 62.1 L 730 58.0" fill="none" stroke="currentColor" stroke-width="1.8" opacity="0.9"/>
+  <path d="M 120 148.0 L 122 143.7 L 124 139.5 L 125 135.6 L 127 132.0 L 129 128.8 L 131 126.2 L 133 124.1 L 134 122.7 L 136 122.1 L 138 122.1 L 140 122.9 L 142 124.3 L 143 126.4 L 145 129.1 L 147 132.3 L 149 136.0 L 150 140.0 L 152 144.2 L 154 148.5 L 156 152.8 L 158 156.9 L 159 160.9 L 161 164.4 L 163 167.5 L 165 170.1 L 167 172.1 L 168 173.4 L 170 174.0 L 172 173.8 L 174 173.0 L 176 171.5 L 177 169.3 L 179 166.6 L 181 163.3 L 183 159.6 L 185 155.6 L 186 151.4 L 188 147.0 L 190 142.8 L 192 138.6 L 194 134.7 L 195 131.2 L 197 128.2 L 199 125.6 L 201 123.8 L 203 122.5 L 204 122.0 L 206 122.2 L 208 123.1 L 210 124.7 L 212 127.0 L 213 129.8 L 215 133.1 L 217 136.8 L 219 140.9 L 220 145.1 L 222 149.4 L 224 153.7 L 226 157.8 L 228 161.7 L 229 165.2 L 231 168.2 L 233 170.6 L 235 172.4 L 237 173.6 L 238 174.0 L 240 173.7 L 242 172.7 L 244 171.1 L 246 168.7 L 247 165.9 L 249 162.5 L 251 158.7 L 253 154.7 L 255 150.4 L 256 146.1 L 258 141.8 L 260 137.7 L 262 133.9 L 264 130.5 L 265 127.5 L 267 125.2 L 269 123.4 L 271 122.4 L 272 122.0 L 274 122.4 L 276 123.4 L 278 125.2 L 280 127.5 L 281 130.5 L 283 133.9 L 285 137.7 L 287 141.8 L 289 146.1 L 290 150.4 L 292 154.7 L 294 158.7 L 296 162.5 L 298 165.9 L 299 168.7 L 301 171.1 L 303 172.7 L 305 173.7 L 307 174.0 L 308 173.6 L 310 172.4 L 312 170.6 L 314 168.2 L 316 165.2 L 317 161.7 L 319 157.8 L 321 153.7 L 323 149.4 L 325 145.1 L 326 140.9 L 328 136.8 L 330 133.1 L 332 129.8 L 334 127.0 L 335 124.7 L 337 123.1 L 339 122.2 L 341 122.0 L 342 122.5 L 344 123.8 L 346 125.6 L 348 128.2 L 350 131.2 L 351 134.7 L 353 138.6 L 355 142.8 L 357 147.0 L 359 151.4 L 360 155.6 L 362 159.6 L 364 163.3 L 366 166.6 L 368 169.3 L 369 171.5 L 371 173.0 L 373 173.8 L 375 174.0 L 377 173.4 L 378 172.1 L 380 170.1 L 382 167.5 L 384 164.4 L 386 160.9 L 387 156.9 L 389 152.8 L 391 148.5 L 393 144.2 L 394 140.0 L 396 136.0 L 398 132.3 L 400 129.1 L 402 126.4 L 403 124.3 L 405 122.9 L 407 122.1 L 409 122.1 L 411 122.7 L 412 124.1 L 414 126.2 L 416 128.8 L 418 132.0 L 420 135.6 L 421 139.5 L 423 143.7 L 425 148.0 L 427 152.3 L 429 156.5 L 430 160.4 L 432 164.0 L 434 167.2 L 436 169.8 L 438 171.9 L 439 173.3 L 441 173.9 L 443 173.9 L 445 173.1 L 447 171.7 L 448 169.6 L 450 166.9 L 452 163.7 L 454 160.0 L 456 156.0 L 457 151.8 L 459 147.5 L 461 143.2 L 463 139.1 L 464 135.1 L 466 131.6 L 468 128.5 L 470 125.9 L 472 123.9 L 473 122.6 L 475 122.0 L 477 122.2 L 479 123.0 L 481 124.5 L 482 126.7 L 484 129.4 L 486 132.7 L 488 136.4 L 490 140.4 L 491 144.6 L 493 149.0 L 495 153.2 L 497 157.4 L 499 161.3 L 500 164.8 L 502 167.8 L 504 170.4 L 506 172.2 L 508 173.5 L 509 174.0 L 511 173.8 L 513 172.9 L 515 171.3 L 516 169.0 L 518 166.2 L 520 162.9 L 522 159.2 L 524 155.1 L 525 150.9 L 527 146.6 L 529 142.3 L 531 138.2 L 533 134.3 L 534 130.8 L 536 127.8 L 538 125.4 L 540 123.6 L 542 122.4 L 543 122.0 L 545 122.3 L 547 123.3 L 549 124.9 L 551 127.3 L 552 130.1 L 554 133.5 L 556 137.3 L 558 141.3 L 560 145.6 L 561 149.9 L 563 154.2 L 565 158.3 L 567 162.1 L 569 165.5 L 570 168.5 L 572 170.8 L 574 172.6 L 576 173.6 L 578 174.0 L 579 173.6 L 581 172.6 L 583 170.8 L 585 168.5 L 586 165.5 L 588 162.1 L 590 158.3 L 592 154.2 L 594 149.9 L 595 145.6 L 597 141.3 L 599 137.3 L 601 133.5 L 603 130.1 L 604 127.3 L 606 124.9 L 608 123.3 L 610 122.3 L 612 122.0 L 613 122.4 L 615 123.6 L 617 125.4 L 619 127.8 L 621 130.8 L 622 134.3 L 624 138.2 L 626 142.3 L 628 146.6 L 630 150.9 L 631 155.1 L 633 159.2 L 635 162.9 L 637 166.2 L 638 169.0 L 640 171.3 L 642 172.9 L 644 173.8 L 646 174.0 L 647 173.5 L 649 172.2 L 651 170.4 L 653 167.8 L 655 164.8 L 656 161.3 L 658 157.4 L 660 153.2 L 662 149.0 L 664 144.6 L 665 140.4 L 667 136.4 L 669 132.7 L 671 129.4 L 673 126.7 L 674 124.5 L 676 123.0 L 678 122.2 L 680 122.0 L 682 122.6 L 683 123.9 L 685 125.9 L 687 128.5 L 689 131.6 L 691 135.1 L 692 139.1 L 694 143.2 L 696 147.5 L 698 151.8 L 700 156.0 L 701 160.0 L 703 163.7 L 705 166.9 L 707 169.6 L 708 171.7 L 710 173.1 L 712 173.9 L 714 173.9 L 716 173.3 L 717 171.9 L 719 169.8 L 721 167.2 L 723 164.0 L 725 160.4 L 726 156.5 L 728 152.3 L 730 148.0" fill="none" stroke="currentColor" stroke-width="1.8" opacity="0.9"/>
+  <path d="M 120 218.0 L 124 218.0 L 129 218.0 L 133 218.1 L 137 218.1 L 142 218.2 L 146 218.3 L 150 218.4 L 155 218.5 L 159 218.7 L 164 218.9 L 168 219.0 L 172 219.2 L 177 219.4 L 181 219.7 L 185 219.9 L 190 220.2 L 194 220.4 L 198 220.7 L 203 221.0 L 207 221.4 L 212 221.7 L 216 222.1 L 220 222.4 L 225 222.8 L 229 223.2 L 233 223.6 L 238 224.1 L 242 224.5 L 246 224.9 L 251 225.4 L 255 225.9 L 259 226.4 L 264 226.9 L 268 227.4 L 272 228.0 L 277 228.5 L 281 229.1 L 286 229.6 L 290 230.2 L 294 230.8 L 299 231.4 L 303 232.0 L 307 232.6 L 312 233.3 L 316 233.9 L 320 234.6 L 325 235.2 L 329 235.9 L 334 236.6 L 338 237.2 L 342 237.9 L 347 238.6 L 351 239.3 L 355 240.1 L 360 240.8 L 364 241.5 L 368 242.2 L 373 243.0 L 377 243.7 L 381 244.4 L 386 245.2 L 390 245.9 L 394 246.7 L 399 247.4 L 403 248.2 L 408 249.0 L 412 249.7 L 416 250.5 L 421 251.2 L 425 252.0 L 429 251.2 L 434 250.5 L 438 249.7 L 442 249.0 L 447 248.2 L 451 247.4 L 456 246.7 L 460 245.9 L 464 245.2 L 469 244.4 L 473 243.7 L 477 243.0 L 482 242.2 L 486 241.5 L 490 240.8 L 495 240.1 L 499 239.3 L 503 238.6 L 508 237.9 L 512 237.2 L 516 236.6 L 521 235.9 L 525 235.2 L 530 234.6 L 534 233.9 L 538 233.3 L 543 232.6 L 547 232.0 L 551 231.4 L 556 230.8 L 560 230.2 L 564 229.6 L 569 229.1 L 573 228.5 L 578 228.0 L 582 227.4 L 586 226.9 L 591 226.4 L 595 225.9 L 599 225.4 L 604 224.9 L 608 224.5 L 612 224.1 L 617 223.6 L 621 223.2 L 625 222.8 L 630 222.4 L 634 222.1 L 638 221.7 L 643 221.4 L 647 221.0 L 652 220.7 L 656 220.4 L 660 220.2 L 665 219.9 L 669 219.7 L 673 219.4 L 678 219.2 L 682 219.0 L 686 218.9 L 691 218.7 L 695 218.5 L 700 218.4 L 704 218.3 L 708 218.2 L 713 218.1 L 717 218.1 L 721 218.0 L 726 218.0 L 730 218.0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="5 4" opacity="0.6"/>
+  <path d="M 120 286.0 L 124 286.0 L 129 286.0 L 133 285.9 L 137 285.9 L 142 285.8 L 146 285.7 L 150 285.6 L 155 285.5 L 159 285.3 L 164 285.1 L 168 285.0 L 172 284.8 L 177 284.6 L 181 284.3 L 185 284.1 L 190 283.8 L 194 283.6 L 198 283.3 L 203 283.0 L 207 282.6 L 212 282.3 L 216 281.9 L 220 281.6 L 225 281.2 L 229 280.8 L 233 280.4 L 238 279.9 L 242 279.5 L 246 279.1 L 251 278.6 L 255 278.1 L 259 277.6 L 264 277.1 L 268 276.6 L 272 276.0 L 277 275.5 L 281 274.9 L 286 274.4 L 290 273.8 L 294 273.2 L 299 272.6 L 303 272.0 L 307 271.4 L 312 270.7 L 316 270.1 L 320 269.4 L 325 268.8 L 329 268.1 L 334 267.4 L 338 266.8 L 342 266.1 L 347 265.4 L 351 264.7 L 355 263.9 L 360 263.2 L 364 262.5 L 368 261.8 L 373 261.0 L 377 260.3 L 381 259.6 L 386 258.8 L 390 258.1 L 394 257.3 L 399 256.6 L 403 255.8 L 408 255.0 L 412 254.3 L 416 253.5 L 421 252.8 L 425 252.0 L 429 252.8 L 434 253.5 L 438 254.3 L 442 255.0 L 447 255.8 L 451 256.6 L 456 257.3 L 460 258.1 L 464 258.8 L 469 259.6 L 473 260.3 L 477 261.0 L 482 261.8 L 486 262.5 L 490 263.2 L 495 263.9 L 499 264.7 L 503 265.4 L 508 266.1 L 512 266.8 L 516 267.4 L 521 268.1 L 525 268.8 L 530 269.4 L 534 270.1 L 538 270.7 L 543 271.4 L 547 272.0 L 551 272.6 L 556 273.2 L 560 273.8 L 564 274.4 L 569 274.9 L 573 275.5 L 578 276.0 L 582 276.6 L 586 277.1 L 591 277.6 L 595 278.1 L 599 278.6 L 604 279.1 L 608 279.5 L 612 279.9 L 617 280.4 L 621 280.8 L 625 281.2 L 630 281.6 L 634 281.9 L 638 282.3 L 643 282.6 L 647 283.0 L 652 283.3 L 656 283.6 L 660 283.8 L 665 284.1 L 669 284.3 L 673 284.6 L 678 284.8 L 682 285.0 L 686 285.1 L 691 285.3 L 695 285.5 L 700 285.6 L 704 285.7 L 708 285.8 L 713 285.9 L 717 285.9 L 721 286.0 L 726 286.0 L 730 286.0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="5 4" opacity="0.6"/>
+  <line x1="120" y1="196" x2="730" y2="196" stroke="currentColor" opacity="0.4" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="120" y="290" fill="currentColor" font-size="12" opacity="0.7">beat = freqR &#8722; freq = 10 Hz &#183; nothing below the dotted line exists in the recorded signal</text>
+</svg>
+<p class="figcap">Top: eight cycles of the left-ear carrier. Middle: nine cycles of the right-ear
+carrier over exactly the same span. Bottom, dashed: the one-cycle beat envelope the listener
+perceives. It is drawn dashed because it does not exist below the dotted line — not in the file, not
+in the DAC output, not in a recording. It is the difference between two things that only meet inside
+the head. The practical consequence for anyone measuring a session: never look for a beat line in a
+mono sum, because there isn't one. Measure the two carriers separately and subtract.</p>
+</div>
+
+<h2 id="mechanism">Mechanism, as currently understood</h2>
+
+<p>The honest version is that the perceptual phenomenon is solid and the therapeutic story is not.</p>
+
+<p><strong>What is well supported:</strong> binaural beats are audible, the percept depends on
+binaural integration in the brainstem (the superior olivary complex is the usual candidate), and the
+percept is strongest for carriers in the low hundreds of hertz with small differences. The commonly
+cited figures — beat perception peaking around a 400&nbsp;Hz carrier, falling away badly above about
+1&nbsp;kHz, and requiring a difference under roughly 35&nbsp;Hz to be heard as a beat rather than as
+two separate tones — come from the psychoacoustic literature and are the basis for the carrier table
+in <code>sessions/SESSION_DESIGN_GUIDELINES.md</code>. They are reliable enough to design around.</p>
+
+<p><strong>What is thin:</strong> the step from “you hear a 10&nbsp;Hz beat” to “your cortex is now
+oscillating at 10&nbsp;Hz” to “you are therefore in a relaxed/focused/meditative state”. Each of
+those three steps loses evidence. The entrainment literature for binaural beats specifically is
+mixed: effect sizes are small, studies are often small and unblinded, null results are common, and
+the measured cortical steady-state response to a binaural beat is markedly weaker than the response
+to the same rate delivered as an actual amplitude modulation. That is not surprising given the
+physics — a binaural beat's <em>effective</em> modulation depth is only around 3&nbsp;dB, against
+something close to 100&nbsp;% for a monaural beat or an isochronic gate. If you want the strongest
+plausible drive, binaural is the weakest tool in this device's box.</p>
+
+<div class="note">
+  <p><strong>Where that leaves authoring.</strong> Binaural's real advantages are that it is
+  <em>gentle</em> — no audible pulsing edge, nothing percussive, nothing that will wake a half-asleep
+  listener — and that it has a distinctive internal spatial quality people like. Those are good
+  reasons to use it for sleep, hypnagogia and long quiet holds. “It drives the cortex hardest” is not
+  one of its advantages; if that is what you want, reach for
+  <a href="../sessions/monaural.html">monaural</a>,
+  <a href="../sessions/isochronic.html">isochronic</a> or above all
+  <a href="../sessions/photic.html">light</a>.</p>
+</div>
+
+<h2 id="uses">What it is typically used for</h2>
+
+<ul>
+  <li><strong>Sleep onset and delta descents</strong> — the absence of any audible edge is the point.
+  Shipped example: <code>01_sleep_onset.ledc</code>, a 10&nbsp;→&nbsp;2&nbsp;Hz glide over about
+  18 minutes with a simultaneous light-and-volume soft off and no wake-up.</li>
+  <li><strong>Long steady meditative holds</strong> where the design goal is stability rather than
+  stimulation. Shipped example: <code>17_nondual_awareness.ledc</code>, which holds a 7&nbsp;Hz beat
+  flat for nineteen and a half minutes and deliberately moves nothing but a slow brightness
+  breath.</li>
+  <li><strong>Dual-frequency “deepening”</strong> — a small left/right offset, e.g. 6.0&nbsp;Hz in one
+  ear's pair and 6.3&nbsp;Hz in the other's, as in <code>04_meditation_theta.ledc</code>.</li>
+  <li><strong>Hypnagogic and lucid-dream work</strong>, where the listener is close to sleep and an
+  isochronic click would be counter-productive.</li>
+</ul>
+
+<div class="warn">
+  <p><strong>Headphones are mandatory, and this is not a style preference.</strong> On a speaker the
+  two carriers sum in the air before reaching either ear. You then hear a <em>monaural</em> beat — a
+  real, much deeper amplitude modulation at the same rate, which is a different stimulus with
+  different properties. A binaural session played on a speaker is not a weak binaural session; it is
+  an accidental monaural session. If you want speaker playback, author it as
+  <a href="../sessions/monaural.html">monaural</a> deliberately.</p>
+  <p>Separately: if your session also flickers an LED anywhere in the 3–30&nbsp;Hz band, the
+  photosensitivity warning applies in full. See
+  <a href="../index.html#safety">safety</a>.</p>
+</div>
+
+<h2 id="configure">How to configure it in <code>.ledc</code></h2>
+
+<p>The device supports <strong>both</strong> binaural idioms, and they are not equivalent.</p>
+
+<h3 id="idiom-a">Idiom A — one channel, using <code>freqR</code></h3>
+
+<p>Set the left carrier in <code>freq</code> and the right carrier in <code>freqR</code> on the same
+channel. The generator drives the two carriers and routes them straight to the left and right
+outputs — “binaural bypass”.</p>
+
+<pre><code>#         time  freq  pan  vol  mod  ch  freqR  waveType
+A            0   370    0   50    0   1    380         0</code></pre>
+
+<p>That is a 10&nbsp;Hz beat on channel&nbsp;1 at a 370&nbsp;Hz carrier.</p>
+
+<div class="note">
+  <p><strong><code>pan</code> has no effect on a channel like this.</strong> When
+  <code>freqR&nbsp;&gt;&nbsp;0</code> <em>and</em> <code>freqR&nbsp;≠&nbsp;freq</code>, the pan stage
+  is skipped entirely. This is deliberate: the equal-power pan law would cross-mix the two carriers
+  between the ears, and at any non-centre pan it would attenuate one of them toward zero and collapse
+  the beat. If you need to balance the ears, use two channels, or use <code>vol</code>.</p>
+  <p>One side effect worth knowing: because the pan law is skipped, a binaural channel is also
+  about 3&nbsp;dB hotter than a centre-panned mono channel at the same <code>vol</code> — it peaks at
+  −24.1&nbsp;dBFS rather than −27.1&nbsp;dBFS. See
+  <a href="../sessions/reference.html#mixing">the mixing model</a>.</p>
+</div>
+
+<h3 id="idiom-b">Idiom B — two channels, hard-panned</h3>
+
+<pre><code>#         time  freq  pan  vol  mod  ch  freqR  waveType
+A            0   300 -100   50    0   3      0         0
+A            0   307  100   50    0   4      0         0</code></pre>
+
+<p>Both channels go through the normal equal-power pan law, so each ear gets its own carrier with
+more than 40&nbsp;dB of separation from the other's. The beat is again the difference, here
+7&nbsp;Hz.</p>
+
+<div class="spec-table">
+<table>
+  <caption>Choosing between the two idioms.</caption>
+  <thead><tr><th>Prefer</th><th>When</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Idiom A</strong> — one channel, <code>freqR</code></td>
+      <td>Almost always. Every numbered session in the shipped library uses it.</td>
+      <td>Half the channel budget, both carriers guaranteed phase-coherent and level-matched, the
+      beat glidable in one column, and no chance of the two halves drifting apart in later edits.</td></tr>
+    <tr><td><strong>Idiom B</strong> — two hard-panned channels</td>
+      <td>When the ears need to differ in something other than pitch: unequal levels, different
+      timbres (<code>waveType</code>), a different <code>vol</code> envelope per ear, or a per-ear
+      isochronic gate on top.</td>
+      <td>It is the only way to reach <code>pan</code>, per-ear volume, or per-ear pulse settings,
+      because idiom A shares one set of those across both carriers.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="gliding">Gliding the beat</h3>
+
+<p>There are two ways, and one of them is new.</p>
+
+<p><strong>Ramp the left carrier and pin <code>freqR</code>.</strong> This is what the shipped library
+does, and it is the safe choice. <code>freqR</code> is an <em>absolute</em> right-ear frequency, not
+a detune offset, so moving <code>freq</code> underneath it moves the beat:</p>
+
+<pre><code>A       120000  &gt;370    0   55    0   1    380         0   # beat 10 Hz, ramping
+A       420000   374    0   55    0   1    380         0   # beat 6 Hz — the ramp's target</code></pre>
+
+<p>The carrier moves 4&nbsp;Hz, which is inaudible, while the beat moves from 10&nbsp;Hz to
+6&nbsp;Hz over five minutes. Note the convention: the <code class="kbd">&gt;</code> glyph sits on the
+row where the ramp <em>begins</em>, and the target value is read from the next entry on the same
+channel.</p>
+
+<p><strong>Ramp <code>freqR</code> directly.</strong> As of format revision v3, <code>freqR</code> is
+a full compound cell and accepts <code class="kbd">&gt;</code> (linear) and
+<code class="kbd">*</code> (quadratic). That makes it the direct way to glide a beat while holding the
+carrier pitch perfectly still:</p>
+
+<pre><code>A       120000   370    0   55    0   1   &gt;380         0   # right carrier ramping
+A       420000   370    0   55    0   1    376         0   # beat 10 -&gt; 6 Hz, carrier never moved</code></pre>
+
+<div class="note">
+  <p><strong>Two cautions on this one.</strong> First, <code>freqR</code> accepts
+  <code class="kbd">&gt;</code> and <code class="kbd">*</code> <em>only</em>. A periodic modulation
+  glyph (<code class="kbd">~</code> <code class="kbd">^</code> <code class="kbd">/</code>
+  <code class="kbd">\</code> <code class="kbd">_</code>) is accepted by the tokenizer but not
+  implemented: the parser logs a warning, drops the interpolation and holds the start value.</p>
+  <p>Second, <strong>the bundled static linter has not caught up.</strong> It still reports
+  <code>LEDC_FREQR_PREFIX</code> at <em>error</em> severity on any <code>freqR</code> carrying a
+  glyph, with the message “<code>freqR</code> cannot be ramped”. That message described a real and
+  nasty bug — a bare <code>atof("&gt;380")</code> evaluated to <code>0.0</code>, silently collapsing
+  the channel to mono and killing the beat with no diagnostic at all — but the parser now handles the
+  glyph correctly. Until the linter is updated, a session that ramps <code>freqR</code> will not lint
+  clean. If you want a clean lint, use the carrier-ramp idiom above; the behaviour is identical
+  because <code>freqR</code> is absolute.</p>
+</div>
+
+<div class="warn">
+  <p><strong>Restate <code>freqR</code> on any row that moves an audio carrier.</strong> An omitted
+  trailing column means “leave this channel's live value unchanged”, and a mono channel's live right
+  carrier equals its left one. So a later row that moves <code>freq</code> and omits
+  <code>freqR</code> leaves the right ear at the <em>old</em> pitch — which then satisfies the
+  binaural-bypass test, so the channel starts playing two different carriers, beats at the size of
+  your carrier change, and silently stops honouring <code>pan</code>. Write <code>freqR</code>
+  explicitly on every audio row that touches <code>freq</code>, using <code>0</code> for mono. No
+  lint catches this.</p>
+</div>
+
+<h3 id="jitter">Anti-habituation</h3>
+
+<p>A dead-steady beat held for fifteen minutes habituates. The <code>jitter</code> column adds a slow
+sinusoidal wander, written as <code>&lt;amp_hz&gt;</code> or
+<code>&lt;amp_hz&gt;:&lt;period_ms&gt;</code>, with the period defaulting to 45&nbsp;000&nbsp;ms:</p>
+
+<pre><code>#         time  freq  pan  vol  mod  ch  freqR  wave  duty  env  phase  attack  jitter
+A       420000   374    0   55    0   1    380     0    50    4      0       3  0.3:53000</code></pre>
+
+<p>On the audio side <code>jitter</code> is <strong>exactly the right tool for binaural and useless
+for anything else</strong>, because the offset is only ever added to the right-ear carrier. Three
+consequences follow, and all three have cost somebody a measurement session:</p>
+
+<ul>
+  <li>It is <strong>global, not per channel</strong>. The last audio line in the file that carries a
+  <code>jitter</code> column sets it for the whole session, on every binaural channel, whatever
+  channel that line addressed.</li>
+  <li>A <strong>mono channel never wanders at all</strong> — the offset is gated on
+  <code>freqR&nbsp;&gt;&nbsp;0</code>. Audio <code>jitter</code> on a mono or isochronic channel is a
+  silent no-op.</li>
+  <li>It <strong>never touches the isochronic <code>mod</code> rate</strong>. To wander a pulse rate,
+  put a periodic modulation on <code>mod</code> instead: <code>~5.7:6.3:53000</code>.</li>
+</ul>
+
+<p>A <code>period_ms</code> below 1000 is silently ignored — the previous period stays in force. And
+because the jitter global is not reset between sessions, <strong>write it explicitly back to
+<code>0</code> at the end of your file</strong> or it leaks into whatever plays next.</p>
+
+<h3 id="locking">Locking light to the beat</h3>
+
+<p>Audio and light are locked by writing the same rate in both places, 1:1 — the LED line's
+<code>freq</code> column and the audio beat. There is no cross-reference mechanism and no “follow”
+directive; you write the number twice and you keep them in step by hand.</p>
+
+<pre><code>A       420000   374    0   55    0   1    380     0        # audio beat 6 Hz
+       420000     6   50   24  255  160    32    15    1  0  # LED flicker 6 Hz, sine gate</code></pre>
+
+<p>Measured audio-versus-light offset on this hardware is a constant latency of roughly 2–3&nbsp;ms
+with the audio early, with per-edge scatter of 0.23–0.31&nbsp;ms. Cross-modal simultaneity tolerance
+is on the order of 20–40&nbsp;ms, so that is comfortably imperceptible — the device's microsecond
+timing is margin, not a parameter you need to manage. A ramp must be written on
+<em>both</em> lines, each with its own <code class="kbd">&gt;</code>, or the two will drift apart
+over the glide.</p>
+
+<h2 id="example">Complete worked example</h2>
+
+<p><a href="../sessions/examples/binaural_alpha_theta.ledc"><code>binaural_alpha_theta.ledc</code></a>
+— a 20-minute alpha-to-theta descent and return, using idiom A with the carrier-ramp glide, with
+light locked 1:1 and a breathing brightness LFO through the hold. It reports <em>no static problems
+found</em> under <code>python3 tools/avmeasure/analyze.py lint</code>.</p>
+
+<pre><code># --- Induction, 10 Hz alpha (00:00-02:00) ---
+0 10 50 &gt;0 255 160 32 15 1 0          # amber, sine gate, brightness ramps 0 -&gt; 24
+A 0 370 0 &gt;0 0 1 380 0                # ch1 binaural 370/380 = 10 Hz beat; vol ramps 0 -&gt; 55
+15000 10 50 24 255 160 32 15 1 0      # brightness reaches the 24% cap (15 s ramp-in)
+A 60000 370 0 55 0 1 380 0            # vol settled 55 (60 s fade-in)
+
+# --- Deepen, 10 -&gt; 6 Hz over 5 min (~0.8 Hz/min) (02:00-07:00) ---
+A 120000 &gt;370 0 55 0 1 380 0          # left carrier ramps 370 -&gt; 374 =&gt; beat 10 -&gt; 6
+120000 &gt;10 50 24 255 160 32 15 1 0    # light tracks the beat 1:1, 10 -&gt; 6 Hz
+
+# --- Hold, 6 Hz theta, 10 min (07:00-17:00) ---
+A 420000 374 0 55 0 1 380 0           # beat held flat at 6 Hz
+420000 6 50 ~18:28:12000 255 160 32 15 1 0   # 0.083 Hz breathing brightness LFO, 18&lt;-&gt;28%
+
+# --- Return to alpha (17:00-19:00) ---
+A 1020000 &gt;374 0 55 0 1 380 0         # carrier 374 -&gt; 370 =&gt; beat 6 -&gt; 10
+1020000 &gt;6 50 24 255 160 32 15 1 0    # light 6 -&gt; 10 Hz; static 24% preempts the LFO
+
+# --- Close (19:00-20:00) ---
+A 1140000 370 0 &gt;55 0 1 380 0         # volume fades 55 -&gt; 0 over 60 s
+1140000 10 50 &gt;24 255 160 32 15 1 0   # brightness fades 24 -&gt; 0 over 60 s
+A 1200000 370 0 0 0 1 380 0           # end: silent
+1200000 10 50 0 255 160 32 15 1 0     # end: dark</code></pre>
+
+<p>Five things in that file are doing deliberate work:</p>
+
+<ol>
+  <li><strong>The carrier is 370&nbsp;Hz</strong>, near the ~400&nbsp;Hz peak of beat perception, and
+  the beat is 10&nbsp;Hz, well inside the ~35&nbsp;Hz limit.</li>
+  <li><strong>Every row restates <code>freqR</code></strong> — including the rows that only change
+  volume — so there is no way for the accidental-binaural trap to fire.</li>
+  <li><strong>The glide is about 0.8&nbsp;Hz/min.</strong> The frequency-following response can only
+  track a slow change; 0.25–2&nbsp;Hz/min is the working range and anything above ~3&nbsp;Hz/min is
+  worth a second look.</li>
+  <li><strong>The return to a static <code>24</code> at 17:00 pre-empts the LFO</strong> before the
+  fade starts, so the final brightness ramp has a known, honest start value. A ramp on a running
+  channel starts from the <em>live</em> value, so a ramp beginning while an LFO is mid-swing is a
+  ramp whose literal is lying to the reader.</li>
+  <li><strong>The light and audio fades are simultaneous and the file ends at zero on both.</strong></li>
+</ol>
+
+<p>Full column semantics, including everything the <code class="kbd">-</code> sentinel does, are on
+the <a href="../sessions/reference.html">reference page</a>; pacing, testing and the trap list are
+in the <a href="../sessions/authoring.html">authoring guide</a>.</p>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firmware update over the air — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>Firmware update over the air</h1>
+    <p class="lead">What you are trying to achieve: put a new firmware image on
+    the device over WiFi, with no USB cable, and know what to do if it does not
+    come back.</p>
+  </div>
+
+  <h2>How it works, in one paragraph</h2>
+
+  <p>The device carries two bootable programs: the main application and a small
+  dedicated <strong>OTA updater</strong>. An update is therefore not a program
+  rewriting itself while it runs. The main app reboots into the updater, the
+  updater receives the new image and verifies every byte against a SHA-256 hash
+  the browser computed before sending, writes it only if the hash matches, and
+  then boots the main app again. The page drives all of this and tells you which
+  step it is on.</p>
+
+  <div class="warn">
+    <strong>Do not power the device off during an update.</strong> There is no
+    other rule that matters as much. A verified image is written in one pass; an
+    interrupted write leaves a partition in an unknown state and the recovery is
+    a USB cable and a boot button.
+  </div>
+
+  <h2>Check what you are running</h2>
+
+  <p>Open the <span class="kbd">Firmware</span> tab. The top line reads
+  <em>Current firmware: 1.4.2 (built Oct 10 2026 07:21)</em>, with a second line
+  giving the partition it booted from and the ESP-IDF version it was built with.
+  If it says <em>version unavailable</em> the device is not answering — fix that
+  before attempting an update.</p>
+
+  <h2>Do the update</h2>
+
+  <ol>
+    <li>Make sure nothing is playing. Press <span class="kbd">■ STOP</span> if
+      in doubt.</li>
+    <li>Press <strong>Image file (.bin)</strong> and pick your image. The
+      browser immediately hashes it — the banner says <em>Hashing image…</em> —
+      and then shows the <strong>SHA-256</strong> and the file size. Compare that
+      hash against whatever the image was published with; this is your only
+      chance to notice you have the wrong or a corrupted file before sending
+      it.</li>
+    <li>Choose a <strong>Target</strong>:
+      <ul>
+        <li><em>Main app (ota_0)</em> — the firmware itself. This is the usual
+          choice.</li>
+        <li><em>Web assets (storage)</em> — the web interface's own HTML, CSS and
+          JavaScript. Updating this changes the page you are looking at, not the
+          device's behaviour.</li>
+        <li><em>Configs (cfgfs)</em> — the session library stored on the
+          device.</li>
+      </ul>
+    </li>
+    <li>Press <span class="kbd">Start Update</span>, which only becomes active
+      once the hash is ready.</li>
+    <li>Watch the banner. It walks through <em>Requesting reboot into the
+      updater…</em>, <em>Rebooting into the updater…</em>, <em>Waiting for the
+      updater to come online…</em>, then a percentage during
+      <em>Uploading…</em>, then <em>Upload complete — verifying &amp;
+      flashing…</em>, <em>Booting new firmware…</em> and finally
+      <strong><em>Update complete — the device is running the new
+      firmware.</em></strong></li>
+    <li>Press <span class="kbd">Reload page</span> so the browser picks up any
+      new web assets.</li>
+  </ol>
+
+  <p>Each wait has a 90-second budget, which comfortably covers a reboot plus
+  rejoining WiFi. The connection sometimes drops at the very end of an app-target
+  upload — the updater reboots the instant the image verifies — and the page
+  recognises this, saying <em>Connection closed after upload — the updater is
+  likely flashing &amp; rebooting…</em> rather than reporting a failure.</p>
+
+  <h2>If something goes wrong</h2>
+
+  <p>Two buttons appear on any failure: <span class="kbd">Retry</span>, which
+  re-runs just the step that failed, and <span class="kbd">Start Over</span>,
+  which clears everything so you can pick the file again. In most failure cases
+  <strong>nothing was written</strong> and retrying is safe.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Message</th><th>What it means</th><th>What to do</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><em>Update rejected (400): missing or malformed SHA-256 hash</em></td>
+        <td>The updater did not get a usable hash. The app slot requires
+          one.</td>
+        <td>Press <span class="kbd">Start Over</span> and re-pick the file so it
+          is hashed again.</td>
+      </tr>
+      <tr>
+        <td><em>Update rejected (413): the image is larger than the target
+          partition</em></td>
+        <td>Wrong image, or the wrong target selected for it.</td>
+        <td>Check you chose the right <strong>Target</strong>. A web-assets image
+          is not an app image.</td>
+      </tr>
+      <tr>
+        <td><em>Update rejected (422): SHA-256 mismatch</em></td>
+        <td>The bytes that arrived are not the bytes you sent — corruption in
+          transit. <strong>The image was not flashed.</strong></td>
+        <td>Re-select the file and retry. If it happens repeatedly your network
+          link is the problem; move closer to the access point.</td>
+      </tr>
+      <tr>
+        <td><em>Update failed (500): the updater could not write the
+          partition</em></td>
+        <td>A flash write error. Nothing was committed.</td>
+        <td><span class="kbd">Retry</span> is safe.</td>
+      </tr>
+      <tr>
+        <td><em>Upload connection failed… The updater stayed put; you can
+          retry.</em></td>
+        <td>The network dropped mid-upload. The updater is still running and
+          waiting.</td>
+        <td><span class="kbd">Retry</span>.</td>
+      </tr>
+      <tr>
+        <td><em>Could not start the updater</em></td>
+        <td>The device refused or did not answer the request to reboot into the
+          updater. Some builds have no OTA support.</td>
+        <td>Check the device is reachable at all; otherwise this device must be
+          flashed over USB.</td>
+      </tr>
+      <tr>
+        <td><em>The updater did not respond on this network within 90s</em></td>
+        <td>The updater booted but could not rejoin your WiFi, so it fell back
+          to its own access point at a different address the page cannot reach.
+          The device is fine.</td>
+        <td>Follow the recovery steps below — the page prints them for you.</td>
+      </tr>
+      <tr>
+        <td><em>The main app did not come back within 90s. The new image may be
+          bad…</em></td>
+        <td>The image was flashed but does not boot, or it booted and cannot
+          rejoin WiFi.</td>
+        <td>Power-cycle once and reload the page. If it still does not return,
+          recover over the access point below, or over USB.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Recovering over the device's own access point</h2>
+
+  <p>When the updater cannot be reached, the page shows a block headed
+  <strong>Updater not reachable on this network</strong> with the exact commands
+  to run. The reason it cannot do this for you is that the access point is a
+  different address, which browsers treat as a different site.</p>
+
+  <ol>
+    <li>Join the WiFi network <code>ESP32-AVE-Setup</code>, password
+      <code>entrain123</code>.</li>
+    <li>From a terminal, upload the image directly to the updater, with the
+      hash the page showed you:
+      <br><code>curl -X POST --data-binary @firmware.bin
+      "http://192.168.4.1/update?sha256=&lt;hex&gt;"</code></li>
+    <li>For a <em>web assets</em> or <em>configs</em> target, add the partition
+      to the query (<code>part=storage</code> or <code>part=cfgfs</code>) and
+      then tell the updater to boot the app:
+      <br><code>curl http://192.168.4.1/reboot</code></li>
+  </ol>
+
+  <p>Do not expect a web page at <code>192.168.4.1</code> in this state. The
+  updater is deliberately minimal and serves only the upload endpoint — the
+  interface you are used to is part of the main app and comes back with it.</p>
+
+  <div class="note">
+    <p>If the device still will not boot after a bad image, the dual-boot design
+    means the updater itself is untouched and you can reach it again by power
+    cycling. The last resort is a USB cable and the board's boot button, which
+    is why keeping physical access to the device matters.</p>
+  </div>
+
+  <h2>Before you update: two honest caveats</h2>
+
+  <ul>
+    <li><strong>The OTA endpoint is not authenticated.</strong> Like the rest of
+      the device's interface, anything on your network can ask it to accept a
+      firmware image. This is the largest remote-damage surface the device has.
+      Keep it on a trusted network.</li>
+    <li><strong>Check your settings afterwards.</strong> A new firmware may
+      change which LED backends and audio codecs are compiled in, and it
+      disarms any stored pin assignment it considers unsafe at boot (forcing it
+      to <code>-1</code>, which silently disables that feature). If something
+      stopped working after an update, read the device log on the
+      <span class="kbd">Diagnostics</span> tab and re-check
+      <a href="../user-guide/settings.html">Settings</a>.</li>
+  </ul>
+
+  <h2>Next</h2>
+
+  <p><a href="../user-guide/troubleshooting.html">Troubleshooting</a>.</p>
+
+</main>
+</body>
+</html>

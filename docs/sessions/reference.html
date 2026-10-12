@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Complete .ledc reference — Session developer — ESP32 AVE</title>
+<meta name="description" content="Every .ledc line type, column, range, default and interpolation prefix in one page, mirroring the authoritative format spec.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+<div class="hero">
+  <h1>Complete <code>.ledc</code> reference</h1>
+  <p class="lead">Every line type, every column, every accepted value, every default, every range and
+  every interpolation prefix. This page mirrors <code>ledc_format.md</code> revision v3, which was
+  itself written by reading <code>main/config_parser.c</code> line by line. Where this page and the
+  device disagree, the device is right and this page is a bug.</p>
+</div>
+
+<div class="toc">
+  <ul>
+    <li><a href="#lines">Line types and token counts</a></li>
+    <li><a href="#limits">Parse-time limits</a></li>
+    <li><a href="#order">Ordering and dispatch</a></li>
+    <li><a href="#led">LED line — column reference</a></li>
+    <li><a href="#audio">Audio line — column reference</a></li>
+    <li><a href="#bg">BG — background audio</a></li>
+    <li><a href="#speech">S — speech</a></li>
+    <li><a href="#dash">The <code>-</code> sentinel and absent trailing columns</a></li>
+    <li><a href="#compound">Compound cells: ramps and modulations</a></li>
+    <li><a href="#ranges">Ranges, and which path enforces them</a></li>
+    <li><a href="#env">
+      <code>env</code> — the pulse envelope</a></li>
+    <li><a href="#depth"><code>depth</code> — audio pulse depth</a></li>
+    <li><a href="#jitter"><code>jitter</code></a></li>
+    <li><a href="#phase"><code>phase</code></a></li>
+    <li><a href="#attack"><code>attack</code></a></li>
+    <li><a href="#wavetype"><code>waveType</code> — eight carriers</a></li>
+    <li><a href="#bright"><code>bright</code> and the drive curve</a></li>
+    <li><a href="#mixing">The mixing model — why <code>vol</code> is absolute</a></li>
+    <li><a href="#binaural">Binaural: two idioms</a></li>
+    <li><a href="#pathdep">Path-dependent behaviour</a></li>
+    <li><a href="#compat">Backward compatibility</a></li>
+  </ul>
+</div>
+
+<h2 id="lines">Line types and token counts</h2>
+
+<pre><code># comment                                           (also inline, from the first '#')
+&lt;blank&gt;
+&lt;time&gt; &lt;freq&gt; &lt;duty&gt; &lt;bright&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; &lt;mask&gt; [env] [phase] [attack] [jitter]
+&lt;time&gt; &lt;freq&gt; &lt;duty&gt; &lt;bright&gt; &lt;mask&gt;                                  # LED legacy, exactly 5
+A &lt;time&gt; &lt;freq&gt; &lt;pan&gt; &lt;vol&gt; &lt;mod&gt; [ch] [freqR] [waveType] [duty] [env] [phase] [attack] [jitter] [depth]
+BG &lt;url&gt; &lt;pan&gt; &lt;loudness&gt;
+S &lt;time&gt; &lt;voice&gt; &lt;volume&gt; "&lt;text&gt;"</code></pre>
+
+<div class="spec-table">
+<table>
+  <caption>Accepted token counts, from <code>parse_led_line</code> and
+  <code>parse_audio_line</code>.</caption>
+  <thead><tr><th>Line</th><th>Accepted</th><th>Rejected</th></tr></thead>
+  <tbody>
+    <tr><td>LED</td><td>exactly <strong>5</strong>, or <strong>8–12</strong></td><td>6, 7 and more than 12 — logged and skipped</td></tr>
+    <tr><td>Audio (after the <code>A</code>)</td><td><strong>5 or more</strong>; columns past the 14th are ignored</td><td>fewer than 5</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="warn">
+  <p><strong><code>A</code> must be its own token.</strong> <code>parse_line</code> tests only the
+  first character and then hands the remaining tokens to the audio parser, so
+  <code>A1500 200 0 50 0</code> discards <code>A1500</code> <em>entirely</em>: the line executes at
+  <strong>t=200&nbsp;ms</strong> with <code>freq 0</code>, <code>pan 50</code>, and every field
+  shifted left by one. The linter flags it as <code>LEDC_AUDIO_GLUED_TIME</code> (warning). Lower
+  case <code>a</code>, <code>s</code> and <code>bg</code> all work. <code>S</code> is recognised only
+  as a <em>one-character</em> token; anything else that is not <code>A</code>/<code>a</code>/
+  <code>S</code>/<code>s</code>/<code>BG</code> falls through to the LED parser.</p>
+</div>
+
+<p>The legacy 5-token LED line is <code>time freq duty bright mask</code>. It sets RGB to full white
+explicitly (so it is directly comparable with an 8-token white line) and it cannot carry any pulse
+column.</p>
+
+<h2 id="limits">Parse-time limits</h2>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Limit</th><th>Value</th><th>Source</th></tr></thead>
+  <tbody>
+    <tr><td>Line length</td><td>256 bytes; longer lines are <strong>truncated</strong>, silently changing the token count</td><td><code>CONFIG_PARSER_MAX_LINE_LENGTH</code></td></tr>
+    <tr><td>Tokens per line</td><td>16; extras dropped</td><td><code>parse_line</code>, <code>tokens[16]</code></td></tr>
+    <tr><td>Entries per file</td><td>100</td><td><code>CONFIG_PARSER_MAX_ENTRIES</code></td></tr>
+    <tr><td>Entries per timestamp</td><td>50 — the rest of that batch <strong>never fires, with no log line at all</strong></td><td><code>MAX_BATCH_SIZE</code>, <code>config_parser_execute_timeline</code></td></tr>
+    <tr><td>LED channels</td><td>8 (mask bits 0–7)</td><td><code>NUM_LED_CHANNELS</code></td></tr>
+    <tr><td>Audio channels</td><td>16 (<code>ch</code> 0–15)</td><td><code>NUM_AUDIO_CHANNELS</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The 50-per-timestamp cap is the one device limit with no runtime diagnostic, which makes it worth
+remembering: the "find the next strictly later timestamp" scan walks straight past the leftovers. The
+linter reports it as <code>LEDC_BATCH_CAP</code> (error) — that is your only warning.</p>
+
+<h2 id="order">Ordering and dispatch</h2>
+
+<p>Entries are <strong>stable-sorted by time</strong> at parse
+(<code>config_parser_parse_content</code>), so authoring order within one timestamp is preserved and
+grouping your file by layer rather than strictly by time is safe.</p>
+
+<p>Each timestamp then dispatches in <strong>three passes — all audio, then all LED, then everything
+else</strong> — so audio channels armed in the same batch start phase-coherent. That is what makes a
+<a href="../sessions/monaural.html">monaural pair</a> or an
+<a href="../sessions/photic.html#antiphase">antiphase LED pair</a> share a predictable initial
+phase: put both halves on the same timestamp.</p>
+
+<p><strong>The first batch is hoisted.</strong> It fires at wall-clock 0 whatever its timestamp. That
+is benign for LED, which is anchored to the demanded time, and <em>not</em> benign for audio, which
+starts at dispatch. The linter reports it as <code>LEDC_FIRST_BATCH_HOIST</code>. Start your files at
+<code>t=0</code>.</p>
+
+<h2 id="led">LED line — column reference</h2>
+
+<pre><code>&lt;time&gt; &lt;freq&gt; &lt;duty&gt; &lt;bright&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; &lt;mask&gt; [env] [phase] [attack] [jitter]</code></pre>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>#</th><th>Field</th><th>Kind</th><th>Accepted</th><th>If absent or <code>-</code></th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td><code>time</code></td><td>integer ms</td><td><code>atol</code>, no range check</td><td>—</td><td>Not <code>-</code>-able; a <code>-</code> here reads as 0.</td></tr>
+    <tr><td>1</td><td><code>freq</code></td><td>compound</td><td><strong>above 0 up to 100.0&nbsp;Hz</strong></td><td>live value</td><td><code>≤ 0</code> means <strong>STOP FLICKER</strong> on the mask — the channel goes dark. It is <em>not</em> DC-on.</td></tr>
+    <tr><td>2</td><td><code>duty</code></td><td>compound</td><td>0–100&nbsp;%</td><td>live value</td><td>Cast to <code>uint8_t</code> at parse — see <a href="#ranges">ranges</a>. Ignored by <code>env 1</code> and <code>env 2</code>.</td></tr>
+    <tr><td>3</td><td><code>bright</code></td><td>compound</td><td>0–100&nbsp;%</td><td>live value</td><td>Same <code>uint8_t</code> cast. See <a href="#bright">the drive curve</a>.</td></tr>
+    <tr><td>4,5,6</td><td><code>R G B</code></td><td>compound</td><td>0–255 each, <strong>clamped</strong> with a warning</td><td>live value</td><td><code>clamp_u8_field</code>. Safe against overflow, unlike duty/bright.</td></tr>
+    <tr><td>7</td><td><code>mask</code></td><td><strong>selector</strong></td><td>1–255, OR'd bits; bit 0 = LED1</td><td>—</td><td><code>0</code> <strong>rejects the whole line</strong>. <code>-</code> parses as 0, so it also rejects the line.</td></tr>
+    <tr><td>8</td><td><code>env</code></td><td>enum</td><td>0–3; anything else falls back to <strong>0</strong></td><td>leave unchanged</td><td>Not compound: a glyph is parsed and silently dropped. <code>env 4</code> on an LED line is treated as square.</td></tr>
+    <tr><td>9</td><td><code>phase</code></td><td>compound</td><td>degrees, wrapped to 0–359</td><td>leave unchanged</td><td>A <strong>lead</strong>, not a lag — see <a href="#phase">phase</a>.</td></tr>
+    <tr><td>10</td><td><code>attack</code></td><td>compound</td><td>ms; negatives become 0; <strong>capped at 60&nbsp;ms</strong></td><td>leave unchanged</td><td>The cap is path-dependent — see <a href="#attack">attack</a>. Only <code>env 3</code> reads it.</td></tr>
+    <tr><td>11</td><td><code>jitter</code></td><td><code>amp</code> or <code>amp:period_ms</code></td><td>amp <strong>clamped to 5&nbsp;Hz</strong>; period <strong>ignored below 1000&nbsp;ms</strong></td><td>leave unchanged</td><td>Default period 45&nbsp;000&nbsp;ms. Per mask; wanders the flicker rate.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="audio">Audio line — column reference</h2>
+
+<pre><code>A &lt;time&gt; &lt;freq&gt; &lt;pan&gt; &lt;vol&gt; &lt;mod&gt; [ch] [freqR] [waveType] [duty] [env] [phase] [attack] [jitter] [depth]</code></pre>
+
+<div class="spec-table">
+<table>
+  <caption>Column numbers are counted <em>after</em> the <code>A</code> token.</caption>
+  <thead><tr><th>#</th><th>Field</th><th>Kind</th><th>Accepted</th><th>If absent or <code>-</code></th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td><code>time</code></td><td>integer ms</td><td><code>atol</code></td><td>—</td><td>—</td></tr>
+    <tr><td>1</td><td><code>freq</code></td><td>compound</td><td><strong>not validated on any session path</strong></td><td>live value</td><td>Left-ear carrier, Hz. <code>0</code> does <em>not</em> stop the channel.</td></tr>
+    <tr><td>2</td><td><code>pan</code></td><td>compound</td><td>nominally −100…+100, <strong>not validated</strong></td><td>live value</td><td><strong>No effect on a binaural channel</strong> — see <a href="#binaural">binaural</a>.</td></tr>
+    <tr><td>3</td><td><code>vol</code></td><td>compound</td><td>nominally 0–100, <strong>not validated</strong></td><td>live value</td><td><code>vol/100</code> becomes the amplitude. <code>0</code> is how you silence a channel.</td></tr>
+    <tr><td>4</td><td><code>mod</code></td><td>compound</td><td>pulse rate Hz; <code>0</code> = no pulse at all</td><td>live value</td><td>This, not <code>freq</code>, is the entrainment rate on an audio line.</td></tr>
+    <tr><td>5</td><td><code>ch</code></td><td><strong>selector</strong></td><td><strong>0–15</strong>; out of range is clamped to <strong>0</strong> with a warning</td><td><strong>0</strong></td><td>Channel 0 is real and is exactly what an omitted column picks. <code>-</code> also selects 0.</td></tr>
+    <tr><td>6</td><td><code>freqR</code></td><td>compound</td><td>above 0 up to 22050&nbsp;Hz; anything else becomes 0.0 = mono</td><td>live value</td><td><code class="kbd">&gt;</code> and <code class="kbd">*</code> only; a periodic glyph warns and holds. Absolute, not an offset.</td></tr>
+    <tr><td>7</td><td><code>waveType</code></td><td>enum</td><td><strong>0–7</strong>; anything else falls back to 0</td><td>leave unchanged</td><td>See <a href="#wavetype">waveType</a>.</td></tr>
+    <tr><td>8</td><td><code>duty</code></td><td>compound</td><td>0–100&nbsp;%, clamped at parse</td><td>leave unchanged</td><td><strong>Ignored by <code>env 1</code> and <code>env 2</code></strong>. A stepped <code>0</code> is a no-op.</td></tr>
+    <tr><td>9</td><td><code>env</code></td><td>enum</td><td>0–4; anything else falls back to <strong>4</strong></td><td>leave unchanged</td><td>The fallback is 4 here and 0 on an LED line.</td></tr>
+    <tr><td>10</td><td><code>phase</code></td><td>compound</td><td>degrees, wrapped 0–359</td><td>leave unchanged</td><td>Per channel. Stored as a fraction of the mod cycle, so it survives <code>mod</code> ramps.</td></tr>
+    <tr><td>11</td><td><code>attack</code></td><td>compound</td><td>ms; negatives become 0; <strong>no upper cap</strong></td><td>leave unchanged</td><td>Only <code>env 3</code> reads it. Effective edge clamped to half the on-time.</td></tr>
+    <tr><td>12</td><td><code>jitter</code></td><td><code>amp</code> or <code>amp:period_ms</code></td><td>amp ≥ 0, no clamp; period <strong>ignored below 1000&nbsp;ms</strong></td><td>leave unchanged</td><td><strong>GLOBAL</strong>, and it moves the <strong>binaural detune</strong> — not the pulse rate.</td></tr>
+    <tr><td>13</td><td><code>depth</code></td><td>compound</td><td>0–100&nbsp;%, clamped at parse</td><td><strong>env-dependent</strong> — see <a href="#depth">depth</a></td><td><code class="kbd">&gt;</code> and <code class="kbd">*</code> only; a periodic glyph warns and holds.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note">
+  <p><strong><code>/api/state</code> reports audio channels 1-based.</strong> The state handler emits
+  <code>"ch": i + 1</code>, so <code>.ledc</code> <code>ch 8</code> appears there as
+  <code>ch9</code>. LED channels are emitted 1-based too, which matches the usual "mask bit 0 =
+  LED1" convention, so only the audio numbering surprises people. This has already cost measurement
+  time; convert once and write it down.</p>
+</div>
+
+<h2 id="bg">BG — background audio</h2>
+
+<pre><code>BG &lt;url&gt; &lt;pan&gt; &lt;loudness&gt;</code></pre>
+
+<p><code>BG</code> is a <strong>session-level annotation, not a timeline entry</strong>. It is
+intercepted before <code>parse_line</code>, never occupies an entry slot, and <strong>last one
+wins</strong> (with a warning). Accepted schemes: <code>http://</code>, <code>https://</code>,
+<code>sdcard://</code>, <code>push://</code>. <code>pan</code> is clamped to ±100 and
+<code>loudness</code> to 0–100 (<code>parse_bg_line</code>).</p>
+
+<div class="note">
+  <p>A <code>push://</code> URL makes the executor <strong>hold the timeline</strong> until the stream
+  has buffered or a timeout fires, which moves <code>t=0</code>. Do not use it in anything whose
+  timing you intend to measure.</p>
+</div>
+
+<h2 id="speech">S — speech</h2>
+
+<pre><code>S &lt;time&gt; &lt;voice&gt; &lt;volume&gt; "&lt;text&gt;"</code></pre>
+
+<p><code>S</code> is <strong>not browser-only</strong>. The device parses it always, and
+<em>plays</em> it when the firmware is built with <code>CONFIG_BG_SDCARD_ENABLED</code> (set in
+<code>sdkconfig.defaults.esp32s3</code>); without that option the entry parses, occupies an entry
+slot, and does nothing. <code>voice</code> defaults to <code>default</code> and <code>volume</code>
+to 80 if unparsable. The text is read from the raw line between the <strong>first</strong> and the
+<strong>last</strong> <code>"</code>, so inner quotes survive and a trailing comment is ignored.</p>
+
+<p>The browser strips <code>S</code> rows before POSTing, and the analysis tooling strips them too
+unless you pass <code>--keep-speech</code>.</p>
+
+<h2 id="dash">The <code>-</code> sentinel and absent trailing columns</h2>
+
+<pre><code>0    40 25 80 0 128 255 1  1 0            # ch1: 40 Hz, sine env, duty 25, phase 0
+0    40 25 80 255 160 40 2  1 180         # ch2: same, phase 180 -&gt; antiphase (invisible)
+5000 -  -  -  -   -   -  1  -  -  - 0.3   # ch1: change ONLY jitter; keep everything else</code></pre>
+
+<p><strong>One rule, two spellings.</strong> A field written <code class="kbd">-</code>, and an
+optional trailing column left off entirely, both mean <strong>"leave this channel's value
+unchanged"</strong>. The parser records what the line actually set in <code>entry-&gt;present</code>;
+the executor substitutes the channel's live value for every bit that is clear. <strong>A cleared bit
+is never treated as 0.</strong></p>
+
+<p>A negative <em>number</em> is unaffected: the sentinel test requires the token to be exactly one
+character, so <code>-50</code> still parses as minus fifty.</p>
+
+<p>That rule now holds for <strong>every</strong> optional trailing column. The one place it was
+broken was audio <code>waveType</code>, where an omitted column used to reset the channel to sine;
+the parser now reads the live waveform back instead. Four caveats remain, and they are not sugar:</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Caveat</th><th>Detail</th></tr></thead>
+  <tbody>
+    <tr><td><strong>1. <code>mask</code> and <code>ch</code> are selectors, not values</strong></td>
+      <td><code>-</code> in the LED <code>mask</code> column parses as 0 and the whole line is
+      <strong>rejected</strong>. <code>-</code> in the audio <code>ch</code> column selects
+      <strong>channel 0</strong>. There is no "current channel" to leave unchanged.</td></tr>
+    <tr><td><strong>2. At channel start there is no live value to keep</strong></td>
+      <td>For audio, the substitution only happens when the channel is already active <em>and</em> the
+      entry is on the timeline path; otherwise the parsed zero stands, so <code>-</code> on
+      <code>freq</code> or <code>vol</code> in a channel's <em>first</em> entry means literally 0. For
+      LED the live value comes from <code>led_matrix_get_snapshot</code>, and an inactive channel
+      reports <code>freq 0</code> — so <code>-</code> on <code>freq</code> in a first entry resolves
+      to 0 and <strong>stops the flicker</strong> (lint <code>LEDC_DASH_FREQ_STOPS</code>).</td></tr>
+    <tr><td><strong>3. LED <code>-</code> reads the lowest bit in the mask</strong></td>
+      <td>A multi-bit mask whose channels hold different live values collapses them all to the low
+      bit's value for every <code>-</code> field.</td></tr>
+    <tr><td><strong>4. A ramp target is read from the next entry's struct member, not its present
+      bit</strong></td>
+      <td>…for the <em>core</em> fields. So a <code class="kbd">&gt;</code> pointing at an entry that
+      writes <code>-</code> for that field ramps to <strong>0</strong>, not to "hold" (lint
+      <code>LEDC_RAMP_TO_ZERO</code>, error). The pulse fields — <code>duty</code>,
+      <code>phase</code>, <code>attack</code>, <code>freqR</code>, <code>depth</code> — do it
+      correctly: they scan forward for the next entry that actually <em>sets</em> the field, and hold
+      if there is none.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="compound">Compound cells: ramps and modulations</h2>
+
+<p>A <strong>compound cell</strong> is a bare number, or a number with one prefix glyph.</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Glyph</th><th>Meaning</th><th>Needs a next entry?</th></tr></thead>
+  <tbody>
+    <tr><td><code class="kbd">&gt;</code><code>v</code></td><td>linear ramp from <code>v</code> to the next same-channel entry's value for that field</td><td><strong>yes</strong></td></tr>
+    <tr><td><code class="kbd">*</code><code>v</code></td><td>quadratic (eased) ramp, same rule</td><td><strong>yes</strong></td></tr>
+    <tr><td><code class="kbd">~</code><code>v:e:p</code></td><td>sine modulation, <code>v</code>↔<code>e</code> every <code>p</code>&nbsp;ms</td><td>no</td></tr>
+    <tr><td><code class="kbd">^</code><code>v:e:p</code></td><td>triangle modulation</td><td>no</td></tr>
+    <tr><td><code class="kbd">/</code><code>v:e:p</code></td><td>saw up</td><td>no</td></tr>
+    <tr><td><code class="kbd">\</code><code>v:e:p</code></td><td>saw down</td><td>no</td></tr>
+    <tr><td><code class="kbd">_</code><code>v:e:p</code></td><td>square — half the period at <code>v</code>, half at <code>e</code></td><td>no</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>A missing <code>:e</code> makes <code>e</code> equal <code>v</code> (degenerate, no movement). A
+missing <code>:p</code> defaults to <strong>1000&nbsp;ms</strong> (<code>parse_mod_extras</code>).</p>
+
+<div class="spec-table">
+<table>
+  <caption>Which cells are compound.</caption>
+  <thead><tr><th>Line</th><th>Compound</th><th>Not compound</th></tr></thead>
+  <tbody>
+    <tr><td>LED</td><td><code>freq duty bright R G B phase attack</code></td><td><code>time</code>, <code>mask</code>, <code>env</code>, <code>jitter</code></td></tr>
+    <tr><td>Audio</td><td><code>freq pan vol mod duty phase attack</code>, plus <code>freqR</code> and <code>depth</code></td><td><code>time</code>, <code>ch</code>, <code>env</code>, <code>jitter</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>A glyph on an <code>env</code> column is parsed and silently discarded <em>by design</em>
+(<code>parse_v2_enum</code>). On <code>mask</code> or <code>ch</code> it corrupts the value.</p>
+
+<p><strong><code>freqR</code> and <code>depth</code> take <code class="kbd">&gt;</code> and
+<code class="kbd">*</code> only.</strong> A periodic glyph on either is accepted by the tokenizer but
+not implemented: the parser logs a warning, drops the interpolation, and holds the start value.
+Everything else about them is a normal compound cell.</p>
+
+<div class="note">
+  <p><strong>Animate-on-start.</strong> The glyph lives on the entry where the ramp
+  <em>begins</em>, and the target value comes from the <em>next</em> entry.
+  <code>A 0 &gt;200 …</code> followed by <code>A 8000 400 …</code> glides 200→400&nbsp;Hz over eight
+  seconds. A ramp written on the last entry of a channel never fires (lint
+  <code>LEDC_ORPHAN_RAMP</code>).</p>
+  <p><strong>A ramp on a running channel starts from the LIVE value, not from the literal in the
+  file</strong> (<code>audio_generator_start_sweep_locked</code>,
+  <code>led_matrix_start_sweep_masked</code>). That is deliberate — starting from the literal snaps
+  audibly when a previous ramp was interrupted — but it means a file whose literal disagrees with the
+  live state is <em>lying to its reader</em>. Write the live value. The linter flags the mismatch as
+  <code>LEDC_RAMP_START_SUBSTITUTED</code> (info).</p>
+  <p>For the audio <em>pulse</em> fields (<code>duty</code>, <code>phase</code>,
+  <code>attack</code>) the start value <strong>is</strong> the literal — except <code>duty 0</code>,
+  which the setter refuses, so a <code>&gt;0</code> duty ramp silently starts from the previous
+  duty.</p>
+</div>
+
+<h2 id="ranges">Ranges, and which path enforces them</h2>
+
+<p>The guards are not in the parser — they are in the engine, and until recently they were on only
+one of the two dispatch paths.</p>
+
+<p><strong>LED.</strong> The no-sweep path (taken when the entry carries no
+<code class="kbd">&gt;</code>/<code class="kbd">*</code> field) rejects <code>freq &gt; 100</code>,
+<code>duty &gt; 100</code> and <code>bright &gt; 100</code>. The sweep path validated
+<em>nothing</em>, so identical values executed unchecked whenever the entry carried a ramp; the same
+three guards now apply there too, checking <strong>both endpoints</strong> of every ramp.</p>
+
+<p>An out-of-range LED entry is <strong>dropped, not clamped</strong>. The install returns
+<code>ESP_ERR_INVALID_ARG</code>, the error is logged, and those channels get neither the sweep nor a
+fallback flicker — they keep doing whatever they were doing.</p>
+
+<p>One hole remains: LED <code>duty</code> and <code>bright</code> are cast to <code>uint8_t</code>
+<em>at parse time</em>, before any guard sees them. 101–255 is caught by the guards, but
+<strong>above 255 the cast wraps</strong> (<code>300</code> → <code>44</code>) and the guard then sees
+an in-range value. Nothing warns. <code>R G B</code> are safe — <code>clamp_u8_field</code> clamps
+and logs.</p>
+
+<p><strong>Audio — there is effectively no range check at all.</strong> The validating entry points
+(which would reject <code>freq ≤ 0</code> or <code>&gt; 22050</code>, amplitude outside 0–1, pan
+outside ±1) are the non-<code>_locked</code> wrappers, and <strong>no session path calls
+them</strong>: the timeline batch executor and <code>/api/patch</code> both hold the mutex and call
+the <code>_locked</code> variants, which bounds-check the <strong>channel index only</strong>.</p>
+
+<div class="spec-table">
+<table>
+  <caption>What out-of-range audio values actually do from a <code>.ledc</code> file.</caption>
+  <thead><tr><th>You write</th><th>What happens</th></tr></thead>
+  <tbody>
+    <tr><td><code>vol 500</code></td><td>Amplitude 5.0. It <em>works</em> and is about 14&nbsp;dB louder. The fixed 1/16 divisor means a single centre-panned sine needs roughly <code>vol 2200</code> to clip. Rejected by live control; accepted here.</td></tr>
+    <tr><td><code>pan 200</code></td><td>The equal-power law runs past 90°, so the <strong>left output inverts polarity</strong> while the right falls back toward 0.707. Keep pan inside ±100.</td></tr>
+    <tr><td><code>freq 30000</code></td><td>Aliases. No warning.</td></tr>
+    <tr><td><code>freq 0</code>, sine</td><td>Silence — but the channel stays <strong>active</strong>. An audio line never stops a channel; use <code>vol 0</code>.</td></tr>
+    <tr><td><code>freq 0</code>, square</td><td>A constant +1.0, i.e. a <strong>DC offset</strong> on the output, because the phase never advances.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>This asymmetry — LED guarded, audio unguarded — is not a documented design decision; the format
+spec flags it for a decision rather than defending it. The linter models the LED guards
+(<code>LEDC_LED_OUT_OF_RANGE</code>, <code>LEDC_LED_REJECTED</code>) and does not yet model the audio
+gap.</p>
+
+<h2 id="env"><code>env</code> — the pulse envelope</h2>
+
+<p>Set per entry, never ramped. Every behaviour, including each line type's legacy, is an explicit
+value.</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th><code>env</code></th><th>Shape</th><th>Uses <code>duty</code>?</th><th>Uses <code>attack</code>?</th><th>Default <code>depth</code> (audio)</th><th>Available on</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td><strong>square</strong> gate, unipolar — the LED legacy</td><td><strong>yes</strong></td><td>no</td><td>100&nbsp;%</td><td>LED + audio</td></tr>
+    <tr><td>1</td><td><strong>sine</strong> gate, a true raised sine</td><td><strong>no</strong></td><td>no</td><td>100&nbsp;%</td><td>LED + audio</td></tr>
+    <tr><td>2</td><td><strong>triangle</strong> gate</td><td><strong>no</strong></td><td>no</td><td>100&nbsp;%</td><td>LED + audio</td></tr>
+    <tr><td>3</td><td><strong>trapezoid</strong> gate</td><td><strong>yes</strong></td><td><strong>yes</strong></td><td>100&nbsp;%</td><td>LED + audio</td></tr>
+    <tr><td>4</td><td><strong>sine tremolo</strong>, bipolar <code>×(1 + depth·sin)</code> — the audio legacy</td><td>no</td><td>no</td><td>10&nbsp;%</td><td><strong>audio only</strong>; on an LED line it is treated as square</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>When the column is absent you get the line type's legacy value: <strong>LED → 0</strong>,
+<strong>audio → 4</strong>. An out-of-range value falls back differently on the two paths — LED to
+<strong>0</strong>, audio to <strong>4</strong>.</p>
+
+<div class="warn">
+  <p><strong><code>duty</code> is ignored by <code>env 1</code> and <code>env 2</code>, on both
+  paths.</strong> <code>iso_gate()</code> returns <code>0.5 − 0.5·cos(2πph)</code> for env 1 and a
+  fixed symmetric ramp for env 2, neither of which reads <code>duty</code>;
+  <code>led_carrier_level_iram()</code> reads <code>duty_q16</code> only in its trapezoid branch.
+  So:</p>
+  <ul>
+    <li>a <code>duty</code> column alongside <code>env 1</code> or <code>env 2</code> is a
+    <strong>silent no-op</strong>;</li>
+    <li>a <code>duty</code> <em>modulation</em> alongside them is also a silent no-op — the modulation
+    engine dutifully animates a value nothing reads;</li>
+    <li><code>env 2</code>'s on-fraction is always exactly <strong>50&nbsp;%</strong>;</li>
+    <li><code>env 1</code> <em>measures</em> an apparent duty of 66.67&nbsp;%, which is just the
+    fraction of a raised sine above its own mid-level.</li>
+  </ul>
+  <p><strong>If <code>duty</code> matters, use <code>env 0</code> or <code>env 3</code>.</strong>
+  Measured accuracy there: a commanded 25&nbsp;% / 75&nbsp;% reads 25.08&nbsp;% / 75.03&nbsp;%, with
+  a gate rate of 8.0107&nbsp;Hz against a commanded 8.000.</p>
+</div>
+
+<h3 id="env-measured">Envelope shapes, measured</h3>
+
+<div class="spec-table">
+<table>
+  <caption>LED, optical, 10&nbsp;Hz flicker, duty 50, drive 255.</caption>
+  <thead><tr><th><code>env</code></th><th>h2</th><th>h3</th><th>h4</th><th>Theory</th></tr></thead>
+  <tbody>
+    <tr><td>0 square</td><td>0.004</td><td>0.346</td><td>0.003</td><td>0 / 0.333 / 0</td></tr>
+    <tr><td>1 sine</td><td>0.058</td><td>0.004</td><td>0.010</td><td>0 / 0 / 0</td></tr>
+    <tr><td>2 triangle</td><td>0.061</td><td>0.139</td><td>0.022</td><td>0 / 0.111 / 0</td></tr>
+    <tr><td>3 trapezoid</td><td>0.081</td><td>0.310</td><td>0.073</td><td>between square and sine</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="spec-table">
+<table>
+  <caption>Audio, demodulated carrier envelope, 400&nbsp;Hz gated at 8&nbsp;Hz, duty 50. "Before" is
+  the parabolic sine gate; "after" is the true raised sine.</caption>
+  <thead><tr><th><code>env</code></th><th>h2 before</th><th>h2 after</th><th>h3 before</th><th>h3 after</th></tr></thead>
+  <tbody>
+    <tr><td>0 square</td><td>0.001</td><td>0.000</td><td>0.333</td><td>0.332</td></tr>
+    <tr><td><strong>1 sine</strong></td><td><strong>0.251</strong></td><td><strong>0.002</strong></td><td><strong>0.112</strong></td><td><strong>0.001</strong></td></tr>
+    <tr><td>2 triangle</td><td>0.001</td><td>0.001</td><td>0.114</td><td>0.110</td></tr>
+    <tr><td>3 trapezoid</td><td>0.076</td><td>0.076</td><td>0.321</td><td>0.321</td></tr>
+    <tr><td>4 tremolo</td><td>0.000</td><td>0.002</td><td>0.000</td><td>0.001</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Both sine envelopes are true raised sines</strong>, not the <code>4x(1−x)</code> parabola
+their comments used to advertise. The parabola has a derivative discontinuity at the cycle boundary,
+so its harmonics fell as 1/n²: an 8&nbsp;Hz alpha gate was simultaneously driving 16&nbsp;Hz at a
+quarter of the fundamental and 24&nbsp;Hz at a ninth — beta content inside an alpha session. The LED
+path measured 0.286 / 0.145 before its fix and the audio path 0.251 / 0.112, which is how we know it
+was literally the same shape.</p>
+
+<div class="note">
+  <p><strong>Measurement note.</strong> The fifth harmonic of a 10&nbsp;Hz flicker lands on
+  50&nbsp;Hz, so mains-hum pickup shows up there and is easy to mistake for real harmonic content.
+  Check whether h5 <em>moves</em> when you change the flicker rate.</p>
+</div>
+
+<h2 id="depth"><code>depth</code> — audio pulse depth</h2>
+
+<p>The fourteenth audio column. A compound cell, <strong>0–100&nbsp;%</strong>, appended last so
+every existing file keeps its column positions. It is how far the gate pulls the carrier
+<strong>down</strong>:</p>
+
+<pre><code>unipolar gates (env 0..3):   sample *= (1 - depth) + depth * gate
+bipolar tremolo (env 4):     sample *= 1 + depth * sin(mod_phase)</code></pre>
+
+<p>On a gate, <strong>100 = the carrier reaches silence between pulses</strong> (a true isochronic
+tone) and 0 = no modulation. On <code>env 4</code> it is the classic tremolo index.</p>
+
+<div class="spec-table">
+<table>
+  <caption>Default when the column is absent depends on the envelope, because the two families want
+  opposite things. Source: <code>execute_timeline_entry_ctx</code> and
+  <code>audio_generator_set_iso_channel</code>.</caption>
+  <thead><tr><th><code>env</code> column</th><th><code>depth</code> column</th><th>Effective depth</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>absent</td><td>absent</td><td><strong>10&nbsp;%</strong></td><td>Legacy: no override is set, the generator falls back to <code>params.mod_depth</code> = 0.1, and pre-column files are byte-for-byte unchanged.</td></tr>
+    <tr><td>present, 0–3</td><td>absent</td><td><strong>100&nbsp;%</strong></td><td>A unipolar gate is meant to be a discrete pulse.</td></tr>
+    <tr><td>present, 4</td><td>absent</td><td><strong>10&nbsp;%</strong></td><td>The legacy bipolar tremolo is meant to be a gentle wobble.</td></tr>
+    <tr><td>any</td><td>present</td><td>the column</td><td>Clamped 0–100 at parse.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Three things to plan for when you turn depth up:</p>
+
+<ul>
+  <li><strong>Full depth is quieter.</strong> A 50&nbsp;%-duty gate at depth 100 is
+  <strong>−3.01&nbsp;dB in mean power</strong> against the same tone ungated — the carrier really is
+  off half the time. Perceived loudness drops with it, so <code>vol</code> usually needs raising. (At
+  the old 10&nbsp;% depth the difference was about 0.2&nbsp;dB, which is why nobody noticed.)</li>
+  <li><strong>Full depth on a square gate makes clicks by construction</strong> — a step
+  discontinuity at every edge. The click-free route to full depth is <strong><code>env 3</code>
+  (trapezoid) with <code>attack</code> 3–10&nbsp;ms</strong>, which rounds both edges; the trapezoid
+  additionally clamps the edge to half the on-time, so a short gate degrades to a triangle rather
+  than misbehaving.</li>
+  <li><strong><code>depth 0</code> now genuinely means "no modulation".</strong> The generator uses a
+  negative "unset" sentinel (<code>iso_depth</code> initialised to <code>-1.0f</code>, tested with
+  <code>&gt;= 0.0f</code>), so a written <code>0</code> is honoured and the modulation is removed.
+  <strong>Note:</strong> <code>ledc_format.md</code> v3 still documents the older behaviour here,
+  where <code>depth 0</code> fell back to the hardcoded 10&nbsp;%. The code in
+  <code>audio_generator.c</code> has since been fixed and is the authority; see
+  <a href="../sessions/authoring.html#doc-drift">the doc-drift note</a>. If you want to be
+  certain, write <code>mod 0</code> to remove modulation — that has always been unambiguous.</li>
+</ul>
+
+<h2 id="jitter"><code>jitter</code> — anti-habituation wander</h2>
+
+<p>One token, <code>&lt;amp&gt;</code> or <code>&lt;amp&gt;:&lt;period_ms&gt;</code>. <code>0</code>
+or absent means off. Amplitude is in hertz; period is the full cycle, defaulting to
+45&nbsp;000&nbsp;ms. <strong>The two line types do genuinely different things.</strong></p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th></th><th>LED</th><th>Audio</th></tr></thead>
+  <tbody>
+    <tr><td>Scope</td><td><strong>per channel-mask</strong></td><td><strong>GLOBAL</strong> — the setter takes no channel argument</td></tr>
+    <tr><td>What it moves</td><td>the <strong>flicker rate</strong></td><td>the <strong>binaural detune</strong>, gated on <code>frequency_r &gt; 0</code></td></tr>
+    <tr><td>Shape</td><td>bipolar triangle LFO</td><td>bipolar sine LFO</td></tr>
+    <tr><td>Amplitude limit</td><td><strong>clamped to 5&nbsp;Hz</strong></td><td>none</td></tr>
+    <tr><td>Period limit</td><td><strong>below 1000&nbsp;ms silently ignored</strong></td><td><strong>below 1000&nbsp;ms silently ignored</strong></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Three consequences on the audio side: the <strong>last</strong> audio line in the file carrying a
+jitter column sets it for the <em>whole session</em>; a channel that sets no jitter column still
+wanders if some other line turned it on; and a <strong>mono channel never wanders at all</strong>,
+because the offset is only ever added to the right carrier. It never touches the isochronic
+<code>mod</code> rate — to wander a pulse rate, put a <code class="kbd">~</code> or
+<code class="kbd">^</code> modulation on <code>mod</code> instead.</p>
+
+<p><strong>End a session by writing jitter explicitly back to <code>0</code></strong>, or it leaks
+into whatever runs next: the globals are not reset between sessions.</p>
+
+<p>A jittered LED channel is also excluded from the cycle-lattice re-anchor, by design — there is no
+fixed lattice to snap to.</p>
+
+<h2 id="phase"><code>phase</code> is a LEAD, not a lag</h2>
+
+<p>The firmware <em>adds</em> <code>phase × period / 360</code> to elapsed time, so the edge arrives
+<strong>earlier</strong> — matching <code>sin(ωt + φ)</code> rather than "start this many degrees
+later". The audio side adds a phase offset to the mod accumulator, which is the same sign
+convention.</p>
+
+<div class="spec-table">
+<table>
+  <caption>Measured on hardware at 10&nbsp;Hz (100&nbsp;ms period), timing LED-on edges.</caption>
+  <thead><tr><th><code>phase</code></th><th>If it were a lag</th><th>Actually measured</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td>0&nbsp;ms</td><td>0.00&nbsp;ms</td></tr>
+    <tr><td>90</td><td>25&nbsp;ms</td><td>74.76&nbsp;ms</td></tr>
+    <tr><td>180</td><td>50&nbsp;ms</td><td>49.93&nbsp;ms</td></tr>
+    <tr><td>270</td><td>75&nbsp;ms</td><td>24.69&nbsp;ms</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>0 and 180 are symmetric under negation, so they are identical either way — and across
+<code>sessions/library</code> the phase column takes only those two values (265 occurrences of 0, 210
+of 180). <strong>To delay by N degrees, write <code>360 − N</code>.</strong></p>
+
+<p>Provenance: the four numbers are corroborated in <code>sessions/test/README.md</code> (t06), but
+no report file holds the raw capture, so they are corroborated rather than re-derivable from the
+tree. The <em>sign convention</em> itself is verifiable in <code>led_flicker_timer_callback</code>
+(<code>eff_elapsed += off</code>).</p>
+
+<p>Audio phase is per channel and stored as a fraction of the mod cycle, so it is
+frequency-independent by construction and survives <code>mod</code> ramps. LED phase is applied at
+use-time from the live period, so it stays a fixed phase through frequency ramps.
+<code>180</code> on one channel of a complementary-colour pair sharing a start time gives antiphase,
+hence luminance-flat "invisible" flicker — the LED carrier shapes are luminance-linear with no
+perceptual gamma specifically so that a 180°-antiphase pair of raised sines sums to a constant.</p>
+
+<h2 id="attack"><code>attack</code> — trapezoid edge width</h2>
+
+<p>Milliseconds. <strong>Only <code>env 3</code> reads it.</strong> Negatives become 0. It defaults to
+<strong>3&nbsp;ms</strong> on a fresh LED channel and <strong>3&nbsp;ms</strong> on a fresh audio
+channel. Click-safe is 2&nbsp;ms and up.</p>
+
+<div class="spec-table">
+<table>
+  <caption>The upper cap is path-dependent.</caption>
+  <thead><tr><th>Path</th><th>Cap</th></tr></thead>
+  <tbody>
+    <tr><td>LED, stepped</td><td><strong>60&nbsp;ms</strong></td></tr>
+    <tr><td>LED, ramped</td><td><strong>not capped in the stored value</strong> — a ramp can leave <code>attack_ms</code> above 60</td></tr>
+    <tr><td>LED, rendered</td><td>the ISR caps the <em>effective</em> edge at 60&nbsp;ms, and the renderer further clamps it to half the on-time</td></tr>
+    <tr><td>Audio</td><td><strong>no cap</strong>; the trapezoid clamps the effective edge to half the on-time</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>So a ramped LED attack can exceed a stepped one in the stored and reported state while rendering
+identically above 60&nbsp;ms. If you need a long edge, what you are really asking for is
+<code>env 1</code> (sine).</p>
+
+<h2 id="wavetype"><code>waveType</code> — eight carriers, not seven</h2>
+
+<div class="spec-table">
+<table>
+  <caption>Measured at a 200&nbsp;Hz carrier over 10&nbsp;s, from
+  <code>reports/non_planned_reports/audio_features_measured_2026-10-12.md</code>.</caption>
+  <thead><tr><th><code>waveType</code></th><th>Carrier</th><th>Measured</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td>sine</td><td>h2…h5 all 0.000</td></tr>
+    <tr><td>1</td><td>square</td><td>h3 0.334, h5 0.201 (theory 0.333 / 0.200)</td></tr>
+    <tr><td>2</td><td>triangle</td><td>h3 0.111, h5 0.040 (theory 0.111 / 0.040)</td></tr>
+    <tr><td>3</td><td>sawtooth</td><td>h2 0.501, h3 0.334, h4 0.250</td></tr>
+    <tr><td>4</td><td>white noise</td><td>+0.05&nbsp;dB/octave</td></tr>
+    <tr><td>5</td><td>pink noise</td><td>−3.04&nbsp;dB/octave</td></tr>
+    <tr><td>6</td><td>brown noise</td><td>−6.07&nbsp;dB/octave over 60&nbsp;Hz–3&nbsp;kHz</td></tr>
+    <tr><td>7</td><td><strong>EEG contour</strong></td><td>h1…h6 = 1.000 / 0.500 / 0.331 / 0.221 / 0.140 / 0.091</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Wave 7 is a non-geometric single-cycle lookup table</strong> — a "replicated EEG
+waveform". It is a <em>carrier and needs a valid frequency</em>; it is not noise. The code is careful
+about that in two places: the <code>is_noise</code> test that waives the frequency check is a
+<em>range</em> test over white…brown, written that way specifically so 7 falls outside it; and the
+carrier scaling likewise leaves 7 unscaled by the noise level factor, so an EEG channel is about
+6&nbsp;dB hotter than a noise channel at the same <code>vol</code>. Its binaural beat comes from L/R
+detune exactly like sine's, because both ears read the same table at their own phase.</p>
+
+<p>Caveat: the frequency check that waiver belongs to lives in a function no session path calls, so
+in practice an EEG, sine or square channel written with <code>freq 0</code> is not rejected — the
+phase simply never advances and the channel emits a constant. Silence for sine, a full-scale DC
+offset for square, and for EEG whatever the table's first entry holds. <strong>Noise channels
+(4, 5, 6) are the only wave types for which <code>freq 0</code> is meaningful.</strong></p>
+
+<h2 id="bright"><code>bright</code> and the drive curve</h2>
+
+<p>Light output is proportional to <code>bright × RGB/255</code> — the "effective drive" — but only
+in the upper part of the range.</p>
+
+<div class="spec-table">
+<table>
+  <caption>Light per unit drive, measured optically.</caption>
+  <thead><tr><th>Effective drive</th><th>Light / drive</th><th>vs linear</th></tr></thead>
+  <tbody>
+    <tr><td>12</td><td>0.135</td><td>68&nbsp;%</td></tr>
+    <tr><td>24</td><td>0.153</td><td>77&nbsp;%</td></tr>
+    <tr><td>36</td><td>0.175</td><td>88&nbsp;%</td></tr>
+    <tr><td>48–60</td><td>0.183–0.188</td><td>92–95&nbsp;%</td></tr>
+    <tr><td>102</td><td>0.200</td><td>100&nbsp;%</td></tr>
+    <tr><td>153–255</td><td>0.197–0.202</td><td>100&nbsp;%</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Above drive ~100 it is linear to about ±1&nbsp;%. Below that it rolls off, reaching 68&nbsp;% of
+linear at drive 12. This is the LED's own behaviour at low PWM, not a firmware scaling bug — validated
+as a device property rather than a sensor artifact by two sweeps at different RGB (255 and 60) that
+overlap in effective drive (48 / 51 / 60) and land on the same curve there.</p>
+
+<p>It matters because therapeutic sessions live in exactly that region, and because the roll-off is
+<strong>uneven</strong>, so a dim brightness LFO is distorted in shape and not merely shallow. If an
+accurate low-brightness ramp matters, raise the RGB value and lower <code>bright</code> to hit the
+same light at a higher effective drive. See <a href="../sessions/photic.html#bright">the photic
+page</a>.</p>
+
+<h2 id="mixing">The mixing model — why <code>vol</code> is an absolute quantity</h2>
+
+<p><code>audio_generator_fill_buffer</code> scales <strong>every</strong> channel by a fixed
+<code>1 / NUM_AUDIO_CHANNELS</code> = <strong>1/16 = −24.1&nbsp;dB</strong>, unconditionally — never
+by the number of channels that happen to be active.</p>
+
+<p>Think of <strong>sixteen violins in a room</strong>. Each has its own volume. Maximum loudness is
+all sixteen playing at once. If fifteen stop, the remaining one does not get louder. That is exactly
+the model: per-channel <code>vol</code> is an <strong>absolute</strong> quantity, not a share of a
+mix, and it is a hard overflow guarantee that cannot click when channels start or stop.</p>
+
+<div class="spec-table">
+<table>
+  <caption>The cost is level. Measured device-side int16 peaks with <code>audio_max_volume</code> at
+  100.</caption>
+  <thead><tr><th>Channel</th><th>Peak at <code>vol 100</code></th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Single centre-panned sine</td><td><strong>−27.1&nbsp;dBFS</strong> (int16 peak 1448)</td><td><code>1.0 × 0.7071</code> for the equal-power pan law × <code>0.0625</code></td></tr>
+    <tr><td>Binaural channel</td><td><strong>−24.1&nbsp;dBFS</strong></td><td>skips the pan law entirely</td></tr>
+    <tr><td>Noise channel</td><td>6&nbsp;dB below a tone again</td><td>an extra 0.5 noise level factor</td></tr>
+    <tr><td>Pink noise</td><td><strong>−43.3&nbsp;dBFS</strong> measured</td><td>both of the above plus its spectral shape</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>About 4 of the 16 bits go unused, which is why brown noise's high-frequency tail sits near the
+quantisation floor. This is <strong>deliberate, not a bug</strong>, and it is also not currently
+adjustable from a session. A replacement divisor of <code>1/max(1, n_active)</code> has been proposed
+and deliberately not applied, because every existing session would get up to 24&nbsp;dB louder on a
+head-worn device. Downstream of the divisor there is one more gain — the runtime
+<code>audio_max_volume</code> setting, 0–100&nbsp;% — and then a hard clamp to ±1.0 before the int16
+conversion.</p>
+
+<p>Practical consequence: <code>vol</code> above 100 is accepted and works, and is the normal way to
+pay for a deep gate or a quiet carrier. See <a href="#ranges">ranges</a>.</p>
+
+<h2 id="binaural">Binaural: two idioms, and <code>pan</code> does nothing in one of them</h2>
+
+<ol>
+  <li><strong>One channel with <code>freqR</code> set.</strong> The generator drives the left carrier
+  at <code>freq</code> and the right at <code>freqR</code> and routes them straight to L and R —
+  "binaural bypass". When <code>frequency_r &gt; 0</code> <em>and</em>
+  <code>frequency_r ≠ frequency</code>, <strong>the pan stage is skipped entirely</strong>, so
+  <code>pan</code> has no effect on such a channel. (The equal-power law would cross-mix the two
+  carriers between ears, and at any non-centre pan attenuate one to zero and collapse the beat.)
+  Balance the ears with two channels instead, or with <code>vol</code>.</li>
+  <li><strong>Two channels hard-panned −100 / +100</strong> with slightly different carriers. Both go
+  through the normal pan law, so each ear gets its own carrier and more than 40&nbsp;dB of separation
+  from the other's.</li>
+</ol>
+
+<p>Either way the beat <strong>is</strong> the frequency difference between the two spectral lines.
+Nothing in the recorded signal beats, so never look for a beat line in a mono sum.</p>
+
+<p><code>freqR</code> is <strong>absolute</strong>, not a detune offset. Ramping it with
+<code class="kbd">&gt;</code> or <code class="kbd">*</code> is the direct way to glide a beat and now
+works — a bare <code>atof("&gt;250")</code> used to evaluate to 0.0 and silently collapse the channel
+to mono, which for a binaural device is the worst possible failure mode (lint
+<code>LEDC_FREQR_PREFIX</code>, error, now a false positive). The older idiom — ramp the <em>left</em>
+carrier and leave <code>freqR</code> pinned — still works and is what the shipped library does; the
+beat moves because <code>freqR</code> is absolute.</p>
+
+<div class="warn">
+  <p>Because <code>freqR</code> is absolute and "absent" means "keep the live right carrier",
+  <strong>an entry that moves <code>freq</code> and omits <code>freqR</code> can turn a mono channel
+  into an unintended binaural pair.</strong> See <a href="#pathdep">item 7</a>. Restate
+  <code>freqR</code> — <code>0</code> for mono — whenever you move an audio carrier.</p>
+</div>
+
+<h2 id="pathdep">Path-dependent behaviour worth knowing</h2>
+
+<p>Every one of these has cost somebody a measurement session. They are observations about the code,
+not format rules.</p>
+
+<ol>
+  <li><strong>A fresh LED start re-latches <code>env</code>, <code>attack</code> and
+  <code>jitter</code> from module-global defaults.</strong> The flicker start writes the carrier
+  waveform (square), <code>attack_ms = 3</code> and the jitter globals <em>unconditionally</em>, and
+  the timeline calls it for any mask that is not <em>already fully active</em> (the "is flickering"
+  test is ALL, not ANY). So a row that restarts a channel after a <code>freq 0</code> stop, or a
+  multi-bit mask where one bit is idle, <strong>resets env/attack/jitter to the defaults on every bit
+  in the mask</strong> unless the row restates them — defeating "absent = leave unchanged" for those
+  three columns. <code>phase</code> survives (it is not re-latched), and the <em>sweep</em> path does
+  not re-latch at all, so whether the reset happens depends on whether the row carries a ramp.
+  <strong>Restate <code>env</code> on every row that restarts a channel.</strong> Not covered by a
+  lint.</li>
+  <li><strong>A fresh channel started via the sweep path gets <code>attack</code> 0, not
+  3&nbsp;ms</strong> — the sweep install never reads the attack default and the static initialiser
+  leaves it at 0. Only matters for <code>env 3</code>.</li>
+  <li><strong>A stepped audio <code>duty 0</code> is a no-op</strong> — the setter only writes
+  <code>duty &gt; 0</code>, so the previous duty stays (lint <code>LEDC_AUDIO_DUTY_ZERO</code>,
+  info). A <em>ramped</em> or modulated duty can reach 0.</li>
+  <li><strong><code>env</code>, <code>phase</code>, <code>attack</code> and <code>jitter</code> are
+  applied on a <code>freq 0</code> LED row too</strong> — the pulse-field writes sit outside the
+  stop/start branch, so a stop row can change the pulse shape. Observable only at the next start, and
+  then subject to item 1.</li>
+  <li><strong>The flicker ISR tick is not monotonic across a session.</strong> The timer is deleted
+  when no channel is left active, and the next activation re-derives the tick from the 1000&nbsp;Hz
+  floor — so the standard measurement sync marker (a 40&nbsp;Hz burst, then <code>freq 0</code>
+  everywhere) <em>resets</em> it, and the first post-marker rate then fixes the grid for everything
+  after it. This is why every file in <code>sessions/test</code> carries a "tick primer" row that
+  keeps one invisible channel alive.</li>
+  <li><strong>The first batch is hoisted.</strong> It fires at wall-clock 0 whatever its timestamp —
+  benign for LED (anchored to the demanded time) and <em>not</em> benign for audio (started at
+  dispatch).</li>
+  <li><strong>Changing <code>freq</code> without restating <code>freqR</code> can create an accidental
+  binaural beat.</strong> "Absent <code>freqR</code>" resolves to the channel's <em>live</em> right
+  carrier, and the live right carrier of a mono channel equals its left one. So a later entry that
+  moves <code>freq</code> and omits the <code>freqR</code> column leaves the right ear at the OLD
+  pitch; the binaural-bypass test is then satisfied, so the channel plays two different carriers,
+  beats at the size of the carrier change, and <strong>silently ignores <code>pan</code></strong>.
+  Scanning <code>sessions/</code> finds 29 audibly-affected lines across four files — all of them
+  scratch test sessions; every numbered therapeutic session writes an explicit <code>freqR</code>,
+  which is why this stayed hidden. Not covered by a lint.</li>
+</ol>
+
+<h2 id="compat">Backward compatibility</h2>
+
+<ul>
+  <li>5-token and 8-token LED lines, and 5–8-token audio lines, parse exactly as they always did.
+  <code class="kbd">-</code> and every trailing column are purely additive.</li>
+  <li>Pre-v3 files are unaffected by the v3 changes: <code>depth</code> is a new trailing column whose
+  absence reproduces the old hardcoded 10&nbsp;%; <code>freqR</code> only gains behaviour for prefixes
+  that previously evaluated to 0.0, i.e. were broken; the absent-<code>waveType</code> fix only stops
+  a reset nothing wanted; and the new sweep-path range guards only reject values the same entry would
+  already have been refused for without a ramp.</li>
+  <li>The <code>sessions/library/*.ledc</code> set must still serialize byte-identically — that is a
+  regression gate. Serialization re-emits <code class="kbd">-</code> for fields the source marked
+  unchanged, and omits a never-set trailing field.</li>
+  <li>The browser parser mirrors the device parser and must be updated in lockstep. As of the v3
+  revision its <code>freqR</code> is still a bare float parse and it has no <code>depth</code> column
+  — <strong>the browser is behind the device on both v3 audio changes.</strong></li>
+</ul>
+
+<p>For pacing, testing and the trap list, see the
+<a href="../sessions/authoring.html">authoring guide</a>.</p>
+
+</main>
+</body>
+</html>

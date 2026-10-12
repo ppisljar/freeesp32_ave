@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playing a session — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>Playing a session</h1>
+    <p class="lead">What you are trying to achieve: start one of the sessions in
+    the library, get your glasses and headphones on before it begins, stop it
+    when you want, and know what the status and the end-of-session report are
+    telling you.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Before your first flicker session.</strong> Rhythmic light in the
+    3–30&nbsp;Hz band can provoke seizures in people with photosensitive
+    epilepsy, with the risk peaking around 15–25&nbsp;Hz. Do not use this device
+    if you have any history of seizures. Take care if you are pregnant or wear a
+    pacemaker or other implant. Never use it while driving or operating
+    machinery — sit or lie down somewhere safe. Stop straight away if you feel
+    dizzy, disoriented or unwell. The full safety section is on the
+    <a href="../index.html">overview page</a>. This is a DIY research and
+    meditation instrument, not a certified medical device.
+  </div>
+
+  <h2>Start a session</h2>
+
+  <ol>
+    <li>Open the <span class="kbd">Home</span> tab.</li>
+    <li>Pick a file from the <strong>Configs</strong> dropdown. There is no
+      separate load button — selecting a name loads it straight away, and the
+      note beside the dropdown changes to
+      <em>(loaded: 01_sleep_onset.ledc — Device (SPIFFS))</em> so you can see
+      which copy you got. The list is grouped by where sessions live:
+      <strong>Device (SPIFFS)</strong> is stored on the device itself,
+      <strong>Browser (local)</strong> is saved in this browser only. Press
+      <span class="kbd">⟳</span> to re-read both lists.</li>
+    <li>The session's timeline appears in the big text box. You can read it, and
+      you can edit it before playing — what plays is the text in that box, not
+      the file on disk.</li>
+    <li>Set <strong>Delay</strong>. This is a countdown in seconds before
+      playback actually starts, and it defaults to <strong>60</strong> for a
+      reason: it is the time you need to put the glasses on, get the headphones
+      settled and lie down. 0 starts immediately.</li>
+    <li>Press <span class="kbd">▶ PLAY Config</span>.</li>
+  </ol>
+
+  <p>During the countdown the status line reads <em>Starting in 47s — put on
+  your glasses &amp; headphones…</em> and ticks down once a second. Pressing
+  <span class="kbd">■ STOP</span> during the countdown cancels the session before
+  anything happens.</p>
+
+  <h3>The one-time safety notice</h3>
+
+  <p>The first time a given browser plays a session that actually flickers an
+  LED, a dialog headed <strong>Before you begin</strong> appears with the
+  contraindications, and playback does not start until you press
+  <span class="kbd">I understand — continue</span>. Cancel, press Escape, or
+  click outside it and the play is abandoned with <em>Playback cancelled —
+  safety notice not accepted</em>.</p>
+
+  <p>The acknowledgement is stored in that browser and never shown again.
+  Audio-only sessions, and sessions whose LEDs are steady rather than
+  flickering, never trigger it. You can bring it back for the next session from
+  <span class="kbd">Settings</span> → <strong>Safety notice</strong> →
+  <span class="kbd">Show safety info again</span> — worth doing before you hand
+  the device to someone else.</p>
+
+  <div class="note">
+    <p>This notice is the only safety gate in the system, and it lives entirely
+    in your browser — the firmware has no photosensitivity clamp. A session
+    started from another browser, or from a browser that already clicked
+    through, gets no prompt. It is a reminder, not a protection.</p>
+  </div>
+
+  <h2>Loading a session from a file instead</h2>
+
+  <ol>
+    <li>Press <span class="kbd">📂 Upload File…</span> and choose a
+      <code>.ledc</code>, <code>.led</code> or <code>.txt</code> file.</li>
+    <li>The file is read in the browser and dropped into the text box; the
+      status confirms <em>Loaded myfile.ledc (2841 bytes) — click PLAY to
+      execute</em>.</li>
+    <li>Review it, then press <span class="kbd">▶ PLAY Config</span>.</li>
+  </ol>
+
+  <p>Loading and playing are deliberately two steps so you always get a look at
+  what is about to run. Nothing was written to the device — to keep it, use
+  <span class="kbd">Save</span> (writes back to wherever the current session came
+  from) or <span class="kbd">Save As…</span>, which asks for a filename ending
+  in <code>.ledc</code> and a destination of <strong>Device (SPIFFS)</strong> or
+  <strong>Browser (local)</strong>. <span class="kbd">Clear</span> empties the
+  box.</p>
+
+  <h2>What happens when you press play</h2>
+
+  <p>Most of the time the device does everything itself and the browser is free
+  the moment playback starts. The exception is speech. There are three paths, and
+  the status message tells you which one you got:</p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th>Session</th><th>Status message</th><th>Can you close the browser?</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>No spoken lines</td>
+        <td><em>Playing</em></td>
+        <td><strong>Yes.</strong> The whole timeline — tones, flicker and any
+          background track the device fetches itself — runs on the device.</td>
+      </tr>
+      <tr>
+        <td>Spoken lines, and every phrase is already on the SD card</td>
+        <td><em>Playing offline (speech from SD card)</em></td>
+        <td><strong>Yes.</strong> The device narrates on its own. See
+          <a href="../user-guide/offline-sd.html">offline playback</a>.</td>
+      </tr>
+      <tr>
+        <td>Spoken lines not on the card</td>
+        <td><em>Playing (speech merged into background)</em></td>
+        <td><strong>No.</strong> The browser synthesises the speech, mixes it
+          with the background into one audio stream and feeds it to the device
+          in real time for the whole session. Close the laptop and the audio
+          stops.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>On that third path a progress bar appears first, labelled
+  <em>Preparing…</em> — speech synthesis and mixing take a few seconds and
+  happen <em>before</em> the countdown, so playback still begins promptly when
+  the countdown reaches zero. The result is cached in memory, so stopping and
+  replaying the same unchanged session skips the wait.</p>
+
+  <div class="note">
+    <p>If a speech session is going to stream from the browser, leave the tab in
+    the foreground and stop the screen from locking. A backgrounded or locked
+    browser gets its timers throttled by the operating system, the stream
+    starves, and you hear clicks and dropouts roughly once a minute. This is a
+    documented, investigated failure — see
+    <a href="../user-guide/troubleshooting.html">troubleshooting</a>. The
+    permanent fix is to put the phrases on the SD card.</p>
+  </div>
+
+  <h2>Watching it run</h2>
+
+  <p>Switch to <span class="kbd">Live Control</span>. The status beside the
+  heading counts up — <code>timeline @ 143s</code> — and every slider tracks the
+  running session, so you can watch the frequencies glide and the brightness
+  breathe. You can also intervene: any slider you touch takes effect immediately
+  over a one-second ramp, overriding the timeline until its next instruction for
+  that channel. Pulling <strong>bright</strong> down mid-session because it is
+  too intense is a perfectly normal thing to do.</p>
+
+  <p>A short press of the device's hardware button writes a snapshot of the
+  complete live state into the device log, timestamped against the session. This
+  is the "mark this moment" control: press it when something notable happens and
+  the report will tell you exactly what every channel was doing then.</p>
+
+  <h2>Stopping</h2>
+
+  <p>Three ways, all equivalent in effect:</p>
+
+  <ul>
+    <li>The red <span class="kbd">■ STOP</span> button in the tab row. It is on
+      every tab. It cancels a pending countdown, aborts any audio the browser is
+      still streaming, and drops the timeline on the device.</li>
+    <li>Hold the device's hardware button for three seconds. The firmware runs
+      the same shutdown sequence as the web button, fading the audio before
+      silencing the LEDs so there is no click or pop.</li>
+    <li>Let it finish. Sessions end on their own at the end of their
+      timeline.</li>
+  </ul>
+
+  <p>However it ends, the status confirms the stop and adds <em>— report when the
+  session ends</em>.</p>
+
+  <h2>The session report</h2>
+
+  <p>The page notices the moment the timeline goes from running to stopped —
+  whether that was a natural end or your STOP — and fetches a report. It appears
+  on the <span class="kbd">Reports</span> tab and contains:</p>
+
+  <ul>
+    <li><strong>Session length so far</strong> in seconds.</li>
+    <li><strong>Button press snapshots</strong> — for each short press of the
+      hardware button, the time into the session and the resolved state of every
+      active audio and LED channel at that instant (frequency, pan, volume,
+      modulation; flicker rate, duty, brightness, colour).</li>
+    <li><strong>Last loaded config</strong> — the exact timeline that ran, so the
+      report is self-contained.</li>
+  </ul>
+
+  <p>An editor opens above it with a <strong>Title</strong> (defaulted to the
+  session name) and a <strong>Comments</strong> box prompting for "Notes about
+  this session (how you felt, effects observed, tweaks to try…)". That is the
+  point of the whole feature: the numbers are easy, your own notes are the data
+  worth having. Press <span class="kbd">💾 Save</span>.</p>
+
+  <p>Two logs are attached when available. <strong>Device log</strong> is the
+  firmware's own log captured for the full session — not just the last fragment
+  the device's buffer holds, because the page collects it continuously while the
+  session runs. <strong>Browser log</strong> records what the page did
+  (compilation, HTTP calls, WebSocket activity, errors). Each has
+  <span class="kbd">👁 View</span> and <span class="kbd">⬇ Download</span>.</p>
+
+  <p>Where reports are kept is up to you:
+  <span class="kbd">Settings</span> → <strong>Reports</strong> →
+  <strong>Store reports in</strong> offers <em>none</em> (display only),
+  <em>local</em> (this browser) or <em>spiffs</em> (on the device). If a
+  generator URL is configured they are also uploaded there. Saved reports are
+  listed on the <span class="kbd">Reports</span> tab under <strong>Saved
+  reports:</strong>, with <span class="kbd">🗑</span> to delete the selected one
+  and <span class="kbd">⟳</span> to refresh; selecting a name opens it, and the
+  open report's name is reflected in the page URL so you can bookmark or share a
+  link to it.</p>
+
+  <h2>Playing from the Generator tab</h2>
+
+  <p>The <span class="kbd">Generator</span> tab has its own transport bar for
+  when you are editing rather than listening:</p>
+
+  <ul>
+    <li><span class="kbd">▶ Play</span> — plays the session you are editing,
+      through exactly the same path as Home's play button (speech and background
+      handling included), but with no pre-roll delay.</li>
+    <li><span class="kbd">⚡ Apply live</span> — pushes your edits onto the
+      running engine without restarting the timeline.</li>
+    <li><span class="kbd">⭯ Bounce</span> — renders the whole session
+      (background, speech and tones) to a single WAV file in the browser.</li>
+  </ul>
+
+  <p>Editing sessions is covered in the
+  <a href="../sessions/index.html">session developer</a> section.</p>
+
+  <h2>Next</h2>
+
+  <p>To run speech sessions with the laptop closed, see
+  <a href="../user-guide/offline-sd.html">offline playback from the SD
+  card</a>.</p>
+
+</main>
+</body>
+</html>

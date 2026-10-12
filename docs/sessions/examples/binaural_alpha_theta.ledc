@@ -1,0 +1,45 @@
+# binaural_alpha_theta.ledc — documentation example, ~20 min
+# Binaural alpha -> theta descent, single-channel `freqR` idiom.
+#
+# Beat = freqR - freq. freqR is PINNED at 380 Hz and the LEFT carrier ramps
+# 370 -> 374 Hz, so the beat glides 10 -> 6 Hz while the carrier moves only 4 Hz
+# (inaudible). This is the idiom the shipped library uses and it lints clean.
+# The alternative — ramping freqR itself with `>` — also works on the device as
+# of format v3, but the bundled linter has not caught up and reports it as an
+# error. See docs/sessions/binaural.html.
+#
+# HEADPHONES REQUIRED. A binaural beat exists only when each ear receives its
+# own carrier; on a speaker the two carriers mix in the air and you get a
+# monaural beat at a different (much larger) modulation depth instead.
+#
+# SAFETY: not a medical device. Do not use if you have photosensitive epilepsy,
+# a seizure disorder or a history of photic migraine; never while driving.
+# Every flicker rate here is <= 10 Hz, below the 15-25 Hz photosensitive band,
+# brightness is capped at 24% and ramps in over 15 s.
+#
+# LED   : time freq duty bright R G B mask env phase
+# Audio : A time freq pan vol mod ch freqR waveType
+
+# --- Induction, 10 Hz alpha (00:00-02:00) ---
+0 10 50 >0 255 160 32 15 1 0          # amber, sine gate, brightness ramps 0 -> 24
+A 0 370 0 >0 0 1 380 0                # ch1 binaural 370/380 = 10 Hz beat; vol ramps 0 -> 55
+15000 10 50 24 255 160 32 15 1 0      # brightness reaches the 24% cap (15 s ramp-in)
+A 60000 370 0 55 0 1 380 0            # vol settled 55 (60 s fade-in)
+
+# --- Deepen, 10 -> 6 Hz over 5 min (~0.8 Hz/min) (02:00-07:00) ---
+A 120000 >370 0 55 0 1 380 0          # left carrier ramps 370 -> 374 => beat 10 -> 6
+120000 >10 50 24 255 160 32 15 1 0    # light tracks the beat 1:1, 10 -> 6 Hz
+
+# --- Hold, 6 Hz theta, 10 min (07:00-17:00) ---
+A 420000 374 0 55 0 1 380 0           # beat held flat at 6 Hz
+420000 6 50 ~18:28:12000 255 160 32 15 1 0   # 0.083 Hz breathing brightness LFO, 18<->28%
+
+# --- Return to alpha (17:00-19:00) ---
+A 1020000 >374 0 55 0 1 380 0         # carrier 374 -> 370 => beat 6 -> 10
+1020000 >6 50 24 255 160 32 15 1 0    # light 6 -> 10 Hz; static 24% preempts the LFO
+
+# --- Close (19:00-20:00) ---
+A 1140000 370 0 >55 0 1 380 0         # volume fades 55 -> 0 over 60 s
+1140000 10 50 >24 255 160 32 15 1 0   # brightness fades 24 -> 0 over 60 s
+A 1200000 370 0 0 0 1 380 0           # end: silent
+1200000 10 50 0 255 160 32 15 1 0     # end: dark

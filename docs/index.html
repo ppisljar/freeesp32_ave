@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 AVE — open audio-visual entrainment firmware</title>
+<meta name="description" content="freeesp32_ave: open-source ESP32 firmware for binaural beats, isochronic tones and synchronised LED photic stimulation, with hardware-measured timing.">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="index.html">ESP32&nbsp;AVE</a>
+  <a href="index.html" aria-current="page">Overview</a>
+  <a href="user-guide/index.html">User guide</a>
+  <a href="sessions/index.html">Session developer</a>
+  <a href="hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <header class="hero">
+    <h1>An open audio-visual entrainment device you can actually inspect</h1>
+    <p class="lead">
+      <strong>freeesp32_ave</strong> is ESP-IDF firmware that turns an off-the-shelf
+      ESP32 audio board into a mind-machine: it synthesises binaural beats and
+      isochronic tones in real time, drives LED photic stimulation locked to the
+      same timeline, and plays both from a plain-text session script you write
+      yourself. It is a low-cost, hackable alternative to commercial AVE
+      hardware — and unlike that hardware, every number below was measured on
+      the bench rather than claimed on a datasheet.
+    </p>
+    <p>
+      <span class="pill accent">ESP32-S3 build</span>
+      <span class="pill accent">classic ESP32 build</span>
+      <span class="pill">16 audio channels</span>
+      <span class="pill">8 LED zones</span>
+      <span class="pill">Wi-Fi web UI</span>
+      <span class="pill">runs offline from SD</span>
+    </p>
+  </header>
+
+  <div class="warn" id="photosensitivity">
+    <!-- #safety is an alias: the user-guide and session sections link to
+         ../index.html#safety, and a fragment that silently lands at the top
+         of the page is exactly the kind of broken link nobody notices. -->
+    <span id="safety"></span>
+    <strong>Read before you build or use this</strong>
+    <p>
+      This device deliberately flashes light in the 3–30&nbsp;Hz band. That band
+      is a genuine seizure trigger for people with photosensitive epilepsy, and
+      bright flicker around <strong>15–25&nbsp;Hz</strong> is the risk peak;
+      saturated red is a special case of its own. Do not use it — and do not
+      point it at anyone — if there is any history of epilepsy, seizures or
+      photosensitivity in the user or their family, and stop immediately on any
+      aura, nausea, disorientation or involuntary movement.
+    </p>
+    <p>
+      <strong>The firmware contains no safety interlock.</strong> A
+      brightness/depth clamp for the high-risk band was designed and
+      deliberately left unimplemented (logged as item&nbsp;B3 in
+      <code>reports/non_planned_reports/entrainment_firmware_report.md</code>),
+      so a session file can command any rate and brightness the hardware can
+      produce. The authoring discipline is yours, not the device's.
+    </p>
+    <p>
+      This is a DIY research and meditation instrument built by hobbyists. It is
+      <strong>not a certified medical device</strong>, it has no clinical
+      validation, and nothing here is medical advice or a treatment claim.
+    </p>
+  </div>
+
+  <nav class="toc" aria-label="On this page">
+    <h2>On this page</h2>
+    <ul>
+      <li><a href="#what">What the device does</a></li>
+      <li><a href="#modalities">Three entrainment modalities</a></li>
+      <li><a href="#chain">How a session reaches your senses</a></li>
+      <li><a href="#measured">Timing, as measured</a></li>
+      <li><a href="#honest">What it is not</a></li>
+      <li><a href="#guides">Where to go next</a></li>
+      <li><a href="#repos">Related projects</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="what">What the device does</h2>
+
+  <p>
+    You write a session as a <code>.ledc</code> text file: one line per event,
+    absolute timestamps in milliseconds, one column per parameter. The device
+    parses it, then executes audio and light from the same clock.
+  </p>
+
+<pre><code># t=0: 12 Hz binaural beat, amber flicker locked to it on every zone
+0         12    70  60  255 50 0  255
+A 0       105  -100  60   0  1      0
+A 0       117   100  60   0  2      0
+
+# 10 minutes later: glide the beat down to 7.83 Hz
+600000   &gt;7.83  70  60  255 50 0  255
+A 600000 &gt;107.085 -100 60 0  1      0
+A 600000 &gt;114.915  100 60 0  2      0</code></pre>
+
+  <p>
+    Lines with no prefix drive light; <code>A</code> lines drive a synthesis
+    channel; <code>BG</code> adds a continuous background track and
+    <code>S</code> adds spoken cues. A <code>&gt;</code> or <code>*</code>
+    prefix turns a value into a linear or quadratic glide to the next entry,
+    and five more prefixes turn it into a self-contained oscillation. The full
+    column reference lives in the
+    <a href="sessions/index.html">session developer guide</a>.
+  </p>
+
+  <p>
+    Everything is reachable over Wi-Fi. The board joins your network (or raises
+    its own <code>ESP32-AVE-Setup</code> access point if it cannot) and serves a
+    web UI for uploading sessions, driving playback and changing every pin and
+    backend at runtime. With a microSD card fitted, speech and background audio
+    come off the card and a session runs with no browser attached at all.
+  </p>
+
+  <h2 id="modalities">Three entrainment modalities</h2>
+
+  <p>
+    Each one is a different physical route to the same idea — presenting the
+    brain with a rhythm at a chosen frequency. The firmware implements all
+    three, and a session can run them together on the same timeline.
+  </p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Binaural beats</h3>
+      <p>
+        Two slightly detuned carriers, one per ear
+        (<code>freq</code> left, <code>freqR</code> right). The beat is the
+        difference, produced inside the listener rather than in the air, so it
+        needs headphones. Per-channel carriers run to 20&nbsp;kHz and the beat
+        can be slowly dithered to fight habituation.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Isochronic tones</h3>
+      <p>
+        One carrier, gated on and off at the entrainment rate
+        (<code>mod</code>) with a selectable envelope — square, sine,
+        triangle, trapezoid or tremolo — plus duty, attack and depth. Works on
+        speakers, and the gate rate measured 8.0107&nbsp;Hz against a commanded
+        8.000.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Photic (LED) flicker</h3>
+      <p>
+        Light pulsed in front of closed eyes, up to 100&nbsp;Hz, across eight
+        logical zones with independent rate, duty, brightness, colour and
+        phase. A 180°&nbsp;phase offset between two zones gives a
+        luminance-flat "invisible" flicker — measured at 178.1° against a
+        commanded 180.
+      </p>
+    </div>
+  </div>
+
+  <p>
+    Any entrainment field can also be a carrier for one of eight waveforms
+    (sine, square, triangle, sawtooth, white/pink/brown noise, and a replicated
+    EEG contour), and all of them were verified spectrally: the geometric waves
+    match theory to within 0.001–0.004, pink noise measured
+    −3.04&nbsp;dB/octave against −3, brown −6.07 over 60&nbsp;Hz–3&nbsp;kHz
+    against −6.
+  </p>
+
+  <h2 id="chain">How a session reaches your senses</h2>
+
+  <figure class="figure">
+    <div class="scroll-x">
+    <svg viewBox="0 0 920 400" role="img" aria-labelledby="chain-title chain-desc"
+         preserveAspectRatio="xMidYMid meet">
+      <title id="chain-title">Signal chain from a .ledc session file to the ears and eyes</title>
+      <desc id="chain-desc">A session file feeds a timeline dispatcher, which
+        splits into an audio path (generator, I2S DMA ring, codec, ears) and a
+        light path (flicker interrupt, LED driver, zones, eyes). Both paths are
+        anchored to the same timeline origin.</desc>
+
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/>
+        </marker>
+      </defs>
+
+      <g fill="var(--fig-fill)" stroke="var(--fig-line)" stroke-width="1.5">
+        <rect x="8"   y="140" width="122" height="90" rx="8"/>
+        <rect x="152" y="140" width="128" height="90" rx="8"/>
+        <rect x="310" y="48"  width="140" height="70" rx="8"/>
+        <rect x="470" y="48"  width="150" height="70" rx="8"/>
+        <rect x="640" y="48"  width="150" height="70" rx="8"/>
+        <rect x="310" y="266" width="140" height="70" rx="8"/>
+        <rect x="470" y="266" width="150" height="70" rx="8"/>
+        <rect x="640" y="266" width="150" height="70" rx="8"/>
+      </g>
+      <g fill="none" stroke="var(--accent)" stroke-width="2">
+        <rect x="810" y="48"  width="102" height="70" rx="8"/>
+        <rect x="810" y="266" width="102" height="70" rx="8"/>
+      </g>
+
+      <g stroke="var(--fig-line)" stroke-width="1.8" fill="none" marker-end="url(#arrow)">
+        <path d="M 130 185 H 150"/>
+        <path d="M 280 168 H 295 V 83 H 308"/>
+        <path d="M 280 202 H 295 V 301 H 308"/>
+        <path d="M 450 83  H 468"/>
+        <path d="M 620 83  H 638"/>
+        <path d="M 790 83  H 808"/>
+        <path d="M 450 301 H 468"/>
+        <path d="M 620 301 H 638"/>
+        <path d="M 790 301 H 808"/>
+      </g>
+
+      <g fill="currentColor" font-family="system-ui, sans-serif" font-size="13"
+         text-anchor="middle">
+        <text x="69" y="178">session</text>
+        <text x="69" y="196" font-family="ui-monospace, monospace" font-size="12">.ledc</text>
+        <text x="69" y="214" font-size="11" fill="var(--fig-line)">100 entries max</text>
+
+        <text x="216" y="172">timeline</text>
+        <text x="216" y="190">dispatcher</text>
+        <text x="216" y="212" font-size="11" fill="var(--fig-line)">audio, then LED</text>
+
+        <text x="380" y="78">audio generator</text>
+        <text x="380" y="96" font-size="11" fill="var(--fig-line)">16 ch · 44.1 kHz</text>
+        <text x="380" y="111" font-size="11" fill="var(--fig-line)">1024-frame chunks</text>
+
+        <text x="545" y="78">I2S DMA ring</text>
+        <text x="545" y="96" font-size="11" fill="var(--fig-line)">8 × 256 frames</text>
+        <text x="545" y="111" font-size="11" fill="var(--fig-line)">= 46.44 ms pipeline</text>
+
+        <text x="715" y="78">codec / DAC</text>
+        <text x="715" y="96" font-size="11" fill="var(--fig-line)">TLV320DAC3101,</text>
+        <text x="715" y="111" font-size="11" fill="var(--fig-line)">ES8388, AC101, none</text>
+
+        <text x="861" y="80" font-weight="600">ears</text>
+        <text x="861" y="99" font-size="11" fill="var(--fig-line)">headphones</text>
+
+        <text x="380" y="296">flicker ISR</text>
+        <text x="380" y="314" font-size="11" fill="var(--fig-line)">gptimer, tick =</text>
+        <text x="380" y="329" font-size="11" fill="var(--fig-line)">clamp(f×250, 1k…10k)</text>
+
+        <text x="545" y="296">LED driver</text>
+        <text x="545" y="314" font-size="11" fill="var(--fig-line)">RMT NeoPixel · SPI</text>
+        <text x="545" y="329" font-size="11" fill="var(--fig-line)">DotStar · LEDC PWM</text>
+
+        <text x="715" y="296">8 logical zones</text>
+        <text x="715" y="314" font-size="11" fill="var(--fig-line)">4 populated:</text>
+        <text x="715" y="329" font-size="11" fill="var(--fig-line)">2 per eye</text>
+
+        <text x="861" y="298" font-weight="600">eyes</text>
+        <text x="861" y="317" font-size="11" fill="var(--fig-line)">closed eyelids</text>
+      </g>
+
+      <g font-family="system-ui, sans-serif" font-size="12" font-weight="600"
+         fill="var(--accent)" text-anchor="start">
+        <text x="310" y="36">AUDIO PATH</text>
+        <text x="310" y="364">LIGHT PATH</text>
+      </g>
+
+      <path d="M 320 190 H 900" stroke="var(--accent)" stroke-width="1.2"
+            stroke-dasharray="5 4" fill="none"/>
+      <text x="610" y="182" font-family="system-ui, sans-serif" font-size="11.5"
+            fill="var(--accent)" text-anchor="middle">
+        one origin for both paths: timeline time + the 46.44 ms DMA lag
+      </text>
+      <text x="610" y="210" font-family="system-ui, sans-serif" font-size="11.5"
+            fill="var(--accent)" text-anchor="middle">
+        measured result: light lags audio by a constant 2.7 ms
+      </text>
+    </svg>
+    </div>
+    <figcaption class="figcap">
+      <strong>Signal chain.</strong> A <code>.ledc</code> session file (at most
+      100 entries) is parsed into a timeline. At each timestamp the dispatcher
+      fires all audio entries first, then all LED entries, so channels starting
+      together start phase-coherent. The audio path runs the 16-channel
+      generator at 44.1&nbsp;kHz in 1024-frame chunks, through an I2S DMA ring
+      of 8&nbsp;×&nbsp;256 frames — a 46.44&nbsp;ms pipeline — into whichever
+      codec the board carries (TLV320DAC3101, ES8388, AC101, or a passive I2S
+      DAC), and out to headphones. The light path runs a gptimer interrupt
+      whose tick rate scales with the requested flicker frequency
+      (<code>clamp(f × 250, 1&nbsp;kHz, 10&nbsp;kHz)</code>), driving one of
+      three LED backends across eight logical zones, of which the eye builds
+      populate four — two per eye. Crucially, both paths are timed from the
+      same timeline origin with the same DMA-lag correction, which is what
+      makes the measured audio-to-light offset a constant rather than a
+      lottery.
+    </figcaption>
+  </figure>
+
+  <h2 id="measured">Timing, as measured</h2>
+
+  <p>
+    Entrainment is a timing claim, so the timing was measured rather than
+    assumed. The rig: an Arturia MiniFuse&nbsp;4 with all four inputs on one
+    ADC clock (so inter-channel skew is zero), two solar cells watching the
+    LEDs and the device's headphone output on the other two channels. Edges are
+    located by the peak of the derivative inside each cycle, and all smoothing
+    is zero-phase. Every figure below is <em>measured on hardware</em>, not a
+    specification.
+  </p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th>What</th><th>Measured</th><th>Conditions</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Flicker rate accuracy</td>
+        <td><strong>10.00007&nbsp;Hz</strong> commanded 10 Hz (+0.0007%), median
+            period 99.999&nbsp;ms, robust sd 0.061&nbsp;ms</td>
+        <td>11-minute capture, 6523 cycles, 0.0000% missing samples</td>
+      </tr>
+      <tr>
+        <td>Flicker rate accuracy, fresh start at 23&nbsp;Hz</td>
+        <td><strong>23.0024&nbsp;Hz</strong> (+0.010%), jitter sd 0.115&nbsp;ms</td>
+        <td>Deliberately chosen off-tick rate (43.478&nbsp;ms is not a whole
+            number of interrupt ticks)</td>
+      </tr>
+      <tr>
+        <td>Audio-to-light sync</td>
+        <td><strong>−2.7&nbsp;ms</strong> constant, audio early; all twelve
+            verification runs within −2.52…−3.53&nbsp;ms (1.0&nbsp;ms spread)</td>
+        <td>Entry time swept across a full flicker period, with and without a
+            mid-session rate change</td>
+      </tr>
+      <tr>
+        <td>Long-run drift</td>
+        <td>Offset held <strong>−2.54 / −2.44 / −2.48 / −2.47&nbsp;ms</strong>
+            at 2–62&nbsp;s, 2–3&nbsp;min, 5–6&nbsp;min and 8–9&nbsp;min: flat to
+            0.1&nbsp;ms, i.e. <strong>&lt;&nbsp;0.2&nbsp;ppm</strong> between the
+            LED clock and the I2S sample clock</td>
+        <td>Same 11-minute capture; extrapolates to well under 1&nbsp;ms over a
+            60-minute session</td>
+      </tr>
+      <tr>
+        <td>Timing faults</td>
+        <td><strong>Zero</strong> device-side faults in 6523 cycles</td>
+        <td>Plus 101 benign single-interrupt-tick steps (0.400&nbsp;ms at
+            10&nbsp;Hz), each a ± pair summing to zero</td>
+      </tr>
+      <tr>
+        <td>Isochronic gate</td>
+        <td>Rate <strong>8.0107&nbsp;Hz</strong> commanded 8.000; duty
+            <strong>25.08% / 75.03%</strong> commanded 25 / 75</td>
+        <td>400&nbsp;Hz carrier, demodulated envelope</td>
+      </tr>
+      <tr>
+        <td>Inter-zone phase</td>
+        <td><strong>+178.1°</strong> commanded 180 — luminance-flat to 1.9°,
+            which is 0.53&nbsp;ms at 10&nbsp;Hz</td>
+        <td>Antiphase zone pair during a brightness-breathing section</td>
+      </tr>
+      <tr>
+        <td>Carrier waveform fidelity</td>
+        <td>Harmonic ratios within <strong>0.001–0.004</strong> of theory for
+            sine, square, triangle and sawtooth</td>
+        <td>200&nbsp;Hz carrier, 10&nbsp;s per wave type</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small">
+    Sources, all in this repository:
+    <code>reports/non_planned_reports/av_sync_offset_measured_2026-10-12.md</code>
+    (sync, drift),
+    <code>reports/non_planned_reports/led_audio_bug_sweep_2026-10-12.md</code>
+    (flicker rate, fault count, phase), and
+    <code>reports/non_planned_reports/audio_features_measured_2026-10-12.md</code>
+    (waveforms, gate rate and duty).
+  </p>
+
+  <div class="note">
+    <strong>Why −2.7 ms and not zero</strong>
+    <p>
+      The residual offset is deliberately <em>not</em> calibrated away. It
+      cannot currently be separated into a device-side offset and a bias in the
+      measurement chain: the audio path adds the codec's interpolation-filter
+      group delay and its analog output stage, the light path adds LED turn-on
+      and the photocell's RC, and neither is independently known. Trimming the
+      constant to zero would bake one particular measurement rig's bias into the
+      firmware. For context, cross-modal audio/light simultaneity tolerance is
+      roughly 20–40&nbsp;ms, so a 2.7&nbsp;ms constant is well inside
+      imperceptible — the microsecond capability is margin, not a requirement.
+    </p>
+  </div>
+
+  <h2 id="honest">What it is not</h2>
+
+  <ul>
+    <li>
+      <strong>Not a medical device.</strong> No certification, no clinical
+      trial, no therapeutic claim. Treat it as an instrument for self-directed
+      experimentation.
+    </li>
+    <li>
+      <strong>No safety interlock.</strong> Nothing in the firmware limits
+      brightness or modulation depth in the 15–25&nbsp;Hz risk band. See the
+      <a href="#photosensitivity">warning above</a>.
+    </li>
+    <li>
+      <strong>Quieter than it should be.</strong> The mixer divides every
+      channel by a fixed 1/16 regardless of how many are playing, which costs
+      24&nbsp;dB that no session can recover: a sine at maximum volume on every
+      control measured −27.1&nbsp;dBFS at the device output. No shipped session
+      uses more than 4 of the 16 channels, so the divisor is sized for a case
+      that never occurs. The fix is understood and deliberately unapplied — it
+      would make existing sessions up to 24&nbsp;dB louder on a head-worn
+      device, which is a decision a human has to take, not a patch.
+    </li>
+    <li>
+      <strong>Under active development.</strong> Known rough edges are written
+      down rather than hidden, including an audio line that silently resets its
+      waveform when a trailing column is omitted, and one LED carrier shape
+      whose harmonic content still has an open measurement question.
+    </li>
+  </ul>
+
+  <h2 id="guides">Where to go next</h2>
+
+  <div class="cards">
+    <a class="card" href="user-guide/index.html">
+      <h3>User guide →</h3>
+      <p>
+        Get a built device onto Wi-Fi, find it on the network, run a session
+        from the web UI, and load the SD card so it plays without a laptop
+        attached.
+      </p>
+    </a>
+    <a class="card" href="sessions/index.html">
+      <h3>Session developer →</h3>
+      <p>
+        The <code>.ledc</code> format column by column: line types, the
+        interpolation and modulation prefixes, what each parser actually
+        validates, and how to author a session that entrains rather than
+        startles.
+      </p>
+    </a>
+    <a class="card" href="hardware/index.html">
+      <h3>Hardware →</h3>
+      <p>
+        Both supported builds — the ESP32-S3 board with a TLV320DAC3101 codec,
+        and the classic ESP32 boards — with parts, pin maps, LED topology,
+        power, first flash, and the pins that will brick a board.
+      </p>
+    </a>
+  </div>
+
+  <h2 id="repos">Related projects</h2>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Repository</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><a href="https://github.com/ppisljar/freeesp32_ave"><code>freeesp32_ave</code></a></td>
+        <td>This firmware, and the source for every page on this site</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/ppisljar/freeesp32_audioplayer"><code>freeesp32_audioplayer</code></a></td>
+        <td>Open-hardware ESP32 audio board (KiCad) the project was first built around</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/ppisljar/freeesp32_ave_generator"><code>freeesp32_ave_generator</code></a></td>
+        <td>Graphical session editor and timeline generator, and the session library</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>
+    Documentation for <code>freeesp32_ave</code>. Every measured figure on this
+    page is traceable to a write-up under <code>reports/</code> in the
+    repository; where something could not be established from the source it is
+    said so rather than guessed. Licence: TBD.
+  </p>
+</footer>
+
+</body>
+</html>

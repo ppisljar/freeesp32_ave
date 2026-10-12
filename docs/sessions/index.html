@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session developer — ESP32 AVE</title>
+<meta name="description" content="How to author .ledc entrainment sessions for the ESP32 AVE: one page per modality, a complete format reference, and a practical authoring guide.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+<div class="hero">
+  <h1>Session developer</h1>
+  <p class="lead">A session is one plain-text <code>.ledc</code> file: a timeline of timestamped rows
+  that tell the device what tone to make and what light to flash, and how to glide between them.
+  This section is for people writing and editing those files — what each modality actually is,
+  what the evidence for it does and does not support, and how to express it in the format.</p>
+</div>
+
+<div class="warn">
+  <p><strong>This is a DIY research instrument, not a medical device.</strong> Nothing here is
+  therapy, diagnosis or clinical advice. Flickering light in the 3–30&nbsp;Hz band is a genuine
+  seizure trigger for people with photosensitive epilepsy, and the 15–25&nbsp;Hz sub-band (peak
+  16–20&nbsp;Hz) accounts for the great majority of photosensitive reactions. Do not use the device,
+  and do not hand a session to anyone else, if there is any history of photosensitive epilepsy, a
+  seizure disorder, or photic migraine. Read the
+  <a href="../index.html#safety">safety section on the overview page</a> before you author
+  anything that flickers.</p>
+</div>
+
+<h2 id="start">Where to start</h2>
+
+<div class="toc">
+  <ul>
+    <li><a href="../sessions/binaural.html"><strong>Binaural beats</strong></a> — two carriers,
+      one per ear; the beat is the difference and it is assembled in the listener, not in the
+      signal. Headphones mandatory. Two idioms in this format, and the beat is now directly
+      glidable.</li>
+    <li><a href="../sessions/monaural.html"><strong>Monaural beats</strong></a> — the same two
+      carriers summed <em>before</em> the ear, so the beat is physically in the waveform. Works on a
+      speaker. Much deeper modulation; the robust choice for waking states.</li>
+    <li><a href="../sessions/isochronic.html"><strong>Isochronic tones</strong></a> — one carrier
+      gated on and off. The <code>depth</code> column decides whether that is a true pulse or a
+      gentle tremolo, and it is the single parameter that sets the effect size.</li>
+    <li><a href="../sessions/photic.html"><strong>Photic / LED flicker</strong></a> — rate, duty,
+      brightness, colour, zone masks, envelope shape and phase. The strongest driver on the device,
+      and the one with real safety constraints.</li>
+    <li><a href="../sessions/reference.html"><strong>The complete <code>.ledc</code>
+      reference</strong></a> — every line type, every column, every default, every range, in
+      tables. This is the one-page lookup.</li>
+    <li><a href="../sessions/authoring.html"><strong>Authoring guide</strong></a> — session arc
+      and pacing, safe ramp-in, how to test a session, what the static linter's findings mean, and
+      the traps that have actually bitten people.</li>
+  </ul>
+</div>
+
+<h2 id="model">The one idea the whole format is built on</h2>
+
+<p>Every channel — audio or LED — has two layers, and almost every column belongs to one of them.</p>
+
+<div class="spec-table">
+<table>
+  <caption>The carrier / pulse split. Source: <code>ledc_format.md</code>, “Model: two layers per channel”.</caption>
+  <thead>
+    <tr><th>Layer</th><th>What it is</th><th>An LED line expresses it as</th><th>An audio line expresses it as</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Carrier</strong></td>
+      <td>the thing you actually see or hear</td>
+      <td><code>R</code> <code>G</code> <code>B</code> (colour) and <code>bright</code></td>
+      <td><code>freq</code>, <code>freqR</code>, <code>waveType</code> (left pitch, right pitch, timbre)</td>
+    </tr>
+    <tr>
+      <td><strong>Pulse</strong></td>
+      <td>the entrainment rhythm imposed on the carrier</td>
+      <td><code>freq</code> (flicker Hz), <code>duty</code>, <code>env</code>, <code>phase</code>, <code>attack</code>, <code>jitter</code></td>
+      <td><code>mod</code> (Hz), <code>duty</code>, <code>env</code>, <code>phase</code>, <code>attack</code>, <code>jitter</code>, <code>depth</code></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note">
+  <p><strong>The one naming trap.</strong> The entrainment <em>rate</em> is <code>freq</code> on an
+  LED line but <code>mod</code> on an audio line — <code>freq</code> on an audio line is the carrier
+  pitch, which is a completely different quantity. Read every row's line type before you read its
+  numbers.</p>
+</div>
+
+<p>One asymmetry is worth internalising now because it explains a whole class of
+“why is my isochronic session so weak” questions: <strong>an LED pulse is always full
+depth</strong> — the envelope reaches zero between flashes by construction — while an
+<strong>audio pulse has a depth</strong>, and until recently that depth was an invisible hardcoded
+10&nbsp;%. See <a href="../sessions/isochronic.html">isochronic tones</a>.</p>
+
+<h2 id="lines">The four kinds of line</h2>
+
+<div class="spec-table">
+<table>
+  <caption>Line types, from <code>parse_line</code> in <code>main/config_parser.c</code>.</caption>
+  <thead><tr><th>Shape</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>&lt;time&gt; &lt;freq&gt; &lt;duty&gt; &lt;bright&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; &lt;mask&gt; [env] [phase] [attack] [jitter]</code></td>
+        <td>LED. 8 to 12 tokens. A 5-token legacy form also exists.</td></tr>
+    <tr><td><code>A &lt;time&gt; &lt;freq&gt; &lt;pan&gt; &lt;vol&gt; &lt;mod&gt; [ch] [freqR] [waveType] [duty] [env] [phase] [attack] [jitter] [depth]</code></td>
+        <td>Audio. 5 or more tokens after the <code>A</code>.</td></tr>
+    <tr><td><code>BG &lt;url&gt; &lt;pan&gt; &lt;loudness&gt;</code></td>
+        <td>A background audio bed for the whole session. Not a timeline entry.</td></tr>
+    <tr><td><code>S &lt;time&gt; &lt;voice&gt; &lt;volume&gt; "&lt;text&gt;"</code></td>
+        <td>A spoken cue.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><code>#</code> starts a comment, inline or whole-line, and blank lines are ignored. The full
+grammar, with every token count, limit and fallback, is on the
+<a href="../sessions/reference.html">reference page</a>.</p>
+
+<h2 id="choose">Choosing a modality</h2>
+
+<div class="cards">
+
+  <div class="card">
+    <h3><span class="pill">headphones</span> Binaural</h3>
+    <p>Gentlest. Effective modulation is only around 3&nbsp;dB, because the beat is a perceptual
+    artifact rather than a signal. Needs stereo separation, so headphones are not optional.
+    Good for sleep and low-arousal content.</p>
+    <p><a href="../sessions/binaural.html">How to configure it →</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="pill">speaker ok</span> Monaural</h3>
+    <p>The same two carriers, both centre-panned, so the beat forms acoustically. Near-100&nbsp;%
+    envelope modulation. One speaker or one earbud carries it. The robust default for waking
+    states.</p>
+    <p><a href="../sessions/monaural.html">How to configure it →</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="pill">speaker ok</span> Isochronic</h3>
+    <p>One carrier gated on and off. Sharpest attack and the most adjustable: depth, duty and edge
+    shape are all yours. Also the easiest to make click.</p>
+    <p><a href="../sessions/isochronic.html">How to configure it →</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="pill">eyes</span> Photic</h3>
+    <p>Flickering light. The strongest driver of a steady-state response by a wide margin, and the
+    only modality with a real safety envelope. Combines additively with audio at the same rate.</p>
+    <p><a href="../sessions/photic.html">How to configure it →</a></p>
+  </div>
+
+</div>
+
+<h2 id="bands">Bands, and how much to believe about them</h2>
+
+<p>The band-to-state mappings below are the device-and-practitioner convention the shipped session
+library is built around. They are <em>not</em> settled neuroscience. What is reasonably well
+established is narrower: that periodic sensory stimulation produces a measurable steady-state
+response at the stimulus rate, most reliably in the alpha region and at 40&nbsp;Hz; that combined
+audio-plus-visual stimulation produces a stronger steady-state response than either alone; and that
+the response needs a slow glide to follow a changing rate. The leap from “there is a steady-state
+response at 6&nbsp;Hz” to “the listener is now in a theta state with theta-state properties” is
+exactly the leap the evidence does not make. Author accordingly, and say so in your session
+headers — every shipped session does.</p>
+
+<div class="spec-table">
+<table>
+  <caption>Bands and conventional targets. Sourced from
+  <code>reports/non_planned_reports/entrainment_techniques_playbook.md</code> §C and
+  <code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §2, with their own confidence tags.</caption>
+  <thead><tr><th>Band</th><th>Hz</th><th>Conventionally used for</th><th>Typical target</th><th>Strength of evidence</th></tr></thead>
+  <tbody>
+    <tr><td>Delta</td><td>0.5–4</td><td>deep sleep</td><td>1–3</td><td>low to moderate</td></tr>
+    <tr><td>Theta</td><td>4–8</td><td>meditation, hypnagogia, lucid-dream work</td><td>6</td><td>low to moderate</td></tr>
+    <tr><td>Alpha</td><td>8–13</td><td>relaxed wakefulness; the usual entry point</td><td>10</td><td>the most reliably entrainable band</td></tr>
+    <tr><td>SMR / low beta</td><td>12–16</td><td>calm focus</td><td>14, usually audio-carried</td><td>low to moderate</td></tr>
+    <tr><td>Beta</td><td>16–25</td><td>alertness</td><td>18–20</td><td>low; and this is the worst photosensitivity band</td></tr>
+    <tr><td>Gamma</td><td>30–45</td><td>the 40&nbsp;Hz cognition protocol</td><td>40, fixed</td><td>strongest for the entrainment itself; the disease-modifying claim is contested</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="examples">Downloadable examples</h2>
+
+<p>Four complete, commented sessions, one per modality. Each is referenced from its modality page,
+and each reports <em>no static problems found</em> under the linter described in the
+<a href="../sessions/authoring.html#lint">authoring guide</a>.</p>
+
+<ul>
+  <li><a href="../sessions/examples/binaural_alpha_theta.ledc"><code>binaural_alpha_theta.ledc</code></a> — 20&nbsp;min, alpha→theta descent on a single <code>freqR</code> channel</li>
+  <li><a href="../sessions/examples/monaural_theta_drum.ledc"><code>monaural_theta_drum.ledc</code></a> — 20&nbsp;min, two centre-panned carriers, 8→4.5&nbsp;Hz</li>
+  <li><a href="../sessions/examples/isochronic_alpha_pulse.ledc"><code>isochronic_alpha_pulse.ledc</code></a> — 15&nbsp;min, full-depth trapezoid gate at 10&nbsp;Hz</li>
+  <li><a href="../sessions/examples/photic_antiphase_40hz.ledc"><code>photic_antiphase_40hz.ledc</code></a> — 15&nbsp;min, luminance-flat 40&nbsp;Hz antiphase pair</li>
+</ul>
+
+<p>The shipped library in <code>sessions/library/</code> is the larger worked corpus — 80-odd files,
+every one with a header explaining its design intent, its research basis and its safety reasoning.
+Read a few before writing your own.</p>
+
+</main>
+</body>
+</html>

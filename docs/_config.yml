@@ -1,0 +1,47 @@
+# GitHub Pages configuration for the freeesp32_ave documentation site.
+#
+# There is no build step and no templating. Every page is hand-written static
+# HTML with no YAML front matter, which Jekyll copies through byte for byte, so
+# this file exists only to make sure Jekyll adds nothing: no theme, no plugins,
+# no layouts, no generated index.
+#
+# Keep it that way. If a page ever needs front matter or a layout, it has
+# stopped being a file you can open from a local checkout with the network
+# unplugged, which is the one property this site is built around.
+#
+# ---------------------------------------------------------------------------
+# PUBLISHING SOURCE — read this before changing the Pages setting
+#
+# Every page links its siblings and its stylesheet with absolute paths that
+# include the folder name: /docs/index.html, /docs/assets/site.css. Those
+# resolve only when the published site root is the REPOSITORY root, i.e. the
+# Pages publishing source is "/ (root)" on the default branch, in which case
+# this file must be copied/moved to the repository root to take effect.
+#
+# If the publishing source is set to "/docs" instead, docs/ becomes the site
+# root, /docs/... gains an extra path segment and every link 404s. Fixing that
+# means one global edit — drop the /docs prefix from every href across
+# docs/index.html, docs/hardware/, docs/user-guide/ and docs/sessions/ — and it
+# has to be done in all four places at once, which is why the link style is a
+# documented convention and not a per-page choice. See docs/README.md.
+# ---------------------------------------------------------------------------
+
+title: ESP32 AVE
+description: Open-source audio-visual entrainment firmware for the ESP32
+
+# No theme, no plugins: nothing to resolve, nothing to install, nothing to break.
+theme:
+plugins: []
+
+# Do not let Jekyll turn the maintainer note into a page.
+exclude:
+  - README.md
+
+# Directories whose names start with an underscore are skipped by default;
+# nothing here uses them, but be explicit so a future assets/_* folder ships.
+include:
+  - assets
+
+# Absolute links in the pages are written against the repository layout, so
+# Jekyll must not prepend anything to them.
+baseurl: ""

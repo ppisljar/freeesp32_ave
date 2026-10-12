@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline playback from the SD card — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>Offline playback from the SD card</h1>
+    <p class="lead">What you are trying to achieve: start a session and close
+    the laptop. Tones and flicker already run entirely on the device — this page
+    is about the two things that normally need a browser, spoken narration and
+    background music, and how to move them onto a microSD card so nothing has to
+    stay connected.</p>
+  </div>
+
+  <h2>Why some sessions need the browser</h2>
+
+  <p>Spoken lines in a session are not synthesised on the device — there is no
+  text-to-speech engine in the firmware. Normally the browser speaks them,
+  mixes the result with the background track into one audio stream, and feeds
+  that stream to the device in real time for the entire session. It works, but
+  it means the browser is part of the playback chain: close it, lock the screen,
+  or walk out of WiFi range and the audio stops.</p>
+
+  <p>The fix is to pre-render every phrase once and store it on the card. After
+  that the device opens the files itself and mixes speech, background and tones
+  on its own. The browser becomes a remote control you can put down.</p>
+
+  <div class="note">
+    <p>Offline playback needs a device whose firmware was built with SD support,
+    and the card wired up. The giveaway in the UI is the <strong>SD Card</strong>
+    group on the <span class="kbd">Settings</span> tab: it only appears if the
+    firmware has the feature compiled in. If that group is missing, this page
+    does not apply to your build. Check the <code>sdcard</code> chip on the
+    <span class="kbd">Diagnostics</span> tab to see whether a card actually
+    mounted at boot.</p>
+  </div>
+
+  <h2>Prepare the card</h2>
+
+  <ol>
+    <li>Format a microSD card as a single <strong>FAT32</strong> partition.
+      Capacity is not a constraint — the content is small.</li>
+    <li>Insert it and power-cycle the device. The card is mounted at boot; the
+      firmware will never format it for you, and a card that fails to mount is
+      reported rather than reformatted.</li>
+    <li>Confirm the <code>sdcard</code> chip on <span class="kbd">Diagnostics</span>
+      is green.</li>
+  </ol>
+
+  <div class="note">
+    <p>A missing or unreadable card is harmless. The firmware treats it as
+    removable media throughout: it never blocks startup, never interrupts a
+    running session, and every path that wants the card checks first and falls
+    back to the network or the browser instead.</p>
+  </div>
+
+  <h2>Sync the speech library</h2>
+
+  <p>The card holds a <strong>library of phrases</strong>, not a mixed recording
+  per session. One file per unique phrase, shared across every session that uses
+  it, so adding a session costs almost nothing and re-syncing only uploads what
+  is missing.</p>
+
+  <ol>
+    <li>Make sure the browser you are using has internet access — the phrases
+      that are not already cached have to be synthesised now.</li>
+    <li>Open <span class="kbd">Settings</span> and scroll to <strong>Browser
+      preferences</strong> → <strong>Offline speech (preload)</strong>.</li>
+    <li>Check <strong>Speech (TTS) engine</strong> first. <em>Puter.js (browser,
+      neural — no key)</em> runs in your browser and may pop up a Puter sign-in;
+      <em>Google (proxied via the device)</em> needs the <em>device</em> to be
+      online instead. The choice is stored in this browser only, and it changes
+      the voice — so decide before you fill the card.</li>
+    <li>Press <span class="kbd">⇪ Sync speech to SD card</span>.</li>
+    <li>Watch the status line underneath. It reports the card
+      (<em>Card "SD32G" — 14422 MB free. Scanning sessions…</em>), then progress
+      (<em>Syncing… 18/42 (6 uploaded, 12 already there)</em>), then a summary
+      (<em>✓ Card ready — 42 phrase(s) available offline (6 uploaded, 36 already
+      present).</em>).</li>
+  </ol>
+
+  <p>Re-running it is cheap: phrases already on the card are skipped without
+  being re-synthesised, and phrases already in the browser's own cache upload
+  without hitting the speech engine at all. Run it again whenever you add
+  sessions, and <strong>always run it again if you change the speech
+  engine</strong> — a different engine means different audio for the same words.</p>
+
+  <p>If some phrases fail you get <em>Finished with 3 failure(s)… Sessions with
+  missing phrases still play via the browser.</em> That is the honest outcome:
+  those particular sessions lose their offline capability, nothing else
+  breaks.</p>
+
+  <h3>The neighbouring button does something different</h3>
+
+  <p><span class="kbd">⤓ Preload all speech</span>, just above, caches every
+  phrase <em>in this browser</em> rather than on the device. That is for playing
+  sessions from a laptop with no internet — useful on the road — but the browser
+  is still driving playback. For "close the laptop", you want
+  <span class="kbd">⇪ Sync speech to SD card</span>.</p>
+
+  <h2>Play a session offline</h2>
+
+  <p>There is no offline mode to switch on. Play the session as usual from
+  <span class="kbd">Home</span>, and the page decides:</p>
+
+  <ol>
+    <li>Press <span class="kbd">▶ PLAY Config</span>.</li>
+    <li>If every spoken phrase the session needs is on the card, the status says
+      <strong><em>Playing offline (speech from SD card)</em></strong>. The device
+      is now self-sufficient — close the tab, close the laptop, walk away.</li>
+    <li>If anything is missing, or the card is not mounted, or the device cannot
+      be asked, you get <em>Playing (speech merged into background)</em> instead
+      and the browser streams the session as normal. Leave it open.</li>
+  </ol>
+
+  <p>That fallback is deliberate and it errs on the side of working: a session
+  that plays with the laptop open beats one that half-plays without it. The
+  check is all-or-nothing, though — a single un-synced phrase sends the whole
+  session back to the browser path.</p>
+
+  <div class="warn">
+    <strong>The flicker runs either way.</strong> Offline playback is not a
+    lesser mode: the LED timeline executes on the device regardless of whether a
+    browser is attached, and the browser-side safety notice cannot appear if no
+    browser is attached. If someone else might start or be in front of the
+    device, make sure they have read the safety section on the
+    <a href="../index.html">overview page</a> first.
+  </div>
+
+  <h2>Background music from the card</h2>
+
+  <p>Background tracks live in a <code>/bg/</code> directory on the card and are
+  referenced from a session by a <code>sdcard://</code> URL, for example
+  <code>BG&nbsp;&nbsp;sdcard://bg/river.wav&nbsp;&nbsp;0&nbsp;&nbsp;30</code>.
+  Because the device reads them directly, a session with card-based background
+  needs no browser and no internet.</p>
+
+  <p>The simplest way to load music is to pull the card out and copy files onto
+  it from a computer — the sync button handles speech, not your music library.
+  Audio must be 16-bit PCM WAV (or MP3 on builds with MP3 support) at
+  44.1&nbsp;kHz or 22.05&nbsp;kHz, mono or stereo; other sample rates are
+  rejected with a log message you will see on the
+  <span class="kbd">Diagnostics</span> tab.</p>
+
+  <h2>The card's layout</h2>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Path</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><code>/speech/sp_&lt;hash&gt;.wav</code></td>
+        <td>One file per unique spoken phrase. The name is derived from a hash of
+          the phrase itself, which is why there is no index file to keep in sync
+          and why sessions do not have to be changed to use the card.</td></tr>
+      <tr><td><code>/bg/&lt;name&gt;.wav</code></td>
+        <td>Background tracks, referenced as
+          <code>sdcard://bg/&lt;name&gt;.wav</code>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The hashed speech filenames are not meant to be readable, and you should not
+  rename them — the device works out which file a line needs by recomputing the
+  hash, so a renamed file is simply never found. Deleting one is safe: the
+  session falls back to the browser path, and the next sync puts it back.</p>
+
+  <h2>Managing files over WiFi</h2>
+
+  <p>The device exposes the card over HTTP, which is what the sync button uses
+  and what you can use by hand from a terminal:</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Request</th><th>Does</th></tr></thead>
+    <tbody>
+      <tr><td><code>GET /api/sd</code></td>
+        <td>Lists the card's files (root, <code>speech/</code> and
+          <code>bg/</code>) with sizes, plus total and free space and the card's
+          name. Reports <code>mounted: false</code> when there is no card.</td></tr>
+      <tr><td><code>GET /api/sd/&lt;name&gt;</code></td><td>Downloads a file.</td></tr>
+      <tr><td><code>PUT /api/sd/&lt;name&gt;</code></td>
+        <td>Uploads a file, streamed straight to the card. One directory level is
+          allowed (<code>bg/river.wav</code> is fine), names are restricted to
+          letters, digits, <code>.</code>, <code>_</code> and <code>-</code>, and
+          a single file may not exceed 64&nbsp;MB.</td></tr>
+      <tr><td><code>DELETE /api/sd/&lt;name&gt;</code></td><td>Removes a file.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <p>These endpoints have no authentication, like the rest of the device's API.
+    Anyone who can reach the device on the network can read, replace or delete
+    files on the card. Treat the device as a trusted-network appliance and do not
+    expose it to the internet.</p>
+  </div>
+
+  <h2>Next</h2>
+
+  <p>On to <a href="../user-guide/settings.html">Settings</a>, or straight to
+  <a href="../user-guide/troubleshooting.html">troubleshooting</a> if
+  something above did not behave.</p>
+
+</main>
+</body>
+</html>

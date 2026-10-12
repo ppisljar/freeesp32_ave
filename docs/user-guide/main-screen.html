@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The main screen and live controls — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>The main screen and live controls</h1>
+    <p class="lead">What you are trying to achieve: understand what you are
+    looking at, and be able to change the experience while it is happening —
+    knowing what each control does to what you hear and see, not just which
+    number it edits.</p>
+  </div>
+
+  <h2>The layout</h2>
+
+  <p>The page is titled <strong>ESP32 Audio/Video Entrainment</strong> and has a
+  single row of tabs across the top, plus one button that is not a tab.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th>Tab</th><th>What it is for</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="kbd">Home</span></td>
+        <td>Load a session and play it. The text box shows the actual timeline
+          that will run, so you can read or tweak it before pressing play.</td></tr>
+      <tr><td><span class="kbd">Generator</span></td>
+        <td>The session editor: <strong>Text</strong>, <strong>Table</strong>,
+          <strong>Lanes</strong>, <strong>Wizard</strong> and
+          <strong>Community</strong> views over one shared model. Covered in the
+          <a href="../sessions/index.html">session developer</a> section.</td></tr>
+      <tr><td><span class="kbd">Live Control</span></td>
+        <td>Direct sliders for every audio and LED channel. The subject of most
+          of this page.</td></tr>
+      <tr><td><span class="kbd">Reports</span></td>
+        <td>Session reports with your own title and notes, plus the device log
+          and browser log captured during the session.</td></tr>
+      <tr><td><span class="kbd">Settings</span></td>
+        <td>Device configuration — see <a href="../user-guide/settings.html">Settings</a>.</td></tr>
+      <tr><td><span class="kbd">Firmware</span></td>
+        <td>Over-the-air updates — see <a href="../user-guide/firmware-update.html">Firmware update</a>.</td></tr>
+      <tr><td><span class="kbd">Diagnostics</span></td>
+        <td>Device health, the live log tail, log levels and crash dumps, with no
+          USB cable needed.</td></tr>
+      <tr><td><span class="kbd">■ STOP</span></td>
+        <td>Not a tab — a red button pinned to the tab row, titled
+          "Stop all audio + LED". Visible from every tab, always one click
+          away.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>The selected tab is reflected in the page's URL, so reload and the
+  browser's back and forward buttons behave the way you expect. The
+  <span class="kbd">Generator</span> tab widens the page; the others keep a
+  narrow reading column.</p>
+
+  <h2>The Live Control tab</h2>
+
+  <p>Live Control talks straight to the running engine. It is the most
+  interesting screen on the device and the easiest one to misread, because it is
+  a mixing desk, not a form you submit — every drag takes effect immediately.</p>
+
+  <p>Three things to know before you touch anything:</p>
+
+  <ul>
+    <li><strong>Changes glide, they do not jump.</strong> The header says
+      "Sliders animate over 1 s." Every change you make is sent as a one-second
+      ramp from the current value to the new one, so you never get a click or a
+      visual jolt from dragging a slider.</li>
+    <li><strong>The sliders show you the device, not your last input.</strong>
+      The page reads the engine's real state about once a second and moves the
+      sliders to match. That is why they travel on their own while a session
+      plays — you are watching the timeline. While you are dragging a control it
+      stops updating that one control, and resumes about a second after you let
+      go.</li>
+    <li><strong>Every row has a dot and a value box.</strong> The dot next to
+      <code>A1</code> or <code>L1</code> lights when that channel is actually
+      active; inactive rows are dimmed. Next to each slider is an editable number
+      box, for when you want 50.243&nbsp;Hz rather than whatever the slider
+      lands on.</li>
+  </ul>
+
+  <p>The status line beside the <strong>Live Control</strong> heading reads
+  <code>idle</code> when nothing is running, or
+  <code>timeline @ 143s</code> — how far into the loaded session the device
+  currently is.</p>
+
+  <h3>Audio Channels (A1–A8)</h3>
+
+  <p>Eight independent tone generators. Each one is its own oscillator; they are
+  summed to the output. A channel with <strong>vol</strong> at 0 makes no
+  sound.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th>Control</th><th>Range</th><th>What it does to the experience</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>freq</strong></td>
+        <td>0–20000&nbsp;Hz</td>
+        <td>The pitch of the tone — in binaural terms, the tone your
+          <em>left</em> ear hears. This is the carrier, not the entrainment
+          rate: it is what the session sounds like, not what it is doing. Low
+          hundreds of Hz is the usual home for this. Setting it to 0 stops the
+          channel.</td>
+      </tr>
+      <tr>
+        <td><strong>R-freq</strong></td>
+        <td>0, or 1–20000&nbsp;Hz</td>
+        <td>The right ear's pitch, and the one control that turns a plain tone
+          into a <strong>binaural beat</strong>. Leave it at 0 and both ears get
+          the same tone (mono). Set it a little away from <strong>freq</strong>
+          and you perceive a pulsing at the difference — <code>freq</code> 200
+          against <code>R-freq</code> 210 is a 10&nbsp;Hz beat that exists only
+          in your head, and only over headphones. Number box only, applied
+          instantly.</td>
+      </tr>
+      <tr>
+        <td><strong>pan</strong></td>
+        <td>−100 … +100</td>
+        <td>Where the tone sits between your ears. −100 is hard left, 0 centre,
+          +100 hard right. Useful for separating layers so a busy session does
+          not turn to mud; also the control a slow sweep rides on to make a
+          sound seem to rotate around you.</td>
+      </tr>
+      <tr>
+        <td><strong>vol</strong></td>
+        <td>0–100&nbsp;%</td>
+        <td>This channel's level in the mix. This is the fader you want for
+          "make the tones quieter than the background music", not the device's
+          master volume (that lives in Settings).</td>
+      </tr>
+      <tr>
+        <td><strong>mod-f</strong></td>
+        <td>0–40&nbsp;Hz</td>
+        <td>Turns the tone on and off rhythmically — an <strong>isochronic
+          tone</strong>. 0 means a continuous, unbroken tone. Any value above 0
+          is an audible pulse rate: this <em>is</em> the entrainment rate, and
+          unlike a binaural beat it works through loudspeakers and is far more
+          obvious. 10&nbsp;Hz sounds like a fast flutter; 2&nbsp;Hz like a slow
+          throb.</td>
+      </tr>
+      <tr>
+        <td><strong>wave</strong></td>
+        <td>Sine, Square, Triangle, Saw, EEG</td>
+        <td>The tone's timbre. <strong>Sine</strong> is smooth and the default.
+          <strong>Square</strong> and <strong>Saw</strong> are buzzy and rich in
+          harmonics — more present, more fatiguing over half an hour.
+          <strong>EEG</strong> is a non-geometric single-cycle shape modelled on
+          a recorded brainwave contour rather than a mathematical
+          waveform.</td>
+      </tr>
+      <tr>
+        <td><strong>lock</strong></td>
+        <td>— or another channel</td>
+        <td>Makes this channel follow another one's frequency. The gap between
+          them at the moment you lock is preserved, so locking
+          <code>A2</code> to <code>A1</code> when they are 10&nbsp;Hz apart keeps
+          them 10&nbsp;Hz apart as you drag <code>A1</code> — you move a whole
+          harmonic stack with one slider. Pan, volume and modulation stay
+          independent. The follower's frequency controls grey out, and the
+          setting is remembered in your browser, not on the device. Circular
+          locks are refused.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>The ∿ icon: put a control on an LFO</h3>
+
+  <p>Each of <strong>freq</strong>, <strong>pan</strong>, <strong>vol</strong>
+  and <strong>mod-f</strong> has a small <span class="kbd">∿</span> beside it.
+  Clicking it opens <strong>Modulation</strong> for that one field, where you
+  set a <strong>Type</strong> (None, Triangle, Sine, Saw up, Saw down, Square),
+  a <strong>From</strong> and <strong>To</strong> value, and a
+  <strong>Period (ms)</strong>.</p>
+
+  <p>The effect is that the control stops being a number and becomes a slow
+  cycle between two numbers. A sine modulation on <strong>vol</strong> from 40
+  to 70 over 10000&nbsp;ms is a gentle breathing swell; the same on
+  <strong>pan</strong> from −80 to +80 makes the tone drift back and forth
+  across your head. Setting <strong>Type</strong> to <em>None (off)</em> clears
+  the modulation and the control goes back to holding still. The
+  <span class="kbd">∿</span> icon lights up while a field is being
+  modulated — including when the running session, not you, put it there.</p>
+
+  <h3>The ⚙ icon: pulse shaping</h3>
+
+  <p>At the left of each audio row, <span class="kbd">⚙</span> opens
+  <strong>Pulse</strong> — how the isochronic gate is shaped, as opposed to how
+  fast it runs.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Field</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Envelope</strong></td>
+        <td>The shape of each pulse: <em>Square</em> (abrupt, the most
+          assertive), <em>Sine</em> and <em>Triangle</em> (smooth, easier over
+          long sessions), <em>Trapezoid</em> (a controlled rise, a flat hold and
+          a fall), or <em>Tremolo</em> (the older bipolar-sine behaviour).</td></tr>
+      <tr><td><strong>Duty&nbsp;%</strong></td>
+        <td>How much of each pulse period the tone is on. Lower duty means more
+          silence between pulses and a sharper, more percussive feel.</td></tr>
+      <tr><td><strong>Attack&nbsp;ms</strong></td>
+        <td>How long each pulse takes to come up. A few milliseconds removes the
+          click from a square gate.</td></tr>
+      <tr><td><strong>Depth&nbsp;%</strong></td>
+        <td>How far down the gate pulls between pulses. 100&nbsp;% is a true
+          on/off isochronic tone; a low depth is a subtle wobble on a tone that
+          never actually stops — much less intrusive if the pulsing itself is
+          distracting.</td></tr>
+      <tr><td><strong>Phase&nbsp;°</strong></td>
+        <td>Where in its cycle this channel's gate sits. Two channels at the same
+          rate but 180° apart alternate instead of pulsing together.</td></tr>
+      <tr><td><strong>Jitter Hz</strong> / <strong>Jitter period ms</strong></td>
+        <td>Slowly wanders the beat frequency by up to the given amount, over the
+          given period, so the rhythm never becomes perfectly predictable —
+          intended to slow down habituation. <strong>This one is device-wide:</strong>
+          the dialog says so, and it affects every audio channel, not just
+          the one you opened.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Noise (Audio Ch 9)</h3>
+
+  <p>A dedicated noise generator, separate from the eight tone channels.
+  <strong>type</strong> chooses <em>Off</em>, <em>White</em>, <em>Pink</em> or
+  <em>Brown</em>, and <strong>vol</strong> sets its level.</p>
+
+  <p>White noise is bright and hissy; pink is the same energy per octave and
+  sounds like steady rain; brown is heavily weighted to the low end and sounds
+  like distant surf. For masking a noisy room without being irritating, pink or
+  brown is usually the choice. Setting <strong>type</strong> to <em>Off</em>
+  also drops its volume to zero, and while the type is <em>Off</em> the volume
+  slider does nothing.</p>
+
+  <div class="note">
+    <p>Pink noise is noticeably quieter than white at the same volume setting —
+    measured at −43.3&nbsp;dBFS against white's −33.1&nbsp;dBFS, both at
+    <strong>vol</strong> 100. That is what pink noise <em>is</em>, not a fault:
+    its energy is spread towards the bass, so its peak level is lower for the
+    same perceived fullness. Expect to set a higher number for pink and brown
+    than for white.</p>
+  </div>
+
+  <h3>LED Channels (L1–L8)</h3>
+
+  <p>Eight logical light channels. Which physical LEDs each one drives depends on
+  how your device is wired and on the channel map in Settings. If your build
+  uses the direct-GPIO backend the heading says
+  <em>LED Channels (no colour — direct GPIO backend)</em> and the colour control
+  is not shown, because that backend can only vary brightness.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead>
+      <tr><th>Control</th><th>Range</th><th>What it does to the experience</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>freq</strong></td>
+        <td>0–30&nbsp;Hz</td>
+        <td>The flicker rate — the heart of photic stimulation. 0 means the LED
+          sits steady at whatever <strong>bright</strong> says, with no flicker
+          at all; this is the setting to reach for if you want light without
+          flashing. Everything above 0 flickers, and slow rates feel utterly
+          different from fast ones: 2&nbsp;Hz is a visible slow pulse,
+          10&nbsp;Hz a shimmer, 20&nbsp;Hz approaching a buzz.</td>
+      </tr>
+      <tr>
+        <td><strong>duty</strong></td>
+        <td>0–100&nbsp;%</td>
+        <td>How much of each flicker cycle the light is on. 50 is symmetric. Low
+          duty is a brief flash in a long dark gap — sharper and more
+          stimulating at the same brightness; high duty is a light that only
+          dips.</td>
+      </tr>
+      <tr>
+        <td><strong>bright</strong></td>
+        <td>0–100&nbsp;%</td>
+        <td>Peak brightness during the on phase. This is your comfort control
+          and the first thing to pull down if a session is too much.</td>
+      </tr>
+      <tr>
+        <td><strong>colour</strong></td>
+        <td>colour picker</td>
+        <td>The colour of this channel, on addressable-LED builds. Not cosmetic:
+          with eyes closed your eyelids pass far more deep red and amber than
+          blue or green, so warm colours are much brighter from behind closed
+          lids at the same setting. Deeply saturated red is also the
+          highest-risk colour for photosensitive people — treat it with more
+          caution than the number suggests.</td>
+      </tr>
+      <tr>
+        <td><strong>lock</strong></td>
+        <td>— or another channel</td>
+        <td>Mirrors another channel: the follower copies the leader's frequency,
+          duty, brightness and colour exactly, and snaps to them the moment you
+          lock. Use it to drive several zones as one. Unlike the audio lock
+          (which preserves an offset) this is a straight copy. Stored in your
+          browser.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>LED rows have the same <span class="kbd">∿</span> modulation icon on
+  <strong>freq</strong>, <strong>duty</strong> and <strong>bright</strong> — a
+  slow sine on <strong>bright</strong> is how a session breathes — and the same
+  <span class="kbd">⚙</span> pulse dialog, with <strong>Carrier</strong>
+  (Square, Sine, Triangle, Trapezoid) in place of the audio envelope, plus
+  <strong>Attack ms</strong>, <strong>Phase °</strong> and the jitter pair.</p>
+
+  <p>The carrier shape matters more than it sounds. A square flicker is a hard
+  edge, which is the most aggressive stimulus and the most tiring; sine is far
+  gentler for the same rate and brightness. Phase is what makes two channels
+  alternate rather than flash together — and a complementary-coloured pair at
+  180° can deliver the oscillation while the average light level stays nearly
+  flat, which is noticeably more comfortable to sit under.</p>
+
+  <div class="warn">
+    <strong>Be careful what you set here during a session.</strong> Live Control
+    has no safety limits: it will happily put any channel anywhere in the 3–30&nbsp;Hz
+    seizure-risk band at full brightness, instantly. Change flicker rate and
+    brightness in small steps, and never aim a bright flicker at someone who has
+    not read the safety notice on the
+    <a href="../index.html">overview page</a>.
+  </div>
+
+  <div class="note">
+    <p><strong>Brightness is not a linear dimmer at the bottom of its range.</strong>
+    On addressable strips the brightness percentage is multiplied into the 8-bit
+    colour value, so <strong>bright</strong> 100 with white gives a drive of 255,
+    but <strong>bright</strong> 4 gives 10 and <strong>bright</strong> 1 gives 2.
+    Below roughly 10&nbsp;% you are choosing between a handful of distinct
+    levels, which is why the slider feels coarse and jumpy down there while
+    being smooth up top. If you need a very dim light, consider lowering the
+    colour values as well instead of running brightness near zero.</p>
+  </div>
+
+  <h2>Why the whole thing sounds quiet</h2>
+
+  <p>If you find yourself at <strong>vol</strong> 100 on the channel and still
+  reaching for your amplifier, this is expected and it is measured. The audio
+  engine reserves headroom for all sixteen of its channels at once, all the
+  time, regardless of how many are actually playing. A single sine at
+  <strong>vol</strong> 100 with the master cap at 100 leaves the device at
+  about <strong>−27&nbsp;dBFS</strong> — roughly 24&nbsp;dB of unused range —
+  and no shipped session uses more than four channels at once.</p>
+
+  <p>The intended remedy is <span class="kbd">Settings</span> →
+  <strong>Audio I2S</strong> → <strong>Maximum volume (0-200)</strong>, which
+  takes effect immediately and boosts above 100. See
+  <a href="../user-guide/settings.html">Settings</a> before you turn it up —
+  especially on headphones.</p>
+
+  <h2>The Diagnostics tab, briefly</h2>
+
+  <p>Worth knowing about before you need it. It shows <strong>Last reset</strong>
+  (why the device restarted), <strong>Uptime</strong>,
+  <strong>Free heap</strong>, <strong>Free PSRAM</strong> and
+  <strong>Log buffered</strong>; an <strong>Audio real-time</strong> block with
+  <strong>Underruns</strong>, <strong>Write errors</strong>,
+  <strong>Buffers written</strong> and buffer fill statistics; a coloured chip
+  per subsystem (<code>timing</code>, <code>led</code>, <code>audio</code>,
+  <code>audio_out</code>, <code>wifi</code>, <code>sdcard</code>,
+  <code>speech</code>, <code>bg_player</code>, <code>config_parser</code>,
+  <code>web_server</code>, <code>mempool</code>); the live
+  <strong>Device log</strong> with <span class="kbd">Copy</span> and
+  <span class="kbd">Clear buffer</span>; per-category
+  <strong>Log levels</strong>; and any stored <strong>Crash core dump</strong>.
+  There is also a <span class="kbd">Reboot Device</span> button.</p>
+
+  <p>Boot is deliberately non-fatal: if the audio codec or the LED strip fails to
+  initialise, the device still comes up so you can fix it from this page, and the
+  failing subsystem shows a red chip with the reason. That is the first place to
+  look when something is silent or dark.</p>
+
+  <h2>Next</h2>
+
+  <p>On to <a href="../user-guide/playing-a-session.html">playing a
+  session</a>.</p>
+
+</main>
+</body>
+</html>

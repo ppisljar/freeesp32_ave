@@ -1,0 +1,44 @@
+# isochronic_alpha_pulse.ledc — documentation example, ~15 min
+# Isochronic tone: ONE carrier gated on and off at the entrainment rate. No
+# headphones needed — the modulation is in the signal, not in the listener.
+#
+# The gate is `env 3` (trapezoid) with `attack 5` and `depth 100`: a true pulse
+# that reaches silence between flashes, with both edges rounded over 5 ms so it
+# cannot click. `duty 40` means on for 40% of each cycle.
+#
+# `depth` is the whole point of this file. Omit the column on a line that sets
+# `env 0..3` and you get depth 100 (a real pulse). Omit BOTH `env` and `depth`
+# and you get the 10% legacy tremolo — audible as a faint wobble, not a pulse.
+# It is written out explicitly here so the file says what it does.
+#
+# Full depth costs level: a 40%-duty gate at depth 100 removes ~60% of the
+# carrier's mean power (about -4 dB), so `vol` runs at 70 rather than the 50 a
+# comparable binaural session would use.
+#
+# SAFETY: not a medical device. Do not use if you have photosensitive epilepsy,
+# a seizure disorder or a history of photic migraine; never while driving.
+# The flicker rate is 10 Hz throughout, below the 15-25 Hz photosensitive band;
+# brightness is capped at 25% and ramps in over 15 s / out over 60 s.
+#
+# LED   : time freq duty bright R G B mask env phase attack
+# Audio : A time freq pan vol mod ch freqR waveType duty env phase attack jitter depth
+
+# --- Induction (00:00-01:00): light and tone ease up together at 10 Hz ---
+0 10 40 >0 255 170 40 15 3 0 6                 # amber trapezoid flash, 40% duty, 6 ms edge
+A 0 250 0 >0 10 1 0 0 40 3 0 5 0 100           # ch1 250 Hz gated at 10 Hz, duty 40, FULL depth
+15000 10 40 25 255 170 40 15 3 0 6             # brightness reaches the 25% cap
+A 60000 250 0 70 10 1 0 0 40 3 0 5 0 100       # vol settled 70 (raised to pay for the gate)
+
+# --- Hold, 10 Hz alpha, 12 min (01:00-13:00) ---
+#   Anti-habituation lives on the LIGHT here: `jitter 0.3:53000` wanders the
+#   flicker rate +/-0.3 Hz over 53 s. Audio `jitter` would be useless on this
+#   channel — it only ever moves a binaural detune, and this channel is mono.
+#   To wander an isochronic pulse rate, modulate `mod` instead: ~9.7:10.3:53000.
+A 120000 250 0 70 10 1 0 0 40 3 0 5 0 100
+120000 10 40 25 255 170 40 15 3 0 6 0.3:53000
+
+# --- Close (13:00-15:00): simultaneous fade of light and tone ---
+A 780000 250 0 >70 10 1 0 0 40 3 0 5 0 100     # volume fades 70 -> 0 over 2 min
+780000 10 40 >25 255 170 40 15 3 0 6 0         # LED jitter back off, brightness 25 -> 0
+A 900000 250 0 0 10 1 0 0 40 3 0 5 0 100
+900000 10 40 0 255 170 40 15 3 0 6 0

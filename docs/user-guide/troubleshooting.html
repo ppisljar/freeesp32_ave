@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>Troubleshooting</h1>
+    <p class="lead">Every entry here is a failure that actually happened and was
+    diagnosed, with the measurement or the commit behind it. Several of them look
+    exactly like a different fault than they are, which is why they are worth
+    reading before you start pulling wires.</p>
+  </div>
+
+  <h2>Start with Diagnostics</h2>
+
+  <p>The <span class="kbd">Diagnostics</span> tab is deliberately a
+  no-cable-needed substitute for a serial console. Before anything else, look
+  at:</p>
+
+  <ul>
+    <li>the row of subsystem chips — a red chip names the subsystem that failed
+      to start and why. Boot is non-fatal by design, so the device comes up in a
+      degraded state specifically so you can diagnose it from this page;</li>
+    <li><strong>Last reset</strong> — whether it rebooted, and why;</li>
+    <li>the <strong>Device log</strong> at the bottom, which is the single most
+      informative thing on the device. Raise a category under <strong>Log
+      levels</strong> if you need more detail.</li>
+  </ul>
+
+  <hr>
+
+  <h2>The whole interface has frozen — but the device is fine</h2>
+
+  <p><strong>Symptom.</strong> Every part of the page stops responding. Requests
+  sit pending forever: no error, no timeout, no spinner that ever finishes.
+  Meanwhile <code>curl http://esp32-ave.local/api/state</code> from a terminal
+  answers in about 40&nbsp;ms. It looks unmistakably like a device fault.</p>
+
+  <p><strong>What is actually happening.</strong> It is not a device fault, and
+  the <code>curl</code> result is the clue that misleads everyone: curl is not
+  inside your browser's connection pool. The device answers HTTP on one task
+  with seven sockets, three of which it reserves internally, while also
+  generating audio and driving LEDs to hard real-time deadlines. Your browser
+  will happily open six connections to one host. Once the page's requests pile
+  up and occupy all six, every subsequent request from that page queues behind
+  them indefinitely — including you clicking a button. The pile-up is
+  self-reinforcing: it made <code>/api/state</code> take 20&nbsp;seconds, and a
+  20-second response against a one-second polling interval stacks twenty deep.
+  Measured on a freshly booted device with no browser attached, that same
+  endpoint answers in 33–49&nbsp;ms. There is no slow handler to find.</p>
+
+  <p><strong>What was fixed.</strong> The page now funnels all of its device
+  traffic through one gate that permits at most two requests in flight, shares
+  identical concurrent reads, and gives every request a deadline so a stalled
+  connection is released instead of leaked. Its background pollers schedule the
+  next run only after the previous one finishes, so overlap is structurally
+  impossible.</p>
+
+  <p><strong>What to do if you still see it.</strong></p>
+  <ol>
+    <li><strong>Count your tabs.</strong> The two-request budget is per page.
+      Three or four tabs of the interface are three or four independent pollers
+      competing for the same six browser connections and the same handful of
+      device sockets. Close all but one.</li>
+    <li>Reload the one you kept. That releases every connection the page was
+      holding, and it recovers immediately.</li>
+    <li>Confirm the device is healthy before suspecting it: <code>curl</code>
+      from a terminal, or open the page in a different browser. A fast answer
+      there means the device was never the problem.</li>
+  </ol>
+
+  <hr>
+
+  <h2>The interface returns "Nothing matches the given URI"</h2>
+
+  <p><strong>Symptom.</strong> Every <code>/api/...</code> call works perfectly —
+  you can confirm it with <code>curl</code> — but the web page itself 404s with
+  <em>Nothing matches the given URI</em>. This reads exactly like a broken or
+  unmounted filesystem on the device, which is where everyone looks first and
+  where the problem is not.</p>
+
+  <p><strong>What is actually happening.</strong> The firmware registers each API
+  route individually and the web interface last, as a catch-all. When the number
+  of routes exceeds the configured limit, the server fails the
+  <em>last</em> registrations — which is the catch-all. So the API survives
+  intact and only the user interface disappears. The one piece of real evidence
+  sits far above the 404s in the boot log:</p>
+
+  <p><code>httpd_register_uri_handler: no slots left for registering
+  handler</code></p>
+
+  <p><strong>What to do.</strong> This is a firmware-build issue, not something
+  you can configure. Current firmware carries headroom and explicitly checks
+  that last registration, logging an error that names the limit and states that
+  the API will keep working — so the next occurrence announces itself at boot
+  instead of impersonating a filesystem fault. Read the device log on
+  <span class="kbd">Diagnostics</span>, and update your firmware.</p>
+
+  <p>A genuinely unmounted filesystem looks different: the device serves a small
+  built-in fallback page rather than returning 404.</p>
+
+  <hr>
+
+  <h2>Saving Settings fails with a 400 naming a GPIO</h2>
+
+  <p><strong>Symptom.</strong> <em>Save failed: Error: HTTP 400</em>, with a
+  message like <code>settings apply failed: led_data_pin = GPIO 6: wired to the
+  SPI flash or PSRAM</code>.</p>
+
+  <p><strong>This is a guard working correctly.</strong> That pin is bonded to
+  the memory the firmware runs from. Accepting it would write a brick to
+  permanent storage, and the resulting boot loop can only be fixed with a USB
+  cable. The refusal is deliberate and total — there is no override, because
+  nothing legitimate wants those pins.</p>
+
+  <p>Two things to know: the save is <strong>all-or-nothing</strong>, so none of
+  your other edits were applied either, and the WiFi password field is the one
+  casualty you must re-type because the device never sends it back to the page.
+  Full detail in <a href="../user-guide/settings.html">Settings</a>.</p>
+
+  <hr>
+
+  <h2>There is no sound at all</h2>
+
+  <ol>
+    <li><strong>Check the chips on <span class="kbd">Diagnostics</span>.</strong>
+      A red <code>audio</code> or <code>audio_out</code> chip names the reason
+      directly. <code>audio_out</code> can also read <em>skipped: audio pipeline
+      degraded</em>, which means the failure is upstream.</li>
+    <li><strong>Read the boot log for a pin conflict.</strong> Look for
+      <code>GPIO 5 claimed by BOTH 'button' and 'i2s_bck' — peripherals will
+      interfere; fix one in Settings</code>. This exact class of mistake has
+      produced total silence twice on this hardware, and it is maddening because
+      the symptoms are perfect: the codec locks its clocks and never latches a
+      sample. One log line versus a multi-hour hardware hunt.</li>
+    <li><strong>If your board has an I2C codec, check its reset pin.</strong> A
+      codec held in reset acknowledges nothing, so the entire I2C bus scans as
+      empty and it looks like a dead chip or a broken bus. In
+      <span class="kbd">Settings</span> → <strong>Audio Codec</strong>, either
+      set <strong>Codec ~RESET pin</strong> to the pin that is actually wired, or
+      to <code>-1</code> if your board ties codec reset to board reset.</li>
+    <li><strong>Check the amp.</strong> <strong>Amp enable pin</strong> in
+      <span class="kbd">Settings</span> → <strong>Audio I2S</strong> must name
+      the GPIO that switches your amplifier on, or <code>-1</code> if there is
+      nothing to switch.</li>
+    <li><strong>Check volumes.</strong> Channel <strong>vol</strong> in
+      <span class="kbd">Live Control</span>, and <strong>Maximum volume</strong>
+      in Settings. A master cap left low silences everything.</li>
+  </ol>
+
+  <hr>
+
+  <h2>Everything is far too quiet, even at maximum</h2>
+
+  <p><strong>Symptom.</strong> Channel volume at 100, master cap at 100, and you
+  are still turning your amplifier or headphones up further than feels
+  reasonable.</p>
+
+  <p><strong>This is expected and it has been measured.</strong> The audio engine
+  permanently reserves headroom for all sixteen of its channels regardless of how
+  many are actually playing. A single sine at <strong>vol</strong> 100 with the
+  cap at 100 reaches about <strong>−27.1&nbsp;dBFS</strong> at the device's
+  output; white noise under the same conditions sits at −33.1&nbsp;dBFS. That is
+  roughly 24&nbsp;dB of range going unused, and no shipped session uses more than
+  four channels at once.</p>
+
+  <p><strong>What to do.</strong> Raise <strong>Maximum volume (0-200)</strong>
+  in <span class="kbd">Settings</span> → <strong>Audio I2S</strong>. It takes
+  effect immediately and boosts above 100.</p>
+
+  <div class="warn">
+    Raise it in steps with the headphones <em>off your head</em>. Going straight
+    to 200 while wearing headphones set for the quiet output is genuinely
+    painful.
+  </div>
+
+  <hr>
+
+  <h2>Background audio clicks or drops out, roughly once a minute</h2>
+
+  <p><strong>Symptom.</strong> During a session with spoken narration, the audio
+  stutters — short gaps or clicks, often in clusters about a minute apart, and
+  typically starting after you stop touching the laptop or the phone screen
+  locks.</p>
+
+  <p><strong>What is actually happening.</strong> This only affects sessions
+  where the <em>browser</em> is streaming the audio — the ones whose status says
+  <em>Playing (speech merged into background)</em>. The browser has to deliver
+  audio to the device continuously in real time, and the device's receive buffer
+  runs shallow. A 6-agent investigation found two separate regimes: a structural
+  floor from the network window and server task priority that keeps the buffer
+  about one frame deep, and — the once-a-minute clustering specifically — the
+  operating system throttling timers in a backgrounded or screen-locked
+  browser, which stalls the feed. There is also a WiFi-level ceiling above
+  both.</p>
+
+  <p><strong>What to do.</strong></p>
+  <ol>
+    <li><strong>Put the phrases on the SD card.</strong> This removes the browser
+      from the playback path entirely and the problem cannot occur. See
+      <a href="../user-guide/offline-sd.html">offline playback</a>. This is
+      the real fix.</li>
+    <li>Failing that, keep the tab in the <strong>foreground</strong> and stop
+      the screen from locking. The page already works around timer throttling
+      with a scheduling mechanism browsers do not throttle, and plays a looping
+      silent audio clip during the push to earn the operating system's
+      background-audio exemption — but that is best-effort (iOS Safari in
+      particular varies by version) and the margin is thin, so a foregrounded
+      tab with the screen on is still materially better.</li>
+    <li>Reduce the distance to your access point. The ceiling here is partly
+      radio.</li>
+  </ol>
+
+  <p>Sessions with no speech never go down this path — the device plays those by
+  itself — so if a particular session stutters and others do not, speech is
+  almost certainly why.</p>
+
+  <hr>
+
+  <h2>A session plays but there is no narration</h2>
+
+  <ul>
+    <li><strong>With the browser closed:</strong> the phrase files are not on the
+      card. A missing phrase is logged and skipped — it never aborts a session —
+      so you get the session minus the voice. Run
+      <span class="kbd">Settings</span> → <span class="kbd">⇪ Sync speech to SD
+      card</span> again.</li>
+    <li><strong>After changing the speech engine:</strong> different engine,
+      different audio, different filenames. Re-sync.</li>
+    <li><strong>With the browser open and speech failing to synthesise:</strong>
+      the Puter engine needs internet <em>in the browser</em> and may need to
+      open a sign-in popup — if your browser blocked that popup, allow it and try
+      again. The Google engine needs the <em>device</em> to be online instead.
+      Neither works on the device's own access point, which has no internet
+      behind it.</li>
+  </ul>
+
+  <hr>
+
+  <h2>The SD card is not detected</h2>
+
+  <p>The sync button reports <em>No SD card detected on the device. Insert one
+  and reboot it.</em></p>
+
+  <ol>
+    <li>The card is mounted at boot, so inserting one into a running device is
+      not enough — <strong>power-cycle it</strong>.</li>
+    <li>It must be a single <strong>FAT32</strong> partition. The firmware will
+      never format a card for you; it is your card and may hold your only copy
+      of something.</li>
+    <li>Check the four pins in <span class="kbd">Settings</span> →
+      <strong>SD Card</strong> against how your board is wired. Stored defaults
+      can predate your board — verify the live values before blaming the
+      hardware. On some boards the card's chip-select is a solder bridge that has
+      to be closed, and the SPI lines are not broken out to headers at all.</li>
+    <li>If the <strong>SD Card</strong> group is not on the Settings page at all,
+      your firmware was built without SD support.</li>
+  </ol>
+
+  <hr>
+
+  <h2>One LED channel seems dead, or the wrong zones flicker</h2>
+
+  <p><strong>Before assuming a fault:</strong> on a measured unit, LED channel 5
+  produced no light either optical sensor could detect — it sat at the noise
+  floor — and channel 6 <em>was</em> visible despite never being addressed by any
+  session. The conclusion was that channel 5 is probably simply unpopulated on a
+  four-zone build rather than faulty. Do not assume all eight logical channels
+  drive physical LEDs on your device.</p>
+
+  <p>The same measurement found that the per-eye split on that unit was channels
+  1&nbsp;+&nbsp;2 against channels 3&nbsp;+&nbsp;4, not the pairing the session
+  library most often uses. The practical diagnostic, if you want to know your
+  own device's map, is to drive each channel at a distinct flicker rate in one
+  session and watch which zones do what — it identifies the whole map at once
+  and needs no knowledge of the wiring.</p>
+
+  <p>Also check <span class="kbd">Settings</span> → <strong>LED</strong> →
+  <strong>Channel map (CSV)</strong>, which is what assigns each physical pixel
+  to a logical channel, and <strong>LED count</strong>.</p>
+
+  <hr>
+
+  <h2>Two LED zones at opposite phase cancel instead of alternating</h2>
+
+  <p>If you set up a complementary antiphase pair and the flicker nearly
+  disappears rather than alternating, the masks may each be taking one LED from
+  <em>each</em> eye. That gives every eye one in-phase and one out-of-phase
+  source, and they cancel within the eye — measured at 25.8&nbsp;dB of
+  fundamental cancellation at 178.1° on one session. Check which channels belong
+  to which eye on your device before trusting a mask.</p>
+
+  <hr>
+
+  <h2>A channel's waveform changed to sine by itself</h2>
+
+  <p><strong>Known, unfixed, and only affects hand-written timelines.</strong> An
+  audio line that omits the trailing waveform column resets that channel to sine
+  rather than leaving it as it was — a <code>-</code> in the column means "leave
+  unchanged", but an absent trailing column does not. It was left alone
+  deliberately: it affects only test files, no shipped session, and changing the
+  semantics would change what every existing file plays. If a tone loses its
+  timbre partway through a session you wrote, add the waveform column
+  explicitly.</p>
+
+  <hr>
+
+  <h2>Audio and light feel slightly out of step</h2>
+
+  <p>Measured optically with solar cells and a multi-channel audio interface,
+  audio sits consistently <strong>2.5–3.5&nbsp;ms</strong> ahead of the light
+  across twelve runs — a 1&nbsp;ms spread, independent of where an entry falls
+  and of whether the flicker rate changed. This is the state after a series of
+  fixes; it started as a random 0–23&nbsp;ms offset re-rolled on every session
+  start, plus a 25–42&nbsp;ms jump at every rate change.</p>
+
+  <p>A few milliseconds is far below perception, so if audio and light feel
+  obviously desynchronised to you, suspect something else — a browser-streamed
+  background track (above), or an old firmware. Update and re-check.</p>
+
+  <hr>
+
+  <h2>A session got noticeably quieter when more layers came in</h2>
+
+  <p><strong>Fixed; update your firmware.</strong> The mix used to scale by the
+  number of active channels, so enabling two more channels partway through a
+  session pulled the original one down by about 9.5&nbsp;dB — reported from
+  listening, then reproduced. It now scales by the actual sum of amplitudes
+  instead, which keeps multi-carrier sessions clip-safe without the duck.</p>
+
+  <hr>
+
+  <h2>Frequency ramps do nothing on some audio channels</h2>
+
+  <p><strong>Fixed; update your firmware.</strong> A bitmask truncation meant
+  audio channels 8 to 15 silently ignored <em>every</em> ramp instruction —
+  they would jump to the target instead of gliding, or sit still. It affected
+  fourteen sessions in the shipped library. Nothing in the UI reported it; the
+  sessions simply did not do what they said.</p>
+
+  <hr>
+
+  <h2>The device rebooted on its own</h2>
+
+  <ol>
+    <li><span class="kbd">Diagnostics</span> → <strong>Last reset</strong> names
+      the cause.</li>
+    <li>If a crash dump was captured, the <strong>Crash core dump</strong> card
+      offers <span class="kbd">Download core dump</span> and shows the command
+      to decode it against your build. <span class="kbd">Erase</span> clears it
+      so the next crash is unambiguous.</li>
+    <li>No dump stored does not necessarily mean no crash — if core-dump-to-flash
+      is not enabled in your build, dumps are never captured. The card says so.</li>
+    <li>Check <strong>Free heap</strong> and <strong>Free PSRAM</strong>, and the
+      <strong>Underruns</strong> and <strong>Write errors</strong> counters in
+      the <strong>Audio real-time</strong> block, before and after. A healthy
+      long run shows zeros there.</li>
+  </ol>
+
+  <hr>
+
+  <h2>No session report appeared at the end</h2>
+
+  <ul>
+    <li>The report is fetched when the page sees the timeline stop. If the page
+      was closed, reloaded, or wedged (see the first entry) during the session,
+      nobody was watching for that moment.</li>
+    <li><span class="kbd">Settings</span> → <strong>Store reports in</strong> set
+      to <em>none</em> means display only — nothing is kept.</li>
+    <li>A failed fetch shows <em>Report fetch failed: …</em> in the status
+      line.</li>
+  </ul>
+
+  <hr>
+
+  <h2>The Community session list is empty</h2>
+
+  <p>That view fetches sessions published online, directly from your browser. It
+  needs internet <strong>in the browser</strong> — it works on a normal WiFi or a
+  phone hotspot, and not on the device's own access point, which has no internet
+  behind it.</p>
+
+  <hr>
+
+  <h2>A Settings dropdown option is greyed out</h2>
+
+  <p>Options marked <em>(not compiled in)</em> are LED backends or audio codecs
+  your firmware was not built with. The list is capability-driven on purpose, so
+  you can see what this build can actually drive. Selecting one is not possible;
+  changing it requires different firmware.</p>
+
+  <hr>
+
+  <h2>Cannot reach the device at all</h2>
+
+  <ol>
+    <li>Type <code>http://</code> explicitly — browsers sometimes force
+      <code>https</code> and then report the site unreachable. The device does
+      not do TLS.</li>
+    <li>Try <code>http://esp32-ave.local</code>, then the IP from your router's
+      client list. Some networks block the multicast that <code>.local</code>
+      names depend on.</li>
+    <li>Remember the device is <strong>2.4&nbsp;GHz only</strong>. It cannot see
+      a 5&nbsp;GHz network.</li>
+    <li>If it could not join your WiFi it will be running its own access point:
+      join <code>ESP32-AVE-Setup</code> (password <code>entrain123</code>) and
+      go to <code>http://192.168.4.1</code>.</li>
+    <li>To force that deliberately, hold the hardware button down while powering
+      the device on. It boots straight into setup mode, skipping the join.</li>
+  </ol>
+
+  <p>More detail in <a href="../user-guide/connecting.html">Connecting to the
+  device</a>.</p>
+
+  <hr>
+
+  <h2>Collecting information for a bug report</h2>
+
+  <ol>
+    <li>Play the session that misbehaves, and press the hardware button at the
+      moment the problem happens — that writes a full state snapshot into the
+      log, timestamped against the session.</li>
+    <li>When it ends, open <span class="kbd">Reports</span>, give the report a
+      title, and describe what you observed in <strong>Comments</strong>.</li>
+    <li>Use <span class="kbd">⬇ Download</span> on both the <strong>Device
+      log</strong> and the <strong>Browser log</strong>. The device log is the
+      full session, not just the last fragment the device's buffer holds.</li>
+    <li>Add a screenshot of <span class="kbd">Diagnostics</span> — the subsystem
+      chips, reset reason and audio counters — and the firmware version from the
+      <span class="kbd">Firmware</span> tab.</li>
+  </ol>
+
+</main>
+</body>
+</html>

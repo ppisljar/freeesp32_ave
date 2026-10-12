@@ -1,0 +1,54 @@
+# photic_antiphase_40hz.ledc — documentation example, ~15 min
+# Luminance-flat ("invisible") 40 Hz photic flicker, plus a 40 Hz audio click.
+#
+# Two complementary-colour banks run at the same rate 180 degrees apart:
+#   mask 10 (the WARM bits of both zones) amber, phase 0
+#   mask 5  (the COOL bits of both zones) blue,  phase 180
+# Their luminances are matched, so the SUM is nearly constant and the flicker is
+# hard to see, while each retinal location still receives a full 40 Hz
+# oscillation. Measured on hardware: the fundamental cancels by 25.8 dB at a
+# sensor that sees both banks equally, at a relative phase of 178.1 degrees
+# against a commanded 180.
+#
+# `phase` is a LEAD, not a lag — the firmware ADDS phase*period/360 to elapsed
+# time, so the edge arrives earlier. 0 and 180 are symmetric under negation, so
+# an antiphase pair is the one case where the convention does not matter.
+#
+# Which physical pixels mask 10 and mask 5 reach depends entirely on
+# CONFIG_LED_CHANNEL_MAP. The two banks must be physically INTERLEAVED for the
+# cancellation to work in the eye; on a non-interleaved strip this degrades to
+# two dim 40 Hz zones (still safe, just not invisible).
+#
+# SAFETY: not a medical device. Do not use if you have photosensitive epilepsy,
+# a seizure disorder or a history of photic migraine; never while driving.
+# 40 Hz is ABOVE the 15-25 Hz photosensitive band, brightness is capped at 20%,
+# the 50% duty keeps a luminance floor (no black<->white contrast), the light
+# ramps in over 15 s and out over 30 s, and the colours are amber and blue —
+# never a saturated-red strobe.
+#
+# LED   : time freq duty bright R G B mask env phase
+# Audio : A time freq pan vol mod ch freqR waveType duty env phase attack jitter depth
+
+# --- Ramp-in (00:00-00:15): both banks ease up together ---
+0 40 50 >0 255 140 0 10 0 0                  # AMBER bank, phase 0,   bright 0 -> 20
+0 40 50 >0 0 120 255 5 0 180                 # BLUE  bank, phase 180, bright 0 -> 20
+A 0 10000 0 >0 40 1 0 0 4 0 0 0 0 100        # ch1 GENUS click: 10 kHz carrier, 40 Hz square
+                                             # gate, 4% duty, full depth. `attack` is written
+                                             # 0 because env 0 ignores it; the sharp edge is
+                                             # the point — GENUS specifies a 1 ms click train,
+                                             # and 4% of a 25 ms period IS 1 ms.
+15000 40 50 20 255 140 0 10 0 0              # amber at the 20% cap
+15000 40 50 20 0 120 255 5 0 180             # blue matched to it => luminance ~flat
+A 30000 10000 0 45 40 1 0 0 4 0 0 0 0 100    # click settled at vol 45
+
+# --- Hold, fixed 40 Hz, ~14 min (00:30-14:30) ---
+#   Nothing moves. GENUS efficacy depends on a FIXED 40 Hz: no frequency LFO and
+#   no anti-habituation drift here, unlike the slower sessions.
+
+# --- Ramp-out (14:30-15:00): both banks and the click fade together ---
+870000 40 50 >20 255 140 0 10 0 0
+870000 40 50 >20 0 120 255 5 0 180
+A 870000 10000 0 >45 40 1 0 0 4 0 0 0 0 100
+900000 40 50 0 255 140 0 10 0 0
+900000 40 50 0 0 120 255 5 0 180
+A 900000 10000 0 0 40 1 0 0 4 0 0 0 0 100

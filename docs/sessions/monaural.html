@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monaural beats — Session developer — ESP32 AVE</title>
+<meta name="description" content="What a monaural beat is, why it needs no headphones, and how to configure one in .ledc as two centre-panned carriers.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+<div class="hero">
+  <h1>Monaural beats</h1>
+  <p class="lead">The same two detuned carriers as a binaural beat, but summed <em>before</em> they
+  reach the ear. The beat is then a real amplitude modulation, physically present in the air and in
+  any recording — so a single speaker, or one earbud, carries all of it.</p>
+</div>
+
+<h2 id="what">What the phenomenon is</h2>
+
+<p>Add two sine waves of similar frequency and the result is a single tone whose amplitude rises and
+falls at the difference frequency. 200&nbsp;Hz plus 208&nbsp;Hz gives you one 204&nbsp;Hz-ish tone
+whose loudness swings fully from maximum to zero and back eight times a second. That swing is
+ordinary interference, the same arithmetic that makes two slightly mistuned guitar strings “wobble”.
+No perceptual machinery is involved.</p>
+
+<div class="figure">
+<svg viewBox="0 0 760 290" role="img" aria-labelledby="monTitle monDesc" width="100%">
+  <title id="monTitle">Two centre-panned carriers summing into a real acoustic beat</title>
+  <desc id="monDesc">Top two lanes, two carriers eight and nine cycles long, both panned centre so both reach both ears. Bottom lane, their arithmetic sum, whose amplitude swings from full to zero and back once across the frame. Unlike a binaural beat this envelope is physically present in the air and in any recording of it.</desc>
+  <g stroke="var(--fig-line, currentColor)" fill="none" opacity="0.25" stroke-width="1">
+    <line x1="120" y1="52" x2="730" y2="52"/>
+    <line x1="120" y1="112" x2="730" y2="112"/>
+    <line x1="120" y1="218" x2="730" y2="218"/>
+  </g>
+  <g fill="currentColor" font-size="13" opacity="0.85">
+    <text x="0" y="44">ch1 pan 0</text>
+    <text x="0" y="60" opacity="0.6">200 Hz</text>
+    <text x="0" y="104">ch2 pan 0</text>
+    <text x="0" y="120" opacity="0.6">208 Hz</text>
+    <text x="0" y="208">acoustic</text>
+    <text x="0" y="224" opacity="0.6">sum</text>
+  </g>
+  <path d="M 120 52.0 L 122 48.9 L 124 45.8 L 126 42.9 L 128 40.2 L 130 37.9 L 131 35.8 L 133 34.2 L 135 33.0 L 137 32.2 L 139 32.0 L 141 32.2 L 143 33.0 L 145 34.2 L 147 35.8 L 149 37.9 L 150 40.2 L 152 42.9 L 154 45.8 L 156 48.9 L 158 52.0 L 160 55.1 L 162 58.2 L 164 61.1 L 166 63.8 L 168 66.1 L 170 68.2 L 171 69.8 L 173 71.0 L 175 71.8 L 177 72.0 L 179 71.8 L 181 71.0 L 183 69.8 L 185 68.2 L 187 66.1 L 189 63.8 L 191 61.1 L 192 58.2 L 194 55.1 L 196 52.0 L 198 48.9 L 200 45.8 L 202 42.9 L 204 40.2 L 206 37.9 L 208 35.8 L 210 34.2 L 212 33.0 L 213 32.2 L 215 32.0 L 217 32.2 L 219 33.0 L 221 34.2 L 223 35.8 L 225 37.9 L 227 40.2 L 229 42.9 L 231 45.8 L 232 48.9 L 234 52.0 L 236 55.1 L 238 58.2 L 240 61.1 L 242 63.8 L 244 66.1 L 246 68.2 L 248 69.8 L 250 71.0 L 252 71.8 L 253 72.0 L 255 71.8 L 257 71.0 L 259 69.8 L 261 68.2 L 263 66.1 L 265 63.8 L 267 61.1 L 269 58.2 L 271 55.1 L 272 52.0 L 274 48.9 L 276 45.8 L 278 42.9 L 280 40.2 L 282 37.9 L 284 35.8 L 286 34.2 L 288 33.0 L 290 32.2 L 292 32.0 L 293 32.2 L 295 33.0 L 297 34.2 L 299 35.8 L 301 37.9 L 303 40.2 L 305 42.9 L 307 45.8 L 309 48.9 L 311 52.0 L 313 55.1 L 314 58.2 L 316 61.1 L 318 63.8 L 320 66.1 L 322 68.2 L 324 69.8 L 326 71.0 L 328 71.8 L 330 72.0 L 332 71.8 L 334 71.0 L 335 69.8 L 337 68.2 L 339 66.1 L 341 63.8 L 343 61.1 L 345 58.2 L 347 55.1 L 349 52.0 L 351 48.9 L 353 45.8 L 354 42.9 L 356 40.2 L 358 37.9 L 360 35.8 L 362 34.2 L 364 33.0 L 366 32.2 L 368 32.0 L 370 32.2 L 372 33.0 L 374 34.2 L 375 35.8 L 377 37.9 L 379 40.2 L 381 42.9 L 383 45.8 L 385 48.9 L 387 52.0 L 389 55.1 L 391 58.2 L 393 61.1 L 394 63.8 L 396 66.1 L 398 68.2 L 400 69.8 L 402 71.0 L 404 71.8 L 406 72.0 L 408 71.8 L 410 71.0 L 412 69.8 L 414 68.2 L 415 66.1 L 417 63.8 L 419 61.1 L 421 58.2 L 423 55.1 L 425 52.0 L 427 48.9 L 429 45.8 L 431 42.9 L 433 40.2 L 435 37.9 L 436 35.8 L 438 34.2 L 440 33.0 L 442 32.2 L 444 32.0 L 446 32.2 L 448 33.0 L 450 34.2 L 452 35.8 L 454 37.9 L 456 40.2 L 457 42.9 L 459 45.8 L 461 48.9 L 463 52.0 L 465 55.1 L 467 58.2 L 469 61.1 L 471 63.8 L 473 66.1 L 475 68.2 L 476 69.8 L 478 71.0 L 480 71.8 L 482 72.0 L 484 71.8 L 486 71.0 L 488 69.8 L 490 68.2 L 492 66.1 L 494 63.8 L 496 61.1 L 497 58.2 L 499 55.1 L 501 52.0 L 503 48.9 L 505 45.8 L 507 42.9 L 509 40.2 L 511 37.9 L 513 35.8 L 515 34.2 L 516 33.0 L 518 32.2 L 520 32.0 L 522 32.2 L 524 33.0 L 526 34.2 L 528 35.8 L 530 37.9 L 532 40.2 L 534 42.9 L 536 45.8 L 537 48.9 L 539 52.0 L 541 55.1 L 543 58.2 L 545 61.1 L 547 63.8 L 549 66.1 L 551 68.2 L 553 69.8 L 555 71.0 L 557 71.8 L 558 72.0 L 560 71.8 L 562 71.0 L 564 69.8 L 566 68.2 L 568 66.1 L 570 63.8 L 572 61.1 L 574 58.2 L 576 55.1 L 578 52.0 L 579 48.9 L 581 45.8 L 583 42.9 L 585 40.2 L 587 37.9 L 589 35.8 L 591 34.2 L 593 33.0 L 595 32.2 L 597 32.0 L 598 32.2 L 600 33.0 L 602 34.2 L 604 35.8 L 606 37.9 L 608 40.2 L 610 42.9 L 612 45.8 L 614 48.9 L 616 52.0 L 618 55.1 L 619 58.2 L 621 61.1 L 623 63.8 L 625 66.1 L 627 68.2 L 629 69.8 L 631 71.0 L 633 71.8 L 635 72.0 L 637 71.8 L 638 71.0 L 640 69.8 L 642 68.2 L 644 66.1 L 646 63.8 L 648 61.1 L 650 58.2 L 652 55.1 L 654 52.0 L 656 48.9 L 658 45.8 L 659 42.9 L 661 40.2 L 663 37.9 L 665 35.8 L 667 34.2 L 669 33.0 L 671 32.2 L 673 32.0 L 675 32.2 L 677 33.0 L 679 34.2 L 680 35.8 L 682 37.9 L 684 40.2 L 686 42.9 L 688 45.8 L 690 48.9 L 692 52.0 L 694 55.1 L 696 58.2 L 698 61.1 L 700 63.8 L 701 66.1 L 703 68.2 L 705 69.8 L 707 71.0 L 709 71.8 L 711 72.0 L 713 71.8 L 715 71.0 L 717 69.8 L 719 68.2 L 720 66.1 L 722 63.8 L 724 61.1 L 726 58.2 L 728 55.1 L 730 52.0" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.85"/>
+  <path d="M 120 112.0 L 122 108.7 L 124 105.5 L 125 102.4 L 127 99.7 L 129 97.2 L 131 95.2 L 133 93.6 L 134 92.6 L 136 92.1 L 138 92.1 L 140 92.7 L 142 93.8 L 143 95.4 L 145 97.5 L 147 99.9 L 149 102.8 L 150 105.8 L 152 109.1 L 154 112.4 L 156 115.7 L 158 118.9 L 159 121.9 L 161 124.6 L 163 127.0 L 165 129.0 L 167 130.5 L 168 131.5 L 170 132.0 L 172 131.9 L 174 131.2 L 176 130.1 L 177 128.4 L 179 126.3 L 181 123.8 L 183 120.9 L 185 117.8 L 186 114.6 L 188 111.3 L 190 108.0 L 192 104.8 L 194 101.8 L 195 99.1 L 197 96.7 L 199 94.8 L 201 93.4 L 203 92.4 L 204 92.0 L 206 92.2 L 208 92.9 L 210 94.1 L 212 95.8 L 213 98.0 L 215 100.5 L 217 103.4 L 219 106.5 L 220 109.8 L 222 113.1 L 224 116.4 L 226 119.6 L 228 122.5 L 229 125.2 L 231 127.5 L 233 129.4 L 235 130.8 L 237 131.7 L 238 132.0 L 240 131.8 L 242 131.0 L 244 129.7 L 246 128.0 L 247 125.7 L 249 123.1 L 251 120.2 L 253 117.1 L 255 113.8 L 256 110.5 L 258 107.2 L 260 104.1 L 262 101.2 L 264 98.5 L 265 96.3 L 267 94.4 L 269 93.1 L 271 92.3 L 272 92.0 L 274 92.3 L 276 93.1 L 278 94.4 L 280 96.3 L 281 98.5 L 283 101.2 L 285 104.1 L 287 107.2 L 289 110.5 L 290 113.8 L 292 117.1 L 294 120.2 L 296 123.1 L 298 125.7 L 299 128.0 L 301 129.7 L 303 131.0 L 305 131.8 L 307 132.0 L 308 131.7 L 310 130.8 L 312 129.4 L 314 127.5 L 316 125.2 L 317 122.5 L 319 119.6 L 321 116.4 L 323 113.1 L 325 109.8 L 326 106.5 L 328 103.4 L 330 100.5 L 332 98.0 L 334 95.8 L 335 94.1 L 337 92.9 L 339 92.2 L 341 92.0 L 342 92.4 L 344 93.4 L 346 94.8 L 348 96.7 L 350 99.1 L 351 101.8 L 353 104.8 L 355 108.0 L 357 111.3 L 359 114.6 L 360 117.8 L 362 120.9 L 364 123.8 L 366 126.3 L 368 128.4 L 369 130.1 L 371 131.2 L 373 131.9 L 375 132.0 L 377 131.5 L 378 130.5 L 380 129.0 L 382 127.0 L 384 124.6 L 386 121.9 L 387 118.9 L 389 115.7 L 391 112.4 L 393 109.1 L 394 105.8 L 396 102.8 L 398 99.9 L 400 97.5 L 402 95.4 L 403 93.8 L 405 92.7 L 407 92.1 L 409 92.1 L 411 92.6 L 412 93.6 L 414 95.2 L 416 97.2 L 418 99.7 L 420 102.4 L 421 105.5 L 423 108.7 L 425 112.0 L 427 115.3 L 429 118.5 L 430 121.6 L 432 124.3 L 434 126.8 L 436 128.8 L 438 130.4 L 439 131.4 L 441 131.9 L 443 131.9 L 445 131.3 L 447 130.2 L 448 128.6 L 450 126.5 L 452 124.1 L 454 121.2 L 456 118.2 L 457 114.9 L 459 111.6 L 461 108.3 L 463 105.1 L 464 102.1 L 466 99.4 L 468 97.0 L 470 95.0 L 472 93.5 L 473 92.5 L 475 92.0 L 477 92.1 L 479 92.8 L 481 93.9 L 482 95.6 L 484 97.7 L 486 100.2 L 488 103.1 L 490 106.2 L 491 109.4 L 493 112.7 L 495 116.0 L 497 119.2 L 499 122.2 L 500 124.9 L 502 127.3 L 504 129.2 L 506 130.6 L 508 131.6 L 509 132.0 L 511 131.8 L 513 131.1 L 515 129.9 L 516 128.2 L 518 126.0 L 520 123.5 L 522 120.6 L 524 117.5 L 525 114.2 L 527 110.9 L 529 107.6 L 531 104.4 L 533 101.5 L 534 98.8 L 536 96.5 L 538 94.6 L 540 93.2 L 542 92.3 L 543 92.0 L 545 92.2 L 547 93.0 L 549 94.3 L 551 96.0 L 552 98.3 L 554 100.9 L 556 103.8 L 558 106.9 L 560 110.2 L 561 113.5 L 563 116.8 L 565 119.9 L 567 122.8 L 569 125.5 L 570 127.7 L 572 129.6 L 574 130.9 L 576 131.7 L 578 132.0 L 579 131.7 L 581 130.9 L 583 129.6 L 585 127.7 L 586 125.5 L 588 122.8 L 590 119.9 L 592 116.8 L 594 113.5 L 595 110.2 L 597 106.9 L 599 103.8 L 601 100.9 L 603 98.3 L 604 96.0 L 606 94.3 L 608 93.0 L 610 92.2 L 612 92.0 L 613 92.3 L 615 93.2 L 617 94.6 L 619 96.5 L 621 98.8 L 622 101.5 L 624 104.4 L 626 107.6 L 628 110.9 L 630 114.2 L 631 117.5 L 633 120.6 L 635 123.5 L 637 126.0 L 638 128.2 L 640 129.9 L 642 131.1 L 644 131.8 L 646 132.0 L 647 131.6 L 649 130.6 L 651 129.2 L 653 127.3 L 655 124.9 L 656 122.2 L 658 119.2 L 660 116.0 L 662 112.7 L 664 109.4 L 665 106.2 L 667 103.1 L 669 100.2 L 671 97.7 L 673 95.6 L 674 93.9 L 676 92.8 L 678 92.1 L 680 92.0 L 682 92.5 L 683 93.5 L 685 95.0 L 687 97.0 L 689 99.4 L 691 102.1 L 692 105.1 L 694 108.3 L 696 111.6 L 698 114.9 L 700 118.2 L 701 121.2 L 703 124.1 L 705 126.5 L 707 128.6 L 708 130.2 L 710 131.3 L 712 131.9 L 714 131.9 L 716 131.4 L 717 130.4 L 719 128.8 L 721 126.8 L 723 124.3 L 725 121.6 L 726 118.5 L 728 115.3 L 730 112.0" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.85"/>
+  <path d="M 120 218.0 L 121 214.6 L 122 211.1 L 123 207.8 L 124 204.5 L 125 201.3 L 126 198.2 L 127 195.3 L 128 192.6 L 129 190.0 L 130 187.7 L 131 185.6 L 132 183.7 L 133 182.1 L 134 180.7 L 135 179.7 L 136 178.9 L 137 178.4 L 138 178.2 L 139 178.3 L 140 178.7 L 141 179.3 L 142 180.3 L 143 181.6 L 144 183.1 L 145 184.9 L 146 186.9 L 147 189.1 L 148 191.6 L 149 194.3 L 150 197.1 L 150 200.1 L 151 203.2 L 152 206.4 L 153 209.7 L 154 213.0 L 155 216.4 L 156 219.8 L 157 223.2 L 158 226.5 L 159 229.7 L 160 232.9 L 161 235.9 L 162 238.8 L 163 241.6 L 164 244.1 L 165 246.5 L 166 248.6 L 167 250.5 L 168 252.2 L 169 253.6 L 170 254.7 L 171 255.6 L 172 256.2 L 173 256.4 L 174 256.4 L 175 256.2 L 176 255.6 L 177 254.8 L 178 253.6 L 179 252.3 L 180 250.6 L 181 248.8 L 182 246.7 L 183 244.4 L 184 241.9 L 185 239.3 L 186 236.5 L 187 233.5 L 188 230.5 L 189 227.4 L 190 224.2 L 191 221.0 L 192 217.8 L 193 214.6 L 194 211.4 L 195 208.3 L 196 205.3 L 197 202.4 L 198 199.6 L 199 197.0 L 200 194.5 L 201 192.3 L 202 190.2 L 203 188.3 L 204 186.7 L 205 185.3 L 206 184.1 L 207 183.3 L 208 182.6 L 209 182.3 L 210 182.2 L 211 182.4 L 212 182.8 L 212 183.5 L 213 184.5 L 214 185.6 L 215 187.1 L 216 188.7 L 217 190.6 L 218 192.7 L 219 194.9 L 220 197.3 L 221 199.8 L 222 202.5 L 223 205.2 L 224 208.0 L 225 210.9 L 226 213.9 L 227 216.8 L 228 219.7 L 229 222.6 L 230 225.5 L 231 228.2 L 232 230.9 L 233 233.5 L 234 235.9 L 235 238.2 L 236 240.3 L 237 242.2 L 238 244.0 L 239 245.5 L 240 246.8 L 241 247.9 L 242 248.8 L 243 249.4 L 244 249.8 L 245 249.9 L 246 249.9 L 247 249.5 L 248 249.0 L 249 248.2 L 250 247.2 L 251 246.0 L 252 244.6 L 253 243.0 L 254 241.2 L 255 239.3 L 256 237.2 L 257 235.0 L 258 232.7 L 259 230.3 L 260 227.9 L 261 225.4 L 262 222.8 L 263 220.3 L 264 217.7 L 265 215.2 L 266 212.7 L 267 210.3 L 268 207.9 L 269 205.7 L 270 203.6 L 271 201.6 L 272 199.7 L 272 198.0 L 273 196.5 L 274 195.1 L 275 193.9 L 276 192.9 L 277 192.2 L 278 191.6 L 279 191.2 L 280 191.0 L 281 191.0 L 282 191.3 L 283 191.7 L 284 192.3 L 285 193.1 L 286 194.1 L 287 195.2 L 288 196.5 L 289 198.0 L 290 199.5 L 291 201.2 L 292 203.0 L 293 204.9 L 294 206.9 L 295 208.9 L 296 211.0 L 297 213.1 L 298 215.2 L 299 217.3 L 300 219.3 L 301 221.4 L 302 223.4 L 303 225.3 L 304 227.1 L 305 228.8 L 306 230.5 L 307 232.0 L 308 233.4 L 309 234.6 L 310 235.7 L 311 236.7 L 312 237.5 L 313 238.2 L 314 238.6 L 315 239.0 L 316 239.1 L 317 239.1 L 318 239.0 L 319 238.7 L 320 238.2 L 321 237.6 L 322 236.8 L 323 236.0 L 324 235.0 L 325 233.9 L 326 232.7 L 327 231.4 L 328 230.0 L 329 228.6 L 330 227.1 L 331 225.5 L 332 224.0 L 333 222.4 L 334 220.8 L 334 219.3 L 335 217.7 L 336 216.2 L 337 214.8 L 338 213.3 L 339 212.0 L 340 210.7 L 341 209.5 L 342 208.4 L 343 207.4 L 344 206.5 L 345 205.7 L 346 205.1 L 347 204.5 L 348 204.0 L 349 203.7 L 350 203.5 L 351 203.4 L 352 203.4 L 353 203.5 L 354 203.8 L 355 204.1 L 356 204.6 L 357 205.1 L 358 205.7 L 359 206.4 L 360 207.1 L 361 208.0 L 362 208.9 L 363 209.8 L 364 210.7 L 365 211.7 L 366 212.7 L 367 213.7 L 368 214.8 L 369 215.8 L 370 216.8 L 371 217.7 L 372 218.7 L 373 219.6 L 374 220.4 L 375 221.2 L 376 222.0 L 377 222.6 L 378 223.3 L 379 223.8 L 380 224.3 L 381 224.7 L 382 225.0 L 383 225.3 L 384 225.5 L 385 225.6 L 386 225.7 L 387 225.7 L 388 225.6 L 389 225.4 L 390 225.3 L 391 225.0 L 392 224.7 L 393 224.4 L 394 224.0 L 394 223.6 L 395 223.1 L 396 222.7 L 397 222.2 L 398 221.7 L 399 221.3 L 400 220.8 L 401 220.3 L 402 219.9 L 403 219.4 L 404 219.0 L 405 218.6 L 406 218.3 L 407 217.9 L 408 217.6 L 409 217.4 L 410 217.2 L 411 217.0 L 412 216.9 L 413 216.8 L 414 216.7 L 415 216.7 L 416 216.7 L 417 216.7 L 418 216.8 L 419 216.9 L 420 217.1 L 421 217.2 L 422 217.4 L 423 217.6 L 424 217.8 L 425 218.0 L 426 218.2 L 427 218.4 L 428 218.6 L 429 218.8 L 430 218.9 L 431 219.1 L 432 219.2 L 433 219.3 L 434 219.3 L 435 219.3 L 436 219.3 L 437 219.2 L 438 219.1 L 439 219.0 L 440 218.8 L 441 218.6 L 442 218.4 L 443 218.1 L 444 217.7 L 445 217.4 L 446 217.0 L 447 216.6 L 448 216.1 L 449 215.7 L 450 215.2 L 451 214.7 L 452 214.3 L 453 213.8 L 454 213.3 L 455 212.9 L 456 212.4 L 456 212.0 L 457 211.6 L 458 211.3 L 459 211.0 L 460 210.7 L 461 210.6 L 462 210.4 L 463 210.3 L 464 210.3 L 465 210.4 L 466 210.5 L 467 210.7 L 468 211.0 L 469 211.3 L 470 211.7 L 471 212.2 L 472 212.7 L 473 213.4 L 474 214.0 L 475 214.8 L 476 215.6 L 477 216.4 L 478 217.3 L 479 218.3 L 480 219.2 L 481 220.2 L 482 221.2 L 483 222.3 L 484 223.3 L 485 224.3 L 486 225.3 L 487 226.2 L 488 227.1 L 489 228.0 L 490 228.9 L 491 229.6 L 492 230.3 L 493 230.9 L 494 231.4 L 495 231.9 L 496 232.2 L 497 232.5 L 498 232.6 L 499 232.6 L 500 232.5 L 501 232.3 L 502 232.0 L 503 231.5 L 504 230.9 L 505 230.3 L 506 229.5 L 507 228.6 L 508 227.6 L 509 226.5 L 510 225.3 L 511 224.0 L 512 222.7 L 513 221.2 L 514 219.8 L 515 218.3 L 516 216.7 L 516 215.2 L 517 213.6 L 518 212.0 L 519 210.5 L 520 208.9 L 521 207.4 L 522 206.0 L 523 204.6 L 524 203.3 L 525 202.1 L 526 201.0 L 527 200.0 L 528 199.2 L 529 198.4 L 530 197.8 L 531 197.3 L 532 197.0 L 533 196.9 L 534 196.9 L 535 197.0 L 536 197.4 L 537 197.8 L 538 198.5 L 539 199.3 L 540 200.3 L 541 201.4 L 542 202.6 L 543 204.0 L 544 205.5 L 545 207.2 L 546 208.9 L 547 210.7 L 548 212.6 L 549 214.6 L 550 216.7 L 551 218.7 L 552 220.8 L 553 222.9 L 554 225.0 L 555 227.1 L 556 229.1 L 557 231.1 L 558 233.0 L 559 234.8 L 560 236.5 L 561 238.0 L 562 239.5 L 563 240.8 L 564 241.9 L 565 242.9 L 566 243.7 L 567 244.3 L 568 244.7 L 569 245.0 L 570 245.0 L 571 244.8 L 572 244.4 L 573 243.8 L 574 243.1 L 575 242.1 L 576 240.9 L 577 239.5 L 578 238.0 L 578 236.3 L 579 234.4 L 580 232.4 L 581 230.3 L 582 228.1 L 583 225.7 L 584 223.3 L 585 220.8 L 586 218.3 L 587 215.7 L 588 213.2 L 589 210.6 L 590 208.1 L 591 205.7 L 592 203.3 L 593 201.0 L 594 198.8 L 595 196.7 L 596 194.8 L 597 193.0 L 598 191.4 L 599 190.0 L 600 188.8 L 601 187.8 L 602 187.0 L 603 186.5 L 604 186.1 L 605 186.1 L 606 186.2 L 607 186.6 L 608 187.2 L 609 188.1 L 610 189.2 L 611 190.5 L 612 192.0 L 613 193.8 L 614 195.7 L 615 197.8 L 616 200.1 L 617 202.5 L 618 205.1 L 619 207.8 L 620 210.5 L 621 213.4 L 622 216.3 L 623 219.2 L 624 222.1 L 625 225.1 L 626 228.0 L 627 230.8 L 628 233.5 L 629 236.2 L 630 238.7 L 631 241.1 L 632 243.3 L 633 245.4 L 634 247.3 L 635 248.9 L 636 250.4 L 637 251.5 L 638 252.5 L 638 253.2 L 639 253.6 L 640 253.8 L 641 253.7 L 642 253.4 L 643 252.7 L 644 251.9 L 645 250.7 L 646 249.3 L 647 247.7 L 648 245.8 L 649 243.7 L 650 241.5 L 651 239.0 L 652 236.4 L 653 233.6 L 654 230.7 L 655 227.7 L 656 224.6 L 657 221.4 L 658 218.2 L 659 215.0 L 660 211.8 L 661 208.6 L 662 205.5 L 663 202.5 L 664 199.5 L 665 196.7 L 666 194.1 L 667 191.6 L 668 189.3 L 669 187.2 L 670 185.4 L 671 183.7 L 672 182.4 L 673 181.2 L 674 180.4 L 675 179.8 L 676 179.6 L 677 179.6 L 678 179.8 L 679 180.4 L 680 181.3 L 681 182.4 L 682 183.8 L 683 185.5 L 684 187.4 L 685 189.5 L 686 191.9 L 687 194.4 L 688 197.2 L 689 200.1 L 690 203.1 L 691 206.3 L 692 209.5 L 693 212.8 L 694 216.2 L 695 219.6 L 696 223.0 L 697 226.3 L 698 229.6 L 699 232.8 L 700 235.9 L 700 238.9 L 701 241.7 L 702 244.4 L 703 246.9 L 704 249.1 L 705 251.1 L 706 252.9 L 707 254.4 L 708 255.7 L 709 256.7 L 710 257.3 L 711 257.7 L 712 257.8 L 713 257.6 L 714 257.1 L 715 256.3 L 716 255.3 L 717 253.9 L 718 252.3 L 719 250.4 L 720 248.3 L 721 246.0 L 722 243.4 L 723 240.7 L 724 237.8 L 725 234.7 L 726 231.5 L 727 228.2 L 728 224.9 L 729 221.4 L 730 218.0" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.95"/>
+  <path d="M 120 178.0 L 124 178.0 L 129 178.0 L 133 178.1 L 137 178.2 L 142 178.3 L 146 178.4 L 150 178.5 L 155 178.6 L 159 178.8 L 164 179.0 L 168 179.2 L 172 179.4 L 177 179.7 L 181 180.0 L 185 180.2 L 190 180.6 L 194 180.9 L 198 181.2 L 203 181.6 L 207 182.0 L 212 182.4 L 216 182.8 L 220 183.2 L 225 183.7 L 229 184.1 L 233 184.6 L 238 185.1 L 242 185.6 L 246 186.2 L 251 186.7 L 255 187.3 L 259 187.9 L 264 188.5 L 268 189.1 L 272 189.7 L 277 190.4 L 281 191.0 L 286 191.7 L 290 192.4 L 294 193.1 L 299 193.8 L 303 194.5 L 307 195.2 L 312 196.0 L 316 196.7 L 320 197.5 L 325 198.3 L 329 199.0 L 334 199.8 L 338 200.6 L 342 201.5 L 347 202.3 L 351 203.1 L 355 203.9 L 360 204.8 L 364 205.6 L 368 206.5 L 373 207.4 L 377 208.2 L 381 209.1 L 386 210.0 L 390 210.9 L 394 211.7 L 399 212.6 L 403 213.5 L 408 214.4 L 412 215.3 L 416 216.2 L 421 217.1 L 425 218.0 L 429 217.1 L 434 216.2 L 438 215.3 L 442 214.4 L 447 213.5 L 451 212.6 L 456 211.7 L 460 210.9 L 464 210.0 L 469 209.1 L 473 208.2 L 477 207.4 L 482 206.5 L 486 205.6 L 490 204.8 L 495 203.9 L 499 203.1 L 503 202.3 L 508 201.5 L 512 200.6 L 516 199.8 L 521 199.0 L 525 198.3 L 530 197.5 L 534 196.7 L 538 196.0 L 543 195.2 L 547 194.5 L 551 193.8 L 556 193.1 L 560 192.4 L 564 191.7 L 569 191.0 L 573 190.4 L 578 189.7 L 582 189.1 L 586 188.5 L 591 187.9 L 595 187.3 L 599 186.7 L 604 186.2 L 608 185.6 L 612 185.1 L 617 184.6 L 621 184.1 L 625 183.7 L 630 183.2 L 634 182.8 L 638 182.4 L 643 182.0 L 647 181.6 L 652 181.2 L 656 180.9 L 660 180.6 L 665 180.2 L 669 180.0 L 673 179.7 L 678 179.4 L 682 179.2 L 686 179.0 L 691 178.8 L 695 178.6 L 700 178.5 L 704 178.4 L 708 178.3 L 713 178.2 L 717 178.1 L 721 178.0 L 726 178.0 L 730 178.0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 4" opacity="0.5"/>
+  <path d="M 120 258.0 L 124 258.0 L 129 258.0 L 133 257.9 L 137 257.8 L 142 257.7 L 146 257.6 L 150 257.5 L 155 257.4 L 159 257.2 L 164 257.0 L 168 256.8 L 172 256.6 L 177 256.3 L 181 256.0 L 185 255.8 L 190 255.4 L 194 255.1 L 198 254.8 L 203 254.4 L 207 254.0 L 212 253.6 L 216 253.2 L 220 252.8 L 225 252.3 L 229 251.9 L 233 251.4 L 238 250.9 L 242 250.4 L 246 249.8 L 251 249.3 L 255 248.7 L 259 248.1 L 264 247.5 L 268 246.9 L 272 246.3 L 277 245.6 L 281 245.0 L 286 244.3 L 290 243.6 L 294 242.9 L 299 242.2 L 303 241.5 L 307 240.8 L 312 240.0 L 316 239.3 L 320 238.5 L 325 237.7 L 329 237.0 L 334 236.2 L 338 235.4 L 342 234.5 L 347 233.7 L 351 232.9 L 355 232.1 L 360 231.2 L 364 230.4 L 368 229.5 L 373 228.6 L 377 227.8 L 381 226.9 L 386 226.0 L 390 225.1 L 394 224.3 L 399 223.4 L 403 222.5 L 408 221.6 L 412 220.7 L 416 219.8 L 421 218.9 L 425 218.0 L 429 218.9 L 434 219.8 L 438 220.7 L 442 221.6 L 447 222.5 L 451 223.4 L 456 224.3 L 460 225.1 L 464 226.0 L 469 226.9 L 473 227.8 L 477 228.6 L 482 229.5 L 486 230.4 L 490 231.2 L 495 232.1 L 499 232.9 L 503 233.7 L 508 234.5 L 512 235.4 L 516 236.2 L 521 237.0 L 525 237.7 L 530 238.5 L 534 239.3 L 538 240.0 L 543 240.8 L 547 241.5 L 551 242.2 L 556 242.9 L 560 243.6 L 564 244.3 L 569 245.0 L 573 245.6 L 578 246.3 L 582 246.9 L 586 247.5 L 591 248.1 L 595 248.7 L 599 249.3 L 604 249.8 L 608 250.4 L 612 250.9 L 617 251.4 L 621 251.9 L 625 252.3 L 630 252.8 L 634 253.2 L 638 253.6 L 643 254.0 L 647 254.4 L 652 254.8 L 656 255.1 L 660 255.4 L 665 255.8 L 669 256.0 L 673 256.3 L 678 256.6 L 682 256.8 L 686 257.0 L 691 257.2 L 695 257.4 L 700 257.5 L 704 257.6 L 708 257.7 L 713 257.8 L 717 257.9 L 721 258.0 L 726 258.0 L 730 258.0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 4" opacity="0.5"/>
+  <text x="120" y="280" fill="currentColor" font-size="12" opacity="0.7">the 8 Hz envelope is in the WAVEFORM, so one speaker &#8212; or one ear &#8212; carries the whole beat</text>
+</svg>
+<p class="figcap">The top two lanes are two carriers, eight and nine cycles long over the same span,
+both panned centre so both reach both ears. The bottom lane is their arithmetic sum: the envelope
+collapses to nothing once across the frame, which is the beat. Compare the
+<a href="../sessions/binaural.html">binaural figure</a>, where the equivalent envelope had to be
+drawn dashed because it existed nowhere in the signal. Here it is the signal. This is the whole
+difference between the two modalities, and it is also why the modulation is so much deeper.</p>
+</div>
+
+<p>The depth difference is the headline number. A monaural beat's envelope modulation approaches
+100&nbsp;% — around 50&nbsp;dB of swing between peak and null. A binaural beat's <em>effective</em>
+modulation is around 3&nbsp;dB. The two are the same rate delivered with roughly an order of
+magnitude's difference in contrast.</p>
+
+<h2 id="mechanism">Mechanism, as currently understood</h2>
+
+<p>Here the physics is not in question — the stimulus genuinely contains an amplitude modulation at
+the target rate, so the cochlea and the auditory nerve are driven at that rate directly, exactly as
+they would be by an <a href="../sessions/isochronic.html">isochronic tone</a>. The measurable
+auditory steady-state response to a monaural beat is reliably larger than to a binaural beat of the
+same rate and carrier, and comparative work on the two generally finds monaural the stronger
+driver.</p>
+
+<p>What remains thin is the same thing that is thin everywhere in this field: the link from
+<em>“there is a stronger steady-state response at 6&nbsp;Hz”</em> to <em>“the listener is therefore
+in a theta state, with the subjective and behavioural properties attributed to theta”</em>. A
+bigger evoked response is not automatically a bigger psychological effect, and the studies that look
+for mood, anxiety or cognitive outcomes from beat stimulation are small, often unblinded, and
+frequently null. Use monaural because it is the more honest and more robust physical stimulus, not
+because the outcome literature is settled. It is not.</p>
+
+<p>One real trade-off: because the modulation is deep and audible, a monaural beat <em>sounds</em>
+like something. It is a pulsing, slightly rough tone, not a smooth drone. For sleep content that can
+be a liability, which is why the shipped library reserves binaural for the sleep arcs and uses
+monaural for drumming and waking work.</p>
+
+<h2 id="uses">What it is typically used for</h2>
+
+<ul>
+  <li><strong>Speaker playback of any kind.</strong> This is the only beat modality that survives it.
+  Pillow speakers, a desk speaker, a bone-conduction transducer, one earbud while lying on the other
+  ear.</li>
+  <li><strong>Waking states</strong> — focus, energise, alertness — where you want the strongest
+  available auditory drive and do not mind hearing the pulse.</li>
+  <li><strong>Drum-trance and journeying work.</strong> The shipped
+  <code>36_shamanic_trance_drum.ledc</code> is the canonical example: a steady ~4.5&nbsp;Hz monaural
+  drum held for sixteen minutes, chosen specifically because it is “the stronger, more robust driver,
+  ideal for a hands-free journeying drum”, per its own header. Its research note points at the
+  finding that a steady ~4–4.5&nbsp;Hz drum held for at least fifteen minutes reliably shifts
+  practitioners into a theta trance.</li>
+  <li><strong>Layering.</strong> Because both carriers are centre-panned, a monaural pair leaves pan
+  entirely free for other channels — a rotating-pan noise bed, say — in a way a hard-panned binaural
+  pair does not.</li>
+</ul>
+
+<div class="warn">
+  <p><strong>If your session also flickers light</strong> anywhere in the 3–30&nbsp;Hz band — and a
+  4.5&nbsp;Hz drum session locked 1:1 to the LEDs does — then the photosensitivity warning applies in
+  full. Flickering light in that band is a genuine seizure trigger for susceptible people, worst
+  between 15 and 25&nbsp;Hz. Do not use, and do not hand a session to anyone who has any history of
+  photosensitive epilepsy, a seizure disorder, or photic migraine. See
+  <a href="../index.html#safety">safety</a>. This is a DIY research instrument, not a medical
+  device.</p>
+</div>
+
+<h2 id="configure">How to configure it in <code>.ledc</code></h2>
+
+<p>There is no <code>beat_mode</code> column and no monaural macro in the format. A monaural beat is
+<strong>two audio channels, both at <code>pan 0</code></strong>, whose carriers differ by the beat
+rate. The summing happens in the device's mixer and then in the air; the format does not need to know
+about it.</p>
+
+<pre><code>#         time  freq  pan  vol  mod  ch  freqR  waveType
+A            0   200    0   45    0   1      0         0   # anchor carrier
+A            0   208    0   45    0   2      0         0   # => 8 Hz beat</code></pre>
+
+<p>Four things about that pair are load-bearing:</p>
+
+<div class="spec-table">
+<table>
+  <caption>The four constraints on a monaural pair.</caption>
+  <thead><tr><th>Requirement</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><code>pan 0</code> on <strong>both</strong></td>
+      <td>Both carriers must arrive at both ears at equal level or the sum is no longer a full-depth
+      beat. Any non-zero pan attenuates one carrier in one ear and shallows the null on that
+      side.</td></tr>
+    <tr><td><code>freqR 0</code> on <strong>both</strong></td>
+      <td>These are mono channels. A non-zero <code>freqR</code> would trip the binaural-bypass path,
+      skip the pan stage, and route the two carriers to opposite ears — turning your monaural pair
+      into two accidental binaural channels.</td></tr>
+    <tr><td>matched <code>vol</code></td>
+      <td>The null is only complete when the two amplitudes are equal. Unequal volumes leave a
+      residual carrier at the null and shallow the modulation.</td></tr>
+    <tr><td>two <strong>different</strong> <code>ch</code> numbers</td>
+      <td>One channel cannot hold two carriers in the mono path; <code>freq</code> and
+      <code>freqR</code> on one channel is the binaural idiom, not this one.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note">
+  <p><strong>Rows sharing one timestamp start phase-coherent.</strong> Each timestamp dispatches in
+  three passes — all audio first, then all LED, then everything else — specifically so that audio
+  channels armed in the same batch begin together. Put both halves of a monaural pair on the same
+  timestamp and you get a predictable initial beat phase. Split them across two timestamps and the
+  beat's phase at onset is whatever the gap happens to produce.</p>
+</div>
+
+<h3 id="gliding">Gliding the beat</h3>
+
+<p>Move <strong>one</strong> carrier and leave the other as an anchor. Both <code>freq</code> columns
+are fully compound, so a <code class="kbd">&gt;</code> on either one ramps it:</p>
+
+<pre><code>A       120000   200    0   45    0   1      0         0   # ch1 stays put
+A       120000  &gt;208    0   45    0   2      0         0   # ch2 ramps 208 -&gt; 204.5
+A       420000   200    0   45    0   1      0         0   # anchor, unchanged
+A       420000 204.5    0   45    0   2      0         0   # target: beat is now 4.5 Hz</code></pre>
+
+<p>Moving one carrier rather than both keeps the perceived pitch nearly fixed while the beat slides
+8&nbsp;→&nbsp;4.5&nbsp;Hz. Moving both in opposite directions would also work and would hold the
+pitch exactly, at the cost of twice as many rows to keep consistent.</p>
+
+<p>Write the <em>anchor</em> row at the ramp's target timestamp too, even though nothing changes on
+it. The ramp target for a compound core field is read from the next entry on that channel, so each
+channel needs an entry at the end of the glide — and an explicit row is also what stops a later edit
+from silently re-pointing the ramp somewhere unintended.</p>
+
+<h3 id="jitter">Anti-habituation</h3>
+
+<p>Sixteen minutes of an unvarying 4.5&nbsp;Hz drum habituates, which is the problem anti-habituation
+wander exists to solve. On a monaural pair, <strong>audio <code>jitter</code> is the wrong tool</strong>:
+it only ever moves a binaural detune and is gated on <code>freqR&nbsp;&gt;&nbsp;0</code>, so on these
+mono channels it does nothing at all. Three options that do work:</p>
+
+<ul>
+  <li><strong>Modulate one carrier</strong> with a periodic glyph, so the beat itself breathes:
+  <code>~204:205:53000</code> on <code>freq</code> makes the beat wander between 4 and 5&nbsp;Hz over
+  53 seconds.</li>
+  <li><strong>Put the jitter on the light</strong>, which <em>is</em> per-mask and <em>does</em>
+  wander the flicker rate: <code>jitter 0.3:53000</code> in the LED line's twelfth column.</li>
+  <li><strong>Add a jittered isochronic layer</strong> on a third channel, as
+  <code>36_shamanic_trance_drum.ledc</code> does — though note that session's own header claims the
+  jitter wanders its isochronic pulse rate, which is not what the audio jitter column does. See the
+  <a href="../sessions/authoring.html#traps">trap list</a>.</li>
+</ul>
+
+<p>Use non-commensurate periods — 37&nbsp;s and 53&nbsp;s rather than 30&nbsp;s and 60&nbsp;s — so
+the layers do not re-synchronise into an audible super-period. Any <code>period_ms</code> under 1000
+is silently ignored.</p>
+
+<h3 id="locking">Locking light to the beat</h3>
+
+<p>Write the same rate in the LED line's <code>freq</code> column. There is no automatic link:</p>
+
+<pre><code>A       420000   200    0   45    0   1      0         0   # anchor
+A       420000 204.5    0   45    0   2      0         0   # beat = 4.5 Hz
+       420000   4.5   50   22  220  110     0    15    3  0  6   # LED 4.5 Hz, trapezoid, 6 ms edge</code></pre>
+
+<p>A percussive beat pairs naturally with a percussive flash — <code>env 3</code> (trapezoid) with a
+few milliseconds of <code>attack</code> gives a crisp edge without a click, which is what
+<code>36_shamanic_trance_drum</code> uses for its “drum flash”. A smooth <code>env 1</code> sine gate
+would fight the character of the audio.</p>
+
+<p>Remember that a glide must be written on both lines. A <code class="kbd">&gt;</code> on the audio
+carrier and a bare number on the LED line gives you an audio beat sliding away from a static light
+rate.</p>
+
+<h2 id="example">Complete worked example</h2>
+
+<p><a href="../sessions/examples/monaural_theta_drum.ledc"><code>monaural_theta_drum.ledc</code></a>
+— 20 minutes, 8&nbsp;Hz settle, glide to a 4.5&nbsp;Hz drum, hold, faster “callback”, close. It
+reports <em>no static problems found</em> under
+<code>python3 tools/avmeasure/analyze.py lint</code>.</p>
+
+<pre><code># --- Induction, 8 Hz (00:00-02:00) ---
+0 8 50 &gt;0 220 110 0 15 3 0 6          # amber trapezoid "drum flash", 6 ms edge; bright 0 -&gt; 22
+A 0 200 0 &gt;0 0 1 0 0                  # ch1 anchor carrier 200 Hz, centre; vol ramps 0 -&gt; 45
+A 0 208 0 &gt;0 0 2 0 0                  # ch2 carrier 208 Hz, centre =&gt; 8 Hz beat in the air
+15000 8 50 22 220 110 0 15 3 0 6      # brightness reaches the 22% cap
+A 60000 200 0 45 0 1 0 0              # ch1 vol settled 45
+A 60000 208 0 45 0 2 0 0              # ch2 vol settled 45 (matched levels =&gt; deepest beat)
+
+# --- Deepen, beat 8 -&gt; 4.5 Hz over 5 min (~0.7 Hz/min) (02:00-07:00) ---
+A 120000 200 0 45 0 1 0 0             # ch1 stays put: only ONE carrier moves
+A 120000 &gt;208 0 45 0 2 0 0            # ch2 ramps 208 -&gt; 204.5 =&gt; beat 8 -&gt; 4.5
+120000 &gt;8 50 22 220 110 0 15 3 0 6    # light tracks the beat 1:1
+
+# --- Hold, 4.5 Hz, 10 min (07:00-17:00) ---
+A 420000 200 0 45 0 1 0 0             # anchor held
+A 420000 204.5 0 45 0 2 0 0           # beat held flat at 4.5 Hz
+420000 4.5 50 22 220 110 0 15 3 0 6   # 4.5 Hz amber flash, 1:1 with the drum
+
+# --- Callback, 4.5 -&gt; 9 Hz (17:00-19:00) ---
+A 1020000 200 0 45 0 1 0 0
+A 1020000 &gt;204.5 0 45 0 2 0 0         # ch2 204.5 -&gt; 209 =&gt; beat 4.5 -&gt; 9
+1020000 &gt;4.5 50 22 220 110 0 15 3 0 6
+
+# --- Close (19:00-20:00) ---
+A 1140000 200 0 &gt;45 0 1 0 0           # both carriers fade together
+A 1140000 209 0 &gt;45 0 2 0 0
+1140000 9 50 &gt;22 220 110 0 15 3 0 6
+A 1200000 200 0 0 0 1 0 0
+A 1200000 209 0 0 0 2 0 0
+1200000 9 50 0 220 110 0 15 3 0 6</code></pre>
+
+<p>Note that both carriers fade together at the close. Fading only one would not fade the beat — it
+would <em>deepen</em> the imbalance, shallow the modulation, and leave a bare carrier audible at the
+end. Monaural pairs always move together on <code>vol</code>.</p>
+
+<p>Full column semantics are on the <a href="../sessions/reference.html">reference page</a>;
+pacing, testing and the trap list are in the
+<a href="../sessions/authoring.html">authoring guide</a>.</p>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User guide — ESP32 AVE</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+  <div class="hero">
+    <h1>User guide</h1>
+    <p class="lead">You have a working device. This section is about using it:
+    getting to its web page, starting a session, understanding what every slider
+    actually does to the experience, and what to do when something looks
+    broken.</p>
+  </div>
+
+  <div class="warn">
+    <strong>Flicker can trigger seizures.</strong> This device drives rhythmic
+    light, and the rates it is designed around — the Live Control flicker slider
+    runs 0–30&nbsp;Hz — sit squarely across the 3–30&nbsp;Hz band that is a
+    genuine seizure trigger for people with photosensitive epilepsy; the risk
+    peaks around 15–25&nbsp;Hz. Do not use it
+    if you have any history of seizures. Take care if you are pregnant or have a
+    pacemaker or other implant, never use it while driving or operating
+    machinery, and stop immediately if you feel dizzy, disoriented or unwell.
+    Read the safety section on the
+    <a href="../index.html">overview page</a> before your first session.
+  </div>
+
+  <div class="note">
+    <strong>This is a DIY research and meditation instrument, not a medical
+    device.</strong> Nothing here is certified, approved or clinically
+    validated, nothing it does is a treatment for anything, and the firmware
+    contains no therapeutic safety interlock — the one planned brightness/depth
+    clamp for the 15–25&nbsp;Hz band was deliberately not built. The only safety
+    gate that ships is a one-time notice in the browser that you click through.
+    You are the safety system.
+  </div>
+
+  <h2>Start here</h2>
+
+  <ul class="toc">
+    <li><a href="../user-guide/connecting.html">Connecting to the device</a>
+      — joining its WiFi, finding it on your network, what address to type, and
+      the first-run setup.</li>
+    <li><a href="../user-guide/main-screen.html">The main screen and live controls</a>
+      — a tour of the seven tabs, and what every audio and LED control does to
+      what you hear and see.</li>
+    <li><a href="../user-guide/playing-a-session.html">Playing a session</a>
+      — picking one from the library, the pre-roll countdown, stopping, reading
+      the status, and the report you get at the end.</li>
+    <li><a href="../user-guide/offline-sd.html">Offline playback from the SD card</a>
+      — preparing the card so a session runs with the laptop closed.</li>
+    <li><a href="../user-guide/settings.html">Settings</a>
+      — what is safe to change, what needs a reboot, and why the device refuses
+      some pin numbers on purpose.</li>
+    <li><a href="../user-guide/firmware-update.html">Updating the firmware over the air</a>
+      — the dual-boot updater, and how to recover if it goes wrong.</li>
+    <li><a href="../user-guide/troubleshooting.html">Troubleshooting</a>
+      — real, documented failure modes and what each one actually means.</li>
+  </ul>
+
+  <h2>The thirty-second version</h2>
+
+  <div class="cards">
+    <div class="card">
+      <h3>1. Reach the device</h3>
+      <p>Browse to <code>http://esp32-ave.local</code>. If it has never been
+      configured, join its own WiFi network <code>ESP32-AVE-Setup</code> and go
+      to <code>http://192.168.4.1</code> instead.</p>
+    </div>
+    <div class="card">
+      <h3>2. Pick a session</h3>
+      <p>On the <span class="kbd">Home</span> tab, choose a file from the
+      <strong>Configs</strong> dropdown. It loads into the text box so you can
+      see exactly what will run.</p>
+    </div>
+    <div class="card">
+      <h3>3. Press play</h3>
+      <p><span class="kbd">▶ PLAY Config</span> with a <strong>Delay</strong> of
+      60&nbsp;s gives you a minute to put the glasses and headphones on before
+      anything happens.</p>
+    </div>
+    <div class="card">
+      <h3>4. Stop whenever</h3>
+      <p>The red <span class="kbd">■ STOP</span> button in the top bar is always
+      visible on every tab and kills all audio and light at once. Holding the
+      device's hardware button for three seconds does the same thing.</p>
+    </div>
+  </div>
+
+  <h2>What this guide does not cover</h2>
+
+  <p>Writing or editing sessions — the <span class="kbd">Generator</span> tab,
+  the <code>.ledc</code> timeline format, and the Text / Table / Lanes / Wizard
+  editors — is its own subject. See the
+  <a href="../sessions/index.html">session developer</a> section. Building,
+  wiring and flashing a device for the first time is in
+  <a href="../hardware/index.html">hardware</a>.</p>
+
+</main>
+</body>
+</html>

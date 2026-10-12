@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authoring guide — Session developer — ESP32 AVE</title>
+<meta name="description" content="Session arc and pacing, safe ramp-in, how to test a .ledc session, what each static-linter finding means, and the traps that have actually bitten people.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<main class="page">
+
+<div class="hero">
+  <h1>Authoring guide</h1>
+  <p class="lead">How to shape a session that works, how to find out whether it does, and the
+  specific ways this format will mislead you. Most of what follows was learned by someone losing a
+  measurement session to it.</p>
+</div>
+
+<div class="toc">
+  <ul>
+    <li><a href="#arc">The session arc</a></li>
+    <li><a href="#pacing">Pacing: ramp slopes and dwell times</a></li>
+    <li><a href="#rampin">Safe ramp-in and ramp-out</a></li>
+    <li><a href="#endings">Goal-specific endings</a></li>
+    <li><a href="#habituation">Anti-habituation</a></li>
+    <li><a href="#test">How to test a session</a></li>
+    <li><a href="#lint">The static linter, finding by finding</a></li>
+    <li><a href="#traps">The traps</a></li>
+    <li><a href="#doc-drift">Where the docs have drifted from the code</a></li>
+    <li><a href="#checklist">Checklist before you ship</a></li>
+  </ul>
+</div>
+
+<h2 id="arc">The session arc</h2>
+
+<p>Every shipped session is built from four phases, joined by <code class="kbd">&gt;</code> and
+<code class="kbd">*</code> ramps:</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Phase</th><th>What it does</th><th>Typical length</th></tr></thead>
+  <tbody>
+    <tr><td><strong>1. Onset / induction</strong></td>
+      <td>Start where the brain already is — around 10–14&nbsp;Hz alpha — and hold. This is where
+      light and volume fade <em>in</em>.</td><td>1–3 min</td></tr>
+    <tr><td><strong>2. Deepen</strong></td>
+      <td>Glide from the onset rate toward the target band, slope-limited.</td><td>3–10 min</td></tr>
+    <tr><td><strong>3. Hold</strong></td>
+      <td>Sit at the target. This is the core of the session and it should be the longest
+      phase.</td><td>≥5–6 min; 10–20 min for theta or delta</td></tr>
+    <tr><td><strong>4. Return</strong></td>
+      <td>Ramp back toward alpha before the eyes open — <em>unless</em> the goal says
+      otherwise.</td><td>2–3 min</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Starting at the target rate rather than gliding into it is the single most common structural
+mistake. The frequency-following response needs something to follow; dropping someone straight onto
+2&nbsp;Hz gives it nothing to track.</p>
+
+<h2 id="pacing">Pacing: ramp slopes and dwell times</h2>
+
+<div class="spec-table">
+<table>
+  <caption>Working ramp slopes, from <code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §3 and the
+  techniques playbook §0. These are practitioner convention backed by the general observation that
+  the response can only track a slow glide — not precise thresholds.</caption>
+  <thead><tr><th>Kind of session</th><th>Slope</th><th>Shipped example</th></tr></thead>
+  <tbody>
+    <tr><td>Sleep descent</td><td>0.1–0.5&nbsp;Hz/min</td><td><code>01_sleep_onset</code>: 10→2&nbsp;Hz at ~0.44&nbsp;Hz/min</td></tr>
+    <tr><td>Meditation / relaxation</td><td>~0.5&nbsp;Hz/min</td><td><code>04_meditation_theta</code>: 10→6&nbsp;Hz at 0.5&nbsp;Hz/min</td></tr>
+    <tr><td>Energise / wake</td><td>up to ~2&nbsp;Hz/min</td><td>—</td></tr>
+    <tr><td><strong>Ceiling</strong></td><td>keep at or below <strong>2&nbsp;Hz/min</strong>; above ~3&nbsp;Hz/min is worth a second look</td><td>—</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Two practical notes. First, the 40&nbsp;Hz gamma protocol is the exception to all of this: its
+effect is specified at a <em>fixed</em> rate, so there is no glide, no LFO and no jitter in
+<code>07_genus_40hz</code> at all. Second, when you glide, remember you are gliding at least two
+things — the audio beat and the LED rate — and each needs its own
+<code class="kbd">&gt;</code> on its own line. There is no follow mechanism.</p>
+
+<h2 id="rampin">Safe ramp-in and ramp-out</h2>
+
+<p>These are the numbers the whole library observes, and the reason is as much anti-startle as it is
+entrainment:</p>
+
+<ul>
+  <li><strong>Light: ramp in over at least 10&nbsp;s</strong>, and in practice 15&nbsp;s is the
+  library's habit. Ramp <em>out</em> too — never stop a flicker abruptly.</li>
+  <li><strong>Audio: ramp in over at least 5&nbsp;s</strong>, and 30–60&nbsp;s for a volume fade-in
+  that should be unnoticeable.</li>
+  <li><strong>Keep a brightness floor.</strong> A 50&nbsp;% duty with a non-zero dim level avoids a
+  full black-to-white contrast swing.</li>
+  <li><strong>Fade a flicker out at a trough, not at a bright peak</strong> — it disengages more
+  cleanly.</li>
+  <li><strong>Cap brightness.</strong> The library's caps run from 12&nbsp;% for sleep beds to
+  45&nbsp;% for the full-field 40&nbsp;Hz protocol. Below drive ~100 you are in the non-linear part
+  of the <a href="../sessions/reference.html#bright">drive curve</a>, so a dim ramp is distorted
+  in shape as well as shallow.</li>
+</ul>
+
+<p>The canonical ramp-in idiom is three rows: a <code class="kbd">&gt;0</code> at
+<code>t=0</code>, the target value at <code>t=15000</code>, and then whatever the session does
+next.</p>
+
+<pre><code>0     10 50 &gt;0 255 160 32 15 1 0   # brightness ramps from 0 ...
+15000 10 50 24 255 160 32 15 1 0   # ... to 24% over 15 s</code></pre>
+
+<h2 id="endings">Goal-specific endings</h2>
+
+<p>Do <strong>not</strong> use a generic return for these:</p>
+
+<ul>
+  <li><strong>Sleep and lucid-dream sessions</strong> skip the return phase entirely and end in a
+  <em>soft off</em>: brightness and volume fade to zero <em>simultaneously</em> at the low target
+  rate, with <strong>no wake-up</strong>.</li>
+  <li><strong>Focus and energise sessions</strong> end <em>bright and alert</em>: ramp up toward
+  12–15&nbsp;Hz and brighten the light; never fade to dark, which leaves people groggy.</li>
+  <li><strong>Meditation and relaxation</strong> return to alpha and then close calmly.</li>
+</ul>
+
+<p>Whatever the ending, <strong>finish every channel explicitly at zero</strong>. The timeline does
+not tidy up after you, the jitter globals are not reset between sessions, and a ramp with no target
+entry never fires at all.</p>
+
+<h2 id="habituation">Anti-habituation</h2>
+
+<p>A dead-steady beat held for fifteen minutes habituates. Three mechanisms, and they are not
+interchangeable:</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Mechanism</th><th>Written as</th><th>Moves</th><th>Scope</th></tr></thead>
+  <tbody>
+    <tr><td>LED <code>jitter</code></td><td><code>0.3:53000</code> in LED column 11</td><td>the flicker rate</td><td>per mask; amp clamped to 5&nbsp;Hz</td></tr>
+    <tr><td>Audio <code>jitter</code></td><td><code>0.3:53000</code> in audio column 12</td><td>the <strong>binaural detune only</strong></td><td><strong>global</strong>; a no-op on mono channels</td></tr>
+    <tr><td>Periodic modulation</td><td><code>~9.7:10.3:53000</code> on <code>mod</code> or a carrier</td><td>whatever cell carries it</td><td>per channel</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Keep the amplitude small — ±0.1 to 0.3&nbsp;Hz is the usual range — and use
+<strong>non-commensurate periods</strong> across layers (37&nbsp;s and 53&nbsp;s, not 30&nbsp;s and
+60&nbsp;s) so they do not re-synchronise into an audible super-period. A period below
+1000&nbsp;ms is silently ignored on both sides.</p>
+
+<p>There is also a separate, slower layer worth knowing about: a <strong>0.1&nbsp;Hz breath
+LFO</strong> (about six breaths a minute) on <em>brightness</em> or <em>volume</em>, independent of
+the entrainment rate, used for coherence pacing. <code>26_alpha_breath</code> holds 10&nbsp;Hz alpha
+with exactly that. Write it as a periodic modulation: <code>~15:35:10000</code>. Keep it fixed per
+segment; an asymmetric inhale/exhale shape would need a new LFO shape in firmware and does not exist
+yet.</p>
+
+<h2 id="test">How to test a session</h2>
+
+<p>In order, cheapest first.</p>
+
+<h3>1. Lint it. No hardware needed.</h3>
+
+<pre><code>python3 tools/avmeasure/analyze.py lint --ledc path/to/session.ledc</code></pre>
+
+<p>Exit code 0 means no errors or warnings; exit 1 means at least one. Infos do not fail the run.
+<code>--keep-speech</code> models a raw POST of the file including its <code>S</code> rows — by
+default they are stripped, because the browser strips them before POSTing and that is what the device
+actually receives. <code>--json</code> gives machine-readable output.</p>
+
+<p>The linter is a <em>model of the device</em>, not a grammar check: it replays the timeline, tracks
+each channel's live state, and reports things that will behave differently from how the file reads.
+That is why it can catch a ramp pointing at a <code>-</code>.</p>
+
+<h3>2. Read it back as prose.</h3>
+
+<p>Every row of a good session carries an inline comment saying what changes and why. If you cannot
+write that comment, the row is probably wrong. Look especially for rows whose literal disagrees with
+the live state — the device will start a ramp from the live value and your file will have lied to the
+next reader.</p>
+
+<h3>3. Play it, with the serial monitor attached.</h3>
+
+<p>The device logs a one-line summary of every dispatched entry, including the resolved sweep
+(<code>start → target over duration</code>), plus a warning for every clamp and rejection. That log
+is the fastest way to confirm an entry executed as you intended, and the only way to see the clamps
+the linter does not model.</p>
+
+<h3>4. Measure it.</h3>
+
+<p>There is a complete measurement harness in <code>tools/avmeasure/</code> and a
+feature-verification suite of fourteen short sessions in <code>sessions/test/</code> (12&nbsp;min
+32&nbsp;s total) whose README states, block by block, what every number should be and which
+instrument produces it. If you are changing firmware rather than authoring a session, start
+there.</p>
+
+<p>Three things from that suite that matter even if you never run it:</p>
+
+<ul>
+  <li><strong>Check capture integrity before believing any per-cycle number.</strong> A recorder can
+  drop a block of frames mid-capture and still write a file of exactly the right length. Five such
+  steps were found in one 665-second capture, and one of them was written up as a firmware defect and
+  survived a day of scrutiny — because <em>both</em> optical sensors agreed on it. They agreed because
+  the whole recording stepped, not because the LED did.</li>
+  <li><strong>Differential measurements are immune to that; absolute per-cycle timing is not.</strong>
+  Audio-versus-light offset, inter-eye offset and every harmonic ratio survive a timebase step.
+  Single-cycle claims do not.</li>
+  <li><strong>A disconnected sensor produces confident, fictional results.</strong> Run the signal
+  check first. And always print the fundamental's absolute level in dBFS beside any harmonic ratio: a
+  degraded signal path inflates <em>even</em> harmonics specifically, and the same session measured
+  h2/h1 = 0.547 with a faulty sensor wire and 0.044 after it was repaired.</li>
+</ul>
+
+<h3>5. Validate against the library rules.</h3>
+
+<p>Sessions destined for <code>sessions/library/</code> must also pass
+<code>node validate_session.mjs library/&lt;file&gt;.ledc</code> with zero errors, and must follow
+<code>sessions/SESSION_DESIGN_GUIDELINES.md</code> — bearing in mind the
+<a href="#doc-drift">drift noted below</a>.</p>
+
+<h2 id="lint">The static linter, finding by finding</h2>
+
+<p>Every code the linter can emit, what it means, and what to do about it.</p>
+
+<div class="spec-table">
+<table>
+  <caption>Lint findings. Severities are as emitted by <code>tools/avmeasure/ledc_expect.py</code>.</caption>
+  <thead><tr><th>Code</th><th>Severity</th><th>What it means</th><th>What to do</th></tr></thead>
+  <tbody>
+    <tr><td><code>LEDC_ENTRY_CAP</code></td><td><span class="pill">error</span></td>
+      <td>More than 100 entries. Everything past the cap is silently dropped at parse.</td>
+      <td>Split the session, or merge rows that share a timestamp and a channel.</td></tr>
+    <tr><td><code>LEDC_BATCH_CAP</code></td><td><span class="pill">error</span></td>
+      <td>More than 50 entries share one timestamp. Only the first 50 execute, and the rest fire
+      <strong>never, with no runtime log line at all</strong>.</td>
+      <td>Spread the batch over a few milliseconds, or reduce it. This is the one device limit with
+      no runtime diagnostic, so the lint is your only warning.</td></tr>
+    <tr><td><code>LEDC_AUDIO_CH_RANGE</code></td><td><span class="pill">error</span></td>
+      <td><code>ch</code> outside 0–15. It is clamped to <strong>channel 0</strong>, so the audio
+      plays somewhere other than where the file says.</td>
+      <td>Fix the channel number. Remember the range is 0-based: 16 is out of range.</td></tr>
+    <tr><td><code>LEDC_RAMP_TO_ZERO</code></td><td><span class="pill">error</span></td>
+      <td>A <code class="kbd">&gt;</code>/<code class="kbd">*</code> on a core field whose target
+      entry writes <code class="kbd">-</code> for that field. The target is read from the struct
+      member with no present-bit check, so it is still 0 — the ramp slides to zero instead of
+      holding.</td>
+      <td>Write the explicit value on the target row.</td></tr>
+    <tr><td><code>LEDC_LED_REJECTED</code></td><td><span class="pill">error</span></td>
+      <td>An LED entry out of range on the no-sweep path: <code>freq &gt; 100</code>,
+      <code>duty &gt; 100</code> or <code>bright &gt; 100</code>. It is <strong>dropped, not
+      clamped</strong> — the channel keeps doing whatever it was doing.</td>
+      <td>Bring the value into range.</td></tr>
+    <tr><td><code>LEDC_FREQR_PREFIX</code></td><td><span class="pill">error</span></td>
+      <td><strong>Now a false positive.</strong> It reports that a glyph on <code>freqR</code> parses
+      as 0.0 and collapses the channel to mono. That was true and nasty; the parser now handles
+      <code class="kbd">&gt;</code> and <code class="kbd">*</code> on <code>freqR</code>
+      correctly.</td>
+      <td>Either accept the finding knowing it is stale, or use the equivalent carrier-ramp idiom —
+      see <a href="../sessions/binaural.html#gliding">gliding a binaural beat</a>.</td></tr>
+    <tr><td><code>LEDC_AUDIO_CH8_NO_RAMP</code></td><td><span class="pill">error</span></td>
+      <td>Historical: ramps on channels 8–15 used to be truncated to a step by a <code>uint8_t</code>
+      bitmask. Fixed; the branch is effectively dead.</td>
+      <td>Nothing. If you see it, something is odd.</td></tr>
+    <tr><td><code>LEDC_LINE_TRUNCATED</code></td><td><span class="pill">warning</span></td>
+      <td>A line exceeds 256 bytes and is truncated, which silently changes its token count and so
+      its meaning.</td>
+      <td>Shorten the line — usually the inline comment.</td></tr>
+    <tr><td><code>LEDC_LED_TOKENS</code> / <code>LEDC_AUDIO_TOKENS</code></td><td><span class="pill">warning</span></td>
+      <td>An illegal token count: 6, 7 or more than 12 on an LED line; fewer than 5 on an audio line.
+      The whole line is skipped.</td>
+      <td>Count the columns. A missing trailing column is legal; a missing <em>middle</em> one is
+      not — use <code class="kbd">-</code>.</td></tr>
+    <tr><td><code>LEDC_LED_MASK_ZERO</code></td><td><span class="pill">warning</span></td>
+      <td><code>mask 0</code> — the line is rejected at parse and the entry never exists.</td>
+      <td>Pick a real mask. Note <code class="kbd">-</code> in the mask column also parses as 0.</td></tr>
+    <tr><td><code>LEDC_AUDIO_GLUED_TIME</code></td><td><span class="pill">warning</span></td>
+      <td><code>A1500 …</code> instead of <code>A 1500 …</code>. The glued token is discarded
+      <em>entirely</em> and every field shifts left by one.</td>
+      <td>Put a space after the <code>A</code>.</td></tr>
+    <tr><td><code>LEDC_LED_OUT_OF_RANGE</code></td><td><span class="pill">warning</span></td>
+      <td>An out-of-range LED value on the <em>sweep</em> path. Historically this executed unchecked;
+      the sweep path now carries the same guards and checks both ramp endpoints.</td>
+      <td>Bring the value into range.</td></tr>
+    <tr><td><code>LEDC_DASH_FREQ_STOPS</code></td><td><span class="pill">warning</span></td>
+      <td><code class="kbd">-</code> in the LED <code>freq</code> column on a channel with no live
+      rate. It resolves to 0, which <strong>stops the flicker</strong> and paints the channel
+      black.</td>
+      <td>Write the rate explicitly in a channel's first entry.</td></tr>
+    <tr><td><code>LEDC_FIRST_BATCH_HOIST</code></td><td><span class="pill">warning</span></td>
+      <td>The earliest entry is not at <code>t=0</code>, so the first batch fires at wall-clock 0
+      regardless of its timestamp. Benign for LED, not for audio.</td>
+      <td>Start the file at <code>t=0</code>.</td></tr>
+    <tr><td><code>LEDC_END_STOP_SKIPPED</code></td><td><span class="pill">warning</span></td>
+      <td>The final timestamp is over the batch cap, so the end-of-timeline stop never runs — the
+      LEDs flicker indefinitely.</td>
+      <td>Reduce the final batch. This is a genuinely unsafe failure mode.</td></tr>
+    <tr><td><code>LEDC_LAST_ENTRY_CANCELLED</code></td><td><span class="pill">warning</span></td>
+      <td>A final entry is immediately overridden, so its intent never takes effect.</td>
+      <td>Usually a duplicated or stale closing row — remove it.</td></tr>
+    <tr><td><code>LEDC_SPEECH_TIME</code> / <code>LEDC_SPEECH_UNQUOTED</code></td><td><span class="pill">warning</span></td>
+      <td>An <code>S</code> row with an unparsable time, or with text that is not quoted.</td>
+      <td>Quote the text. The parser reads between the first and the last <code>"</code>.</td></tr>
+    <tr><td><code>LEDC_BG_BAD</code> / <code>LEDC_BG_SCHEME</code></td><td><span class="pill">warning</span></td>
+      <td>A malformed <code>BG</code> row, or a URL scheme that is not
+      <code>http(s)://</code>, <code>sdcard://</code> or <code>push://</code>.</td>
+      <td>Fix the row. Remember <code>BG</code> is last-one-wins.</td></tr>
+    <tr><td><code>LEDC_MASK_HIGH_BITS</code></td><td><span class="pill">info</span></td>
+      <td>The mask selects channels that light nothing on the current channel map.</td>
+      <td>Often deliberate — the measurement sessions park a keepalive channel on an unpopulated
+      LED. Check your map and move on.</td></tr>
+    <tr><td><code>LEDC_ORPHAN_RAMP</code></td><td><span class="pill">info</span></td>
+      <td>A ramp with no later entry on that channel to supply a target, so it never fires.</td>
+      <td>Add the target row, or drop the glyph.</td></tr>
+    <tr><td><code>LEDC_RAMP_START_SUBSTITUTED</code></td><td><span class="pill">info</span></td>
+      <td>A ramp's literal start value differs from the channel's live value. The device will use the
+      live value, so the file is misleading its reader.</td>
+      <td>Write the live value. This is the single most useful info-level finding.</td></tr>
+    <tr><td><code>LEDC_AUDIO_DUTY_ZERO</code></td><td><span class="pill">info</span></td>
+      <td>A stepped audio <code>duty 0</code>, which is a no-op: the setter only writes
+      <code>duty &gt; 0</code>, so the previous duty stays.</td>
+      <td>Use <code>mod 0</code> to stop modulating, or <code>vol 0</code> to silence.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note">
+  <p><strong>A failing lint is not always wrong.</strong> <code>sessions/test/t13_rejects.ledc</code>
+  exists <em>to</em> trip the linter — exactly 5 errors, 4 warnings and 2 infos, and its job is to
+  prove the device diagnoses each fault rather than crashing on it. Likewise
+  <code>30_splitfield_lucid</code> deliberately drives one eye in the photosensitive band and expects
+  warnings. What matters is that every finding is either fixed or explained in the file's header.</p>
+</div>
+
+<h2 id="traps">The traps</h2>
+
+<p>Collected because each of these has actually cost someone time.</p>
+
+<h3>Values that are silently clamped or wrapped</h3>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Field</th><th>What happens</th><th>Warned?</th></tr></thead>
+  <tbody>
+    <tr><td>LED <code>attack</code></td><td><strong>Capped at 60&nbsp;ms</strong> on the stepped path, and the renderer further clamps the effective edge to half the on-time. The <em>ramped</em> path does not cap the stored value, so a ramped attack can read above 60 while rendering identically to 60.</td><td>no</td></tr>
+    <tr><td>LED <code>duty</code>, <code>bright</code></td><td>101–255 is caught by the guards and the entry is dropped. <strong>Above 255 the <code>uint8_t</code> cast wraps</strong> — <code>300</code> becomes <code>44</code> — and the guard then sees an in-range value.</td><td><strong>no</strong></td></tr>
+    <tr><td>LED <code>R G B</code></td><td>Clamped to 255.</td><td>yes, log line naming the field</td></tr>
+    <tr><td>Audio <code>ch</code></td><td>Out of range clamps to <strong>channel 0</strong> — so the audio plays, just not where you said.</td><td>yes</td></tr>
+    <tr><td>LED <code>jitter</code> amp</td><td>Clamped to 5&nbsp;Hz.</td><td>no</td></tr>
+    <tr><td>Both <code>jitter</code> periods</td><td>Below 1000&nbsp;ms, <strong>silently ignored</strong> — the previous period stays in force rather than the value you wrote.</td><td><strong>no</strong></td></tr>
+    <tr><td>Audio <code>duty</code>, <code>depth</code></td><td>Clamped to 0–100 at parse.</td><td>no</td></tr>
+    <tr><td>Audio <code>vol</code>, <code>pan</code>, <code>freq</code></td><td><strong>Not validated at all</strong> on any session path. <code>vol 500</code> works and is ~14&nbsp;dB louder; <code>pan 200</code> inverts the left channel's polarity.</td><td>no</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Fields that particular envelopes ignore</h3>
+
+<ul>
+  <li><strong><code>duty</code> is ignored by <code>env 1</code> (sine) and <code>env 2</code>
+  (triangle), on both the audio and LED paths.</strong> Neither gate function reads it. A
+  <code>duty</code> column next to them is a silent no-op, and so is a <code>duty</code>
+  <em>modulation</em> — the modulation engine animates a value nothing reads. If duty matters, use
+  <code>env 0</code> or <code>env 3</code>.</li>
+  <li><strong><code>attack</code> is read only by <code>env 3</code>.</strong> On
+  <code>env 0</code>, 1, 2 or 4 it does nothing. Write it as <code>0</code> there so the file does
+  not imply an edge shaping that never happens.</li>
+  <li><strong><code>env 4</code> has no meaning on an LED line</strong> and is treated as square.</li>
+  <li><strong>Audio <code>jitter</code> only ever moves a binaural detune</strong>, so on a mono or
+  isochronic channel it is a complete no-op — however confidently a session header says otherwise.
+  <code>36_shamanic_trance_drum</code>'s header claims its jitter wanders the isochronic pulse rate;
+  it does not. To wander a pulse rate, modulate <code>mod</code>.</li>
+</ul>
+
+<h3>A column whose omission used to reset a channel</h3>
+
+<p><strong>Audio <code>waveType</code>.</strong> Omitting the column on a running channel used to
+silently reset it to sine — 21 occurrences across the shipped library — because the wave type was
+filled from the parsed (zero-initialised) value and latched unconditionally. The parser now reads the
+live waveform back when the column is absent, and the corresponding lint has been retired. If you are
+reading older measurements or an older session header that worries about this, it is fixed. The
+general rule now holds without exception: an absent trailing column means "leave unchanged".</p>
+
+<h3><code>freq 0</code> on an LED line turns the light OFF</h3>
+
+<p>It does not give you a steady lamp. <code>frequency ≤ 0</code> stops the flicker on the mask and
+paints those channels black; the <code>bright</code> and RGB values on that row never reach the
+output. Several shipped sessions were authored on the opposite belief — most visibly
+<code>05_focus_smr</code>, which holds <code>freq 0</code> with a rising brightness for thirty minutes
+and comments "light STAYS ON and BRIGHTENS". It does not. <strong>There is no way to command a
+steady, non-flickering light from a <code>.ledc</code> timeline</strong>; an audio-only session simply
+has no LED line.</p>
+
+<h3>The accidental binaural beat</h3>
+
+<p>An omitted <code>freqR</code> means "keep the live right carrier", and a mono channel's live right
+carrier equals its left one. So a row that moves <code>freq</code> and omits <code>freqR</code>
+leaves the right ear at the <em>old</em> pitch, trips the binaural-bypass test, starts playing two
+different carriers, beats at the size of your carrier change, and silently stops honouring
+<code>pan</code>. <strong>Restate <code>freqR</code> — <code>0</code> for mono — on every audio row
+that touches <code>freq</code>.</strong> No lint catches it.</p>
+
+<h3>A restart re-latches <code>env</code>, <code>attack</code> and <code>jitter</code></h3>
+
+<p>A fresh LED flicker start writes the carrier waveform (square), <code>attack 3</code> and the
+jitter globals <em>unconditionally</em> — and the timeline treats a mask as needing a fresh start
+unless <em>every</em> bit in it is already active. So a row that restarts a channel after a
+<code>freq 0</code> stop, or a multi-bit mask where one bit happens to be idle, resets those three
+columns to their defaults on every bit in the mask. The <em>sweep</em> path does not re-latch, so
+whether it happens depends on whether the row carries a ramp. <strong>Restate <code>env</code> on
+every row that restarts a channel.</strong> Not covered by a lint.</p>
+
+<h3>Depth defaults are envelope-dependent</h3>
+
+<p>Omitting both <code>env</code> and <code>depth</code> gives you 10&nbsp;%; writing
+<code>env 0..3</code> and omitting <code>depth</code> gives you 100&nbsp;%; writing
+<code>env 4</code> and omitting <code>depth</code> gives you 10&nbsp;% again. That is deliberate and
+documented, and it is still the most surprising rule in the format. Write the column.</p>
+
+<h3>Ramp semantics</h3>
+
+<ul>
+  <li><strong>Animate-on-start.</strong> The glyph sits on the row where the ramp <em>begins</em>;
+  the target comes from the <em>next</em> row on that channel. A ramp on the last row never fires.</li>
+  <li><strong>A ramp on a running channel starts from the live value</strong>, not from the literal.
+  Write the live value or the file lies.</li>
+  <li><strong>A ramp pointing at a <code class="kbd">-</code> ramps to zero</strong> for core fields.
+  Pulse fields scan forward correctly; core fields do not.</li>
+  <li><strong>A new entry pre-empts whatever animation was running</strong> on that channel's fields,
+  then re-arms from the new row. That is how you stop an LFO: write a static value.</li>
+</ul>
+
+<h3><code>phase</code> is a lead</h3>
+
+<p>Writing <code>phase 90</code> makes the edge arrive a quarter period <em>earlier</em>, not later —
+measured 74.76&nbsp;ms rather than 25&nbsp;ms at 10&nbsp;Hz. To delay by N degrees, write
+<code>360 − N</code>. The whole shipped library only ever uses 0 and 180, which are symmetric under
+negation, which is why nobody has been bitten yet.</p>
+
+<h3>Audio channel numbering changes between the file and the API</h3>
+
+<p><code>.ledc</code> <code>ch</code> is 0-based; <code>/api/state</code> reports audio channels
+1-based, so <code>ch 8</code> reads back there as <code>ch9</code>. Convert once and write it
+down.</p>
+
+<h2 id="doc-drift">Where the docs have drifted from the code</h2>
+
+<p>Three places in the repo's own documents state things the current firmware no longer does. They
+are listed here because a reader who trusts them will author the wrong file.</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Document</th><th>Says</th><th>The code does</th></tr></thead>
+  <tbody>
+    <tr><td><code>ledc_format.md</code> v3, “depth”</td>
+      <td>“<code>depth 0</code> does NOT currently mean no modulation… fixing this needs a negative
+      unset sentinel in the generator.”</td>
+      <td>That sentinel now exists. <code>iso_depth</code> initialises to <code>-1.0f</code> and the
+      test is <code>&gt;= 0.0f</code>, so a written <code>depth 0</code> is honoured and removes the
+      modulation. The spec's warning is historical.</td></tr>
+    <tr><td><code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §7</td>
+      <td>“LED <code>freq 0</code> = steady-on (no flicker)”, and §11 describes
+      <code>05_focus_smr</code>'s steady lamp built on it.</td>
+      <td><code>freq ≤ 0</code> <strong>stops the flicker and goes dark.</strong> This one has shipped
+      consequences — see the trap above.</td></tr>
+    <tr><td><code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §3, §7, §8 and many session headers</td>
+      <td>“<code>freq_R</code> is NOT interpolatable”; “<code>env</code>, <code>phase</code>,
+      <code>attack</code> are step-only on-device… don't put <code class="kbd">&gt;</code>/
+      <code class="kbd">*</code>/<code class="kbd">~</code> on them”; “AM depth is hard-fixed at
+      ~0.1”.</td>
+      <td>All three are now out of date. <code>freqR</code> and <code>depth</code> take
+      <code class="kbd">&gt;</code> and <code class="kbd">*</code>; <code>duty</code>,
+      <code>phase</code> and <code>attack</code> are fully compound; <code>depth</code> is a real
+      column. <code>env</code> remains step-only — that part is still true.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>And one place the <em>tooling</em> has drifted: the linter still raises
+<code>LEDC_FREQR_PREFIX</code> at error severity for a glyph on <code>freqR</code>, which the device
+now handles correctly. The browser-side parser is also behind the device on both v3 audio changes —
+its <code>freqR</code> is a bare float parse and it has no <code>depth</code> column — so a session
+using either will behave differently in the browser preview than on hardware.</p>
+
+<p>When in doubt, <code>ledc_format.md</code> outranks every other document in the repo, and
+<code>main/config_parser.c</code> outranks <code>ledc_format.md</code>.</p>
+
+<h2 id="checklist">Checklist before you ship</h2>
+
+<ul>
+  <li>Lints clean, or every finding is deliberate and explained in the header.</li>
+  <li>Starts at <code>t=0</code>; every channel ends explicitly at zero; <code>jitter</code> written
+  back to <code>0</code>.</li>
+  <li>Follows the four-phase arc with the correct <a href="#endings">goal-specific ending</a>; hold
+  dwell at least 5–6 minutes.</li>
+  <li>Ramp slopes within <a href="#pacing">the working range</a>; light fades in and out over at
+  least 10&nbsp;s; audio over at least 5&nbsp;s.</li>
+  <li>No bright full-field flicker at 15–25&nbsp;Hz. If the target rate is in that band, the audio
+  carries the beat and there is <em>no</em> LED line.</li>
+  <li>Brightness capped, with a floor. No saturated-red flicker above 3&nbsp;Hz, no red↔blue
+  alternation at flicker rates.</li>
+  <li>Eyes-closed sessions biased amber or red at 620&nbsp;nm or longer.</li>
+  <li>Binaural: carriers below ~1&nbsp;kHz, beat below ~35&nbsp;Hz, headphones stated in the header,
+  and <code>freqR</code> restated on every row that moves a carrier.</li>
+  <li>Isochronic: <code>depth</code> written explicitly, <code>vol</code> raised to pay for it,
+  <code>env 3</code> with a few ms of <code>attack</code> unless a click is the intent.</li>
+  <li>Monaural: both halves <code>pan 0</code>, <code>freqR 0</code>, matched <code>vol</code>, same
+  timestamp.</li>
+  <li>Under 100 entries, under 50 per timestamp, every line under 256 bytes.</li>
+  <li>A header comment block with the name, goal, duration, bands, the techniques used and why, an
+  honest note on the evidence, and the full safety and contraindication block.</li>
+</ul>
+
+<p>Column semantics are on the <a href="../sessions/reference.html">reference page</a>; the
+modality pages are linked from the <a href="../sessions/index.html">section landing page</a>.</p>
+
+</main>
+</body>
+</html>
