@@ -121,6 +121,12 @@ typedef struct {
     float    iso_attack_ms;   // raised edge duration (ms, click-safe ≥2)
     float    iso_depth;       // 0 = use params.mod_depth; >0 overrides depth
     uint64_t samples_generated;
+    // Wall-clock instant the channel was armed (esp_timer, us), or 0 once the
+    // start-latency catch-up in fill_buffer has consumed it. The channel goes
+    // active immediately but its first sample is the first sample of the NEXT
+    // generation chunk, so this is what lets fill_buffer measure how late that
+    // chunk actually is. See "V-S1" in audio_generator.c.
+    uint64_t start_request_us;
     uint64_t total_samples;
     bool active;
     // Stop-fade flag: when true, the channel is amp-ramping toward 0 and will

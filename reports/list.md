@@ -43,3 +43,11 @@ Implementation reports. Reports not tied to a numbered plan live under
   No on-device decode; reuses the existing bg_player_push_pcm ring + prime gate;
   adds a consumed/ring_ms back-channel. Build clean, 187 web tests; hardware verify
   pending. Key unverified risk: httpd_ws_recv_frame in a blocking loop on the async worker.
+- `non_planned_reports/av_sync_offset_measured_2026-10-12.md` — optical measurement of
+  audio-vs-LED sync (MiniFuse 4, solar cells + TRS splitter; `tools/avmeasure/avsync.py`).
+  Found a RANDOM per-session offset uniform over the 23.22 ms audio generation chunk
+  (14 runs, +1.2..+21.1 ms); proved the mechanism by halving the chunk (range 21.9→11.4 ms);
+  fixed it with a start-latency phase catch-up (range → 1.30 ms, sd 0.38). STILL OPEN:
+  entries on an already-active channel bypass both the catch-up and the DMA-lag
+  pre-advance and run ~48 ms early (= −AUDIO_DMA_PIPELINE_LAG_US) — the dominant
+  real-world case. Also: the +44 dB LED→audio crosstalk was a USB ground loop, not a bug.

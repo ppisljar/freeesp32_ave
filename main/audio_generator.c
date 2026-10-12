@@ -434,6 +434,9 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
 
     ch->mod_phase_q32    = 0;
     ch->samples_generated = 0;
+    // V-S1: stamp the arming instant so fill_buffer can advance the phases by
+    // however long it takes for the next generation chunk to come around.
+    ch->start_request_us = (uint64_t)esp_timer_get_time();
     // Noise LFSR seeds: must be non-zero (all-zero is a fixed point).
     // 0xABCD1234 (L) and 0x12345678 (R) are chosen as pseudo-random non-related
     // constants so that L and R produce decorrelated noise streams.
@@ -750,6 +753,43 @@ esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t sam
 
         if (!channel->active) {
             continue;
+        }
+
+        /* V-S1 — start-latency catch-up.
+         *
+         * A channel goes active the instant the timeline dispatches it, but its
+         * first sample is the first sample of THIS buffer, which can be up to
+         * one generation chunk (AUDIO_GEN_BUFFER_SIZE frames = 23.2 ms) later.
+         * The LED anchor in config_parser.c is placed exactly, so that entire
+         * quantisation used to land as audio lateness.
+         *
+         * Measured optically (tools/avmeasure/avsync.py) before this fix: the
+         * audio-vs-LED offset was re-rolled at every session start, uniform
+         * over [0, 23.2] ms -- 14 runs spanned +1.2..+21.1 ms while being stable
+         * to 0.03 ms WITHIN any one run. Halving AUDIO_GEN_BUFFER_SIZE to 512
+         * halved the observed range (21.9 -> 11.4 ms), which is what identified
+         * the generation chunk as the cause rather than the DMA ring.
+         *
+         * Advancing the phase accumulators by however late we are makes the
+         * emitted waveform read as though the channel had started on time.
+         * Phase only -- amp ramp and sweeps are deliberately untouched, so this
+         * cannot change levels, only alignment. */
+        if (channel->start_request_us != 0) {
+            int64_t late_us = (int64_t)(mod_now_us - channel->start_request_us);
+            if (late_us < 0) late_us = 0;
+            /* Clamp to one chunk. A longer gap means the audio task was starved,
+             * and skipping the phase forward by an unbounded amount would be a
+             * worse artifact than simply starting late. */
+            const int64_t max_us = ((int64_t)AUDIO_GEN_BUFFER_SIZE * 1000000)
+                                   / (int64_t)AUDIO_SAMPLE_RATE;
+            if (late_us > max_us) late_us = max_us;
+            uint32_t frames = (uint32_t)((late_us * (int64_t)AUDIO_SAMPLE_RATE) / 1000000);
+            if (frames != 0) {
+                channel->phase_l_q32   += (uint32_t)(channel->current_freq     * Q32_PER_HZ) * frames;
+                channel->phase_r_q32   += (uint32_t)(channel->current_freq_r   * Q32_PER_HZ) * frames;
+                channel->mod_phase_q32 += (uint32_t)(channel->current_mod_freq * Q32_PER_HZ) * frames;
+            }
+            channel->start_request_us = 0;
         }
 
         /* Apply any active periodic modulations BEFORE the per-sample
