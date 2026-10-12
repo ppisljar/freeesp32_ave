@@ -86,19 +86,33 @@ static const char *TAG = "tlv320dac3101";
  * headroom; fine-grained level control is done digitally in set_volume(). */
 #define ANALOG_VOL_MINUS_9DB    0x92
 
+/* Kept for reference: the speaker ANALOG volume is the fine lever on this path
+ * (0.5 dB steps), so -6 dB here would be +3 dB. Unused -- the owner chose to move
+ * the class-D coarse gain instead, and stacking both would give +9 dB rather than
+ * the intended +6. */
+#define SPK_ANALOG_VOL_MINUS_6DB 0x8C
+
 /* Headphone driver PGA: 0 dB, unmuted (bit2). */
 #define HP_DRIVER_0DB_UNMUTE    0x06
 
 /* Class-D speaker driver: bits4:3 are a coarse gain (00=6, 01=12, 10=18,
- * 11=24 dB), bit2 unmutes.
+ * 11=24 dB), bit2 unmutes. Now 12 dB (bits4:3 = 01), raised from the 6 dB
+ * minimum at the owner's request.
  *
- * DELIBERATELY the MINIMUM 6 dB, not the 24 dB of TI's datasheet example.
- * This board's class-D can deliver 1.3 W into 8R, which will destroy the small
- * speakers typically wired to the JST connectors. Start quiet: the digital DAC
- * volume (-6 dB at the default 0.5 setting) and the -9 dB analog stage are the
- * intended places to set listening level, and both are reversible from the web
- * UI. Raise this only after confirming what the speakers can take. */
-#define SPK_DRIVER_6DB_UNMUTE   0x04
+ * 9 dB was what was actually wanted; this field cannot express it -- it is two
+ * bits with only those four values -- so 12 dB is the next step up and this is
+ * +6 dB, not +3. That is 4x the electrical power into the speaker. Still well
+ * below TI's datasheet example of 24 dB, but this board's class-D can deliver
+ * 1.3 W into 8R at full tilt, which will destroy the small speakers typically
+ * wired to the JST connectors, so do not raise it further without checking what
+ * they can take.
+ *
+ * If a finer step is ever needed, P1_SPK{L,R}_ANALOG_VOL is the 0.5 dB lever on
+ * this path (see SPK_ANALOG_VOL_MINUS_6DB) -- e.g. 12 dB coarse with -3 dB there
+ * nets the +3 dB originally asked for. The digital DAC volume and the -9 dB
+ * analog stage remain the intended places to set listening level, both
+ * reversible from the web UI. */
+#define SPK_DRIVER_12DB_UNMUTE  0x0C
 
 /* Digital DAC volume limits, in half-dB steps (the register unit). */
 #define DAC_VOL_MIN_HALF_DB     (-127)  /* -63.5 dB */
@@ -429,8 +443,8 @@ esp_err_t tlv320dac3101_init(uint32_t sample_rate)
      * is deliberately the minimum, NOT the datasheet example's maximum. */
     tlv_write(1, P1_HPL_DRIVER,  HP_DRIVER_0DB_UNMUTE);
     tlv_write(1, P1_HPR_DRIVER,  HP_DRIVER_0DB_UNMUTE);
-    tlv_write(1, P1_SPKL_DRIVER, SPK_DRIVER_6DB_UNMUTE);
-    tlv_write(1, P1_SPKR_DRIVER, SPK_DRIVER_6DB_UNMUTE);  /* 3101 stereo; absent on 3100 */
+    tlv_write(1, P1_SPKL_DRIVER, SPK_DRIVER_12DB_UNMUTE);
+    tlv_write(1, P1_SPKR_DRIVER, SPK_DRIVER_12DB_UNMUTE);  /* 3101 stereo; absent on 3100 */
 
     /* Power the output drivers. HP: bits7:6. Speaker: bit7 left + bit6 right
      * (the mono DAC3100 only has the left bit, which is why a 3100 driver
