@@ -1780,6 +1780,28 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
 
     uint32_t new_freq_milliHz = (uint32_t)(frequency * 1000.0f);
 
+    // V-S5: raise the ISR tick for the NEW rate. This path is how the timeline
+    // applies an entry to an ALREADY-FLICKERING channel (config_parser routes a
+    // no-swept-fields entry through orphan_mask), and it was the only one of the
+    // three LED entry points that never called this -- start_flicker_masked and
+    // start_sweep_masked both do. So a session that began at a low rate kept that
+    // rate's coarse tick for every later rate, however high.
+    //
+    // Measured: 2 Hz first (tick clamped to the 1 kHz floor) then 23 Hz on the
+    // same channel gave 23.1681 Hz with 0.517 ms of per-edge jitter, against
+    // 23.0024 Hz and 0.115 ms for 23 Hz from a fresh start. A +0.73% rate error
+    // is ~18x the project's +/-0.01 Hz beat-accuracy target, and 23 Hz was chosen
+    // precisely because 43.478 ms is NOT a whole number of 1 ms ticks -- a rate
+    // that happens to divide the tick evenly (40 Hz on a 1 kHz tick = 25 ticks)
+    // hides the fault completely, which is why an earlier check at 40 Hz found
+    // nothing.
+    //
+    // Safe to call unconditionally: it only ever RAISES the tick within a session
+    // (see the "never lower it" note in s_ensure_timer_and_task), so no other
+    // channel's timing can be coarsened by this.
+    esp_err_t tick_ret = s_ensure_timer_and_task(new_freq_milliHz);
+    if (tick_ret != ESP_OK) return tick_ret;
+
     for (uint8_t ch = 0; ch < NUM_LED_CHANNELS; ch++) {
         if (!(channel_mask & (1u << ch))) continue;
         if (!flicker_state[ch].active) continue;

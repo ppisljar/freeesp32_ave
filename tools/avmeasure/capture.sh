@@ -49,22 +49,38 @@ pkill -9 -f '/opt/homebrew/bin/rec' 2>/dev/null || true
 osascript -e 'tell application "Terminal" to close (every window whose name contains ".cap_")' \
           >/dev/null 2>&1 || true
 
-chmod +x "$CMD"; rm -f "$DONE" "$OUT"
-curl -s -X POST --max-time 10 "http://$IP/api/stop" >/dev/null || true
-sleep 1
-open "$CMD"
-sleep 3
-curl -s -X POST --data-binary @"$LEDC" --max-time 20 "http://$IP/api/play-config" >/dev/null
-for i in {1..600}; do sleep 1; [ -f "$DONE" ] && break; done
-curl -s -X POST --max-time 10 "http://$IP/api/stop" >/dev/null || true
+chmod +x "$CMD"
+
+# RETRY. Roughly one capture in three came back truncated -- the recorder lives in
+# a Terminal window (an `open` indirection, so Terminal and not the tmux server is
+# the TCC-responsible process for microphone access), and a window from a previous
+# run can still hold the interface when the next one starts. Each failure used to
+# cost a full manual re-run, and a retry issued too soon collided with the very
+# recorder it was retrying and failed again. Clearing the recorder and settling
+# before EACH attempt breaks that loop.
+ATTEMPTS=${AVM_ATTEMPTS:-3}
+for attempt in $(seq 1 $ATTEMPTS); do
+  pkill -9 -f '/opt/homebrew/bin/rec' 2>/dev/null || true
+  osascript -e 'tell application "Terminal" to close (every window whose name contains ".cap_")' \
+            >/dev/null 2>&1 || true
+  rm -f "$DONE" "$OUT"
+  curl -s -X POST --max-time 10 "http://$IP/api/stop" >/dev/null || true
+  sleep 4
+  open "$CMD"
+  sleep 3
+  curl -s -X POST --data-binary @"$LEDC" --max-time 20 "http://$IP/api/play-config" >/dev/null
+  for i in {1..900}; do sleep 1; [ -f "$DONE" ] && break; done
+  curl -s -X POST --max-time 10 "http://$IP/api/stop" >/dev/null || true
+  if python3 "$HERE/framecheck.py" "$OUT" "$SECS"; then
+    break
+  fi
+  if [ "$attempt" = "$ATTEMPTS" ]; then
+    echo "  REFUSING: lossy capture after $ATTEMPTS attempts" >&2
+    rm -f "$CMD" "$DONE"; exit 1
+  fi
+  echo "  (truncated -- retrying, attempt $((attempt+1))/$ATTEMPTS)" >&2
+done
 rm -f "$CMD" "$DONE"
-python3 - "$OUT" "$SECS" <<'PY'
-import wave,sys
-w=wave.open(sys.argv[1]); N=w.getnframes(); fr=w.getframerate(); exp=int(sys.argv[2])*fr
-miss=100*(1-N/exp)
-print(f"  capture: {N} frames, {miss:+.4f}% missing")
-if abs(miss)>0.01: sys.exit("  REFUSING: lossy capture would corrupt every measurement")
-PY
 
 # TIMEBASE gate. The frame count above proves the recorder produced the right
 # NUMBER of frames; it is blind to a discontinuity in the middle, because the

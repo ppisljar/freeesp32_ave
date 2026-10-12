@@ -412,3 +412,45 @@ tick early and then restored, because the `cycle_start + period` threshold sits
 just above a tick instant and ISR-entry latency occasionally crosses it. They
 cluster at times ending .899/.999, i.e. a ~1 s cadence, which points at a
 periodic timer (lwIP/WiFi/stats) rather than RMT or flash.
+
+
+## 11. A rate change on an active channel kept the OLD rate's ISR tick (FIXED, V-S5)
+
+The flicker ISR tick is `clamp(freq * 250, 1000, 10000)` Hz, raised by
+`s_ensure_timer_and_task`. Three LED entry points exist;
+`start_flicker_masked` and `start_sweep_masked` both called it and
+**`led_matrix_update_flicker_params_masked` never did** -- which is the path the
+timeline uses for an entry applied to an already-flickering channel
+(config_parser routes a no-swept-fields entry through `orphan_mask`).
+
+So a session that began at a low rate kept that rate's coarse tick for every
+later rate, however high. Real sessions do exactly this.
+
+Measured, rebooting between runs so the tick genuinely starts at the 1 kHz floor:
+
+| | tick | measured rate | error | jitter sd |
+|---|---|---|---|---|
+| 2 Hz then 23 Hz (update path), before | stuck 1 kHz | 23.1681 Hz | **+0.731%** | 0.517 ms |
+| same, after V-S5 | raised | 23.0173 Hz | +0.075% | 0.142 ms |
+| 23 Hz from a fresh start (control) | 5750 Hz | 23.0024 Hz | +0.010% | 0.115 ms |
+
++0.731% is roughly 18x the project's +/-0.01 Hz beat-accuracy target.
+
+**Two things made this easy to miss, both worth remembering.**
+
+First, *the choice of test rate hides it completely.* An earlier attempt used
+40 Hz and found nothing, because 40 Hz is 25.000 ms = exactly 25 ticks of a 1 kHz
+tick. Any rate that divides the tick period evenly is immune. 23 Hz was chosen
+because 43.478 ms is deliberately NOT a whole number of ticks.
+
+Second, *the tick is a global that survives a session.* `s_flicker_tick_hz` is
+only reset to the floor when the timer is deleted (no channel left running), so a
+previous session that ran at a high rate leaves the tick high and the next
+session silently inherits good timing. The first version of this test measured
+B after A in the same boot and so measured A's 10 kHz tick -- which is why the
+runs above reboot the device between them. Any timing test of this subsystem must
+control for boot state.
+
+Fixed by calling `s_ensure_timer_and_task(new_freq_milliHz)` on that path too.
+Safe unconditionally: it only ever RAISES the tick within a session, so no other
+channel's timing can be coarsened.
