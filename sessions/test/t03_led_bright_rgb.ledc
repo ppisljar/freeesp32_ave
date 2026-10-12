@@ -1,0 +1,65 @@
+# t03_led_bright_rgb.ledc -- BRIGHTNESS LINEARITY and the R/G/B fields.  ~71 s
+# NOT therapeutic.  Feature family: LED carrier (colour + level).
+#
+# THE POINT.  Light output tracks "effective drive" = bright x RGB/255, but only
+# above drive ~100 (ledc_format.md "bright is linear only above ~40% effective
+# drive"):
+#       drive  12 -> 0.135 light/drive  (68% of linear)
+#       drive  24 -> 0.153              (77%)
+#       drive  51 -> 0.183..0.188       (92-95%)
+#       drive 102 -> 0.200              (100%)
+#       drive 255 -> 0.197..0.202       (100%)
+# So brightness is graded by stepping ONE lane through the table while the other
+# lane holds a FIXED reference, and amplitudes are compared WITHIN one sensor
+# across time.  Never across the two sensors: ch1 and ch2 are not gain-matched
+# (they differ by a constant 0.33 ms in timing and by tens of dB in level).
+#
+# lane A = mask 3  (LED1+LED2, ch2 photocell) -- the variable under test, 10 Hz
+# lane B = mask 12 (LED3+LED4, ch1 photocell) -- fixed reference, 7 Hz
+# Distinct rates so a spectrum cannot confuse the two.
+#
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- lane B: ONE entry, constant for the whole file.  7 Hz, RGB 255,
+#      bright 100 (drive 255, dead centre of the linear region).  Every lane-A
+#      amplitude below is quoted as a ratio to this, which divides out any slow
+#      sensor or supply drift.
+1000  7 50 100 255 255 255 12 0 0
+
+# ---- B1  1..11 s : lane A drive 255 (bright 100, RGB 255) -- the 1.00 anchor
+1000 10 50 100 255 255 255 3 0 0
+
+# ---- B2  11..21 s : lane A drive 51 (bright 20, RGB 255) -- expect 92-95% of
+#      linear, i.e. light ratio 0.184..0.188 of B1, not 0.200
+11000 10 50 20 255 255 255 3 0 0
+
+# ---- B3  21..31 s : lane A drive 12.75 (bright 5, RGB 255) -- expect ~68% of
+#      linear, light ratio ~0.034 of B1 against a linear prediction of 0.050
+21000 10 50 5 255 255 255 3 0 0
+
+# ---- B4  31..41 s : EQUAL-DRIVE CROSS-CHECK, part 1.  bright 24 x RGB 255 =
+#      drive 61.2.
+31000 10 50 24 255 255 255 3 0 0
+
+# ---- B5  41..51 s : EQUAL-DRIVE CROSS-CHECK, part 2.  bright 100 x RGB 60 =
+#      drive 60.  B4 and B5 must land within a few percent of each other: that
+#      is what proves the roll-off is the LED's own PWM behaviour and not a
+#      measurement-chain non-linearity (ledc_format.md "Validated as a device
+#      property rather than a sensor artifact").
+41000 10 50 100 60 60 60 3 0 0
+
+# ---- B6  51..61 s : COLOUR FIELDS.  Pure red on lane A, pure green on lane B.
+#      lane B leaves its reference only for this block and the next.
+51000 10 50 100 255 0 0 3 0 0          # lane A: R only
+51000  7 50 100 0 255 0 12 0 0         # lane B: G only
+
+# ---- B7  61..71 s : pure blue on lane A, lane B back to white reference.
+61000 10 50 100 0 0 255 3 0 0          # lane A: B only
+61000  7 50 100 255 255 255 12 0 0     # lane B: reference restored
+
+# ---- end
+71000 0 50 0 0 0 0 15

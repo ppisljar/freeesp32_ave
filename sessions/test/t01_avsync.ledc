@@ -1,0 +1,60 @@
+# t01_avsync.ledc -- AUDIO-vs-LED SYNC, multi-rate.  ~59 s
+# NOT therapeutic.  Feature family: A/V alignment, rate changes.
+#
+# WHY MULTI-RATE: a real latency holds a constant TIME offset across rates while
+# an envelope-shape artifact holds a constant PHASE.  Running 3/6/12 Hz in one
+# session is what separates them (av_sync_offset_measured_2026-10-12.md "Method").
+# The LED square gate and the audio square gate (env 0) are commanded at the SAME
+# rate, duty and phase, so the offset between their envelopes IS the sync error.
+#
+# Expect a constant -2.5 .. -3.5 ms (audio EARLY) in every block, after V-S1..V-S4.
+#
+# RIG: ch1 = device headphone jack -> line/Hi-Z in.  ch2 = photocell on one eye.
+#   python3 tools/avmeasure/avsync.py rec.wav --light 2 --audio 1 \
+#       --carrier 400 --marker-hz 3000 \
+#       --rates 3:2:19,6:22:30,12:32:40,8:42:46,6:48:58
+#
+# --------------------------------------------------------------- sync marker
+# 600 ms full-brightness white on all four zones + a 3 kHz tone on audio ch1.
+# Both edges are sharp; the analysis tools locate device t=0 from this.
+# Copied verbatim from sessions/library/90_measure_sync.ledc.
+# Side effect worth knowing: 40 Hz raises the flicker ISR tick to
+# clamp(40*250,1000,10000) = 10000 Hz and the tick is never lowered within a
+# session, so EVERY block below is timed on the same 100 us grid.
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- B1  1..21 s : 3 Hz, 60 cycles.  mask 15 = all zones in phase (no
+#      cancellation, maximum optical signal).  RGB 255 + bright 100 keeps the
+#      LED in the LINEAR part of the drive curve (ledc_format.md brightness
+#      table: linear only above effective drive ~100; here drive = 255).
+1000   3 50 100 255 255 255 15 0 0
+A 1000 400 0 70 3 1 0 0 50 0 0
+
+# ---- B2  21..31 s : 6 Hz, 60 cycles
+21000   6 50 100 255 255 255 15 0 0
+A 21000 400 0 70 6 1 0 0 50 0 0
+
+# ---- B3  31..41 s : 12 Hz, 120 cycles
+31000   12 50 100 255 255 255 15 0 0
+A 31000 400 0 70 12 1 0 0 50 0 0
+
+# ---- B4  41..47.04 s : 8 Hz reference for the rate change below
+41000   8 50 100 255 255 255 15 0 0
+A 41000 400 0 70 8 1 0 0 50 0 0
+
+# ---- B5  47.04..58 s : rate change 8 -> 6 Hz at a DELIBERATELY UNALIGNED
+#      instant.  6040 ms after the 8 Hz entry is 48.32 old periods, so the next
+#      old-rate cycle boundary does NOT coincide with the entry.  Before V-S4
+#      that put the whole block up to +/-62 ms out; now it must read the same
+#      -2.5..-3.5 ms as B4.  Grade with ratechange.py, not avsync.py: avsync
+#      only knows the offset modulo the period.
+47040   6 50 100 255 255 255 15 0 0
+A 47040 400 0 70 6 1 0 0 50 0 0
+
+# ---- end: freq 0 stops flicker, vol 0 silences.  A session must end on an
+#      explicit stop or the end-of-timeline handler cancels the last entry.
+58000   0 50 0 0 0 0 15
+A 58000 400 0 0 0 1 0 0 50 0 0

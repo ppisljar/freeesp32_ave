@@ -1,0 +1,56 @@
+# t02_led_rate_duty.ledc -- LED CHANNEL MAP, FLICKER RATE, DUTY.  ~63 s
+# NOT therapeutic.  Feature family: LED pulse rate + duty + mask.
+#
+# TWO LANES.  The measured eye split is {LED1,LED2} vs {LED3,LED4}
+# (led_audio_bug_sweep_2026-10-12.md section 10), so:
+#     mask 3  = LED1+LED2 = the eye the ch2 photocell watches   -> "lane A"
+#     mask 12 = LED3+LED4 = the eye the ch1 photocell watches   -> "lane B"
+# Each lane is given a DISTINCT rate in every block so a spectrum names which
+# lane a sensor is actually seeing.  That trick identified the channel map in a
+# single capture and costs nothing here.
+# LED5 emits nothing and LED6 is addressed by no mask, so masks stay <= 15.
+#
+# Brightness is 100 with RGB 255 everywhere (effective drive 255) -- the only
+# region where light is linear in drive, so duty and rate are measured without
+# the low-drive roll-off distorting the waveform.
+#
+# RIG: ch1 photocell -> lane B, ch2 photocell -> lane A.  Audio not needed
+# beyond the marker tone.
+#
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- B1  1..13 s : CHANNEL MAP.  Each of the four LED channels gets its own
+#      rate, so each sensor's spectrum lists the channels it can see with
+#      30-43 dB separation.  Re-run this block any time the rig is touched.
+1000   5 50 100 255 255 255 1  0 0     # LED1 @ 5 Hz   (60 cycles)
+1000   7 50 100 255 255 255 2  0 0     # LED2 @ 7 Hz   (84 cycles)
+1000   9 50 100 255 255 255 4  0 0     # LED3 @ 9 Hz   (108 cycles)
+1000  11 50 100 255 255 255 8  0 0     # LED4 @ 11 Hz  (132 cycles)
+
+# ---- B2  13..23 s : DUTY 25 vs 75
+13000 10 25 100 255 255 255 3  0 0     # lane A 10 Hz, 25% on
+13000  7 75 100 255 255 255 12 0 0     # lane B  7 Hz, 75% on
+
+# ---- B3  23..33 s : DUTY 10 vs 90 (the extremes the engine still resolves)
+23000 10 10 100 255 255 255 3  0 0     # lane A 10 Hz, 10% on = 10 ms
+23000  7 90 100 255 255 255 12 0 0     # lane B  7 Hz, 90% on
+
+# ---- B4  33..43 s : RATE EXTREMES, upper mid.  40 Hz is the gamma rate the
+#      library ships; 2 Hz is the slow delta end.
+33000 40 50 100 255 255 255 3  0 0     # lane A 40 Hz (400 cycles)
+33000  2 50 100 255 255 255 12 0 0     # lane B  2 Hz (20 cycles -- see README)
+
+# ---- B5  43..63 s : RATE LIMITS.  100 Hz is LED_FREQ_MAX_HZ, the largest rate
+#      the no-sweep path accepts; 1 Hz exercises the slow end where only 20
+#      cycles fit, so it is graded as a period measurement rather than a
+#      spectrum.  SAFETY: 100 Hz is above the flicker-fusion threshold and is
+#      not a therapeutic rate -- this is a bench session, do not stare at it.
+43000 100 50 100 255 255 255 3  0 0    # lane A 100 Hz (2000 cycles)
+43000   1 50 100 255 255 255 12 0 0    # lane B   1 Hz (20 cycles)
+
+# ---- end
+63000 0 50 0 0 0 0 15

@@ -1,0 +1,66 @@
+# t04_led_env_attack.ledc -- LED env CARRIER SHAPES and attack.  ~57 s
+# NOT therapeutic.  Feature family: LED pulse envelope.
+#
+# env values the LED parser accepts (config_parser.c:1490-1494, 0..3; anything
+# else including 4 falls back to 0):
+#     0 SQUARE  1 SINE  2 TRIANGLE  3 TRAPEZOID (uses duty + attack)
+# Documented harmonic ratios at 10 Hz / duty 50 / bright 100 / RGB 255
+# (ledc_format.md, re-measured in led_audio_bug_sweep section 8/8a):
+#     0  h2/h3/h4 = 0.004 / 0.345 / 0.003
+#     1  0.084 / 0.020 / 0.052   (the raised-sine LUT; the old 4x(1-x) parabola
+#                                  gave h3 = 0.145, 36x worse)
+#     2  0.043 / 0.106 / 0.034
+#     3  attack 3 ms -> h2 0.042 h3 0.316 ; 10 ms -> 0.221 / 0.221 ;
+#        20 ms -> 0.360 / 0.061   (h2 rises and h3 falls monotonically with
+#        attack -- that monotonic trend IS the test, not any single ratio)
+#
+# TWO TRAPS, both from led_audio_bug_sweep:
+#  * PRINT h1 IN dBFS BESIDE EVERY RATIO.  A degraded signal path inflates EVEN
+#    harmonics specifically; a 7 dB drop in the fundamental produced h2/h1 =
+#    0.547 from a waveform that actually measures 0.044.  Passing signalcheck.py
+#    is necessary but NOT sufficient.
+#  * h5 of a 10 Hz flicker lands on 50 Hz mains.  Check that h5 MOVES when the
+#    rate changes before believing it.
+#
+# Drive is 255 everywhere (RGB 255, bright 100) so the shape is not distorted by
+# the low-drive roll-off -- a compressed dim end changes the harmonic ladder.
+#
+# lane A = mask 3 (ch2 sensor), lane B = mask 12 (ch1 sensor), distinct rates.
+#
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- B1  1..11 s : env 0 SQUARE vs env 1 SINE
+1000 10 50 100 255 255 255 3  0 0      # lane A: square, 10 Hz
+1000  7 50 100 255 255 255 12 1 0      # lane B: sine,    7 Hz
+
+# ---- B2  11..21 s : env 2 TRIANGLE vs env 3 TRAPEZOID at default attack
+11000 10 50 100 255 255 255 3  2 0     # lane A: triangle
+11000  7 50 100 255 255 255 12 3 0 3   # lane B: trapezoid, attack 3 ms
+
+# ---- B3  21..31 s : ATTACK SWEEP, 10 and 20 ms.  At 10 Hz / duty 50 the
+#      duty/2 clamp sits at 25 ms, so both values are un-clamped and the
+#      documented monotonic h2-up / h3-down trend applies.
+21000 10 50 100 255 255 255 3  3 0 10  # lane A: trapezoid, attack 10 ms
+21000  7 50 100 255 255 255 12 3 0 20  # lane B: trapezoid, attack 20 ms
+
+# ---- B4  31..43 s : LARGE ATTACK.  40 and 60 ms only mean anything if duty/2
+#      exceeds them, so the rates drop: 4 Hz duty 50 -> clamp 62.5 ms, 3 Hz duty
+#      50 -> clamp 83 ms.  Both edges are therefore real, not clamped.
+31000 4 50 100 255 255 255 3  3 0 40   # lane A: 4 Hz, attack 40 ms (48 cycles)
+31000 3 50 100 255 255 255 12 3 0 60   # lane B: 3 Hz, attack 60 ms (36 cycles)
+
+# ---- B5  43..55 s : TWO CLAMPS.
+#      lane A: attack 80 ms.  led_matrix_set_attack_masked caps at 60 ms
+#      (led_matrix_example.c:1497), so this must measure IDENTICALLY to lane A
+#      of B4 scaled -- i.e. to a 60 ms edge, NOT an 80 ms one.
+#      lane B: env 4 on an LED line.  The parser maps anything outside 0..3 to
+#      0, so this must measure as SQUARE -- same ladder as B1 lane A.
+43000 4 50 100 255 255 255 3  3 0 80   # lane A: attack 80 -> capped to 60
+43000 3 50 100 255 255 255 12 4 0      # lane B: env 4 -> square
+
+# ---- end
+55000 0 50 0 0 0 0 15

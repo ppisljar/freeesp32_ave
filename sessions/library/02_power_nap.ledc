@@ -49,6 +49,12 @@ A 1140000 >248 0 >45 0 1 255 0               # 19:00 beat 7->12 (carrier 248->24
 S 1140000 default 10 "Rising through alpha toward twelve hertz. Let the light and clarity return."
 1260000 12 50 50 255 >150 >60 15   # 21:00 LED flicker reaches 12 Hz CAP (held); bright 50%; warming toward white
 A 1260000 >243 0 >60 0 1 255 0               # 21:00 beat=12 (carrier 243); audio beat now ramps 12->14 (audio-only above cap); vol 60->65
-1350000 12 50 50 255 200 120 15   # 22:30 LED held at 12 Hz (audio carries 14); bright warm-white; AWAKE — no fade-out
+# 22:30 timeline END. The alerting bright warm-white (12 Hz, bright 50%) is delivered over the
+# 21:00->22:30 window above — still AWAKE, no fade-out — and the audio carries on at the 14 Hz
+# beat. Brightness 0 on this terminal row is the explicit teardown: the end-of-timeline handler
+# blanks every LED channel in this same dispatch (config_parser.c:2104-2111), so a nonzero
+# brightness here would last zero time. RGB stays 255,200,120 — it is the target of the 21:00
+# G/B warming ramp.
+1350000 12 50 0 255 200 120 15   # 22:30 LED off (12 Hz / warm-white retained); session ends awake
 A 1350000 241 0 65 0 1 255 0                 # 22:30 audio beat 14 Hz (carrier 241); vol 65; session ends bright/awake
 S 1350000 default 10 "Fully awake now, refreshed and alert. Open your eyes."

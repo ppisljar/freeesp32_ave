@@ -86,18 +86,32 @@ def robust_sigma(v):
         return 0.0
     return 1.4826*np.median(np.abs(v-np.median(v)))
 
-def load(path, ch, t0_dev, dur, notch=50.0):
+def read_window(path, ch, t0_dev, dur):
+    """RAW samples of the device-time window [t0_dev, t0_dev+dur), un-filtered.
+
+    Split out of load() so a fault injector can perturb the signal BEFORE the
+    front-end filtering, which is the only honest place to do it: inject into
+    the already-notched signal and the injected fault skips the 40 ms smoothing
+    that a real fault has to pass through, which flatters the detector."""
     w=wave.open(path); fr=w.getframerate(); n=w.getnchannels()
     d=np.frombuffer(w.readframes(int(12*fr)),dtype='<i2').reshape(-1,n).astype(np.float64)[:,ch-1]/32768
     k=int(fr/400); e=np.convolve(np.abs(d-d.mean()),np.ones(k)/k,mode='same')
     T0=float(np.where(e>e.max()*0.5)[0][0])/fr
     w.setpos(int((T0+t0_dev)*fr))
     x=np.frombuffer(w.readframes(int(dur*fr)),dtype='<i2').reshape(-1,n).astype(np.float64)[:,ch-1]/32768
+    return x,fr
+
+def prep(x, fr, notch=50.0):
+    """mean removal + the mains notch. Zero-phase (centered) throughout."""
     x=x-x.mean()
     if notch:
         L=int(round(fr/notch))
         for _ in range(2): x=np.convolve(x,np.ones(L)/L,mode='same')
-    return x,fr
+    return x
+
+def load(path, ch, t0_dev, dur, notch=50.0):
+    x,fr = read_window(path, ch, t0_dev, dur)
+    return prep(x, fr, notch), fr
 
 def _refine(g,i):
     """parabolic sub-sample peak, correction CLAMPED to its valid +/-0.5 range.

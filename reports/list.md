@@ -58,3 +58,10 @@ Implementation reports. Reports not tied to a numbered plan live under
   that one affected 14 shipped Gateway sessions. Also: 11-minute capture shows no clock
   drift (<0.2 ppm) and no per-cycle glitches; and a percycle.py false-positive mode on
   long windows that nearly produced a bogus "-36.8 ms glitch" report.
+- `non_planned_reports/audio_features_measured_2026-10-12.md` — acoustic verification of all
+  8 carrier wave types (every one matches theory: sine/square/triangle/sawtooth harmonics to
+  within 0.004, white +0.05, pink -3.04, brown -6.07 dB/oct) plus the finding that the fixed
+  1/16 mix divisor costs 24.1 dB that neither per-channel volume nor the master cap can
+  recover — 61 of 80 sessions use ONE audio channel and no session uses more than 4. Fix
+  proposed but NOT applied: it would make every session up to 24 dB louder on a head-worn
+  device, so it needs a decision.

@@ -44,7 +44,12 @@ S 1140000 default 10 "Rising through alpha toward twelve hertz. Let the light an
 1260000 12 50 50 255 200 120 9 1 0         # inner: 12 Hz cap, warm-white (alert)
 1260000 12 50 50 255 160 32  6 1 180       # outer: amber
 A 1260000 >243 0 >60 0 1 255 0             # beat=12; audio ramps 12->14 above the LED cap; vol 60->65
-1350000 12 50 50 255 200 120 9 1 0         # inner: awake, warm-white, no fade
-1350000 12 50 50 255 160 32  6 1 180       # outer: amber
+# 22:30 timeline END. The alerting bright state (12 Hz, bright 50%, inner warm-white) is
+# delivered over the 21:00->22:30 window above — still AWAKE, no fade-out — and the audio
+# carries on at the 14 Hz beat. Brightness 0 on these terminal rows is the explicit teardown:
+# the end-of-timeline handler blanks every LED channel in this same dispatch
+# (config_parser.c:2104-2111), so a nonzero brightness here would last zero time.
+1350000 12 50 0 255 200 120 9 1 0          # inner: LED off (12 Hz / warm-white retained)
+1350000 12 50 0 255 160 32  6 1 180        # outer: LED off (amber retained)
 A 1350000 241 0 65 0 1 255 0               # audio beat 14 Hz (carrier 241); ends bright/awake
 S 1350000 default 10 "Fully awake now, refreshed and alert. Open your eyes."
