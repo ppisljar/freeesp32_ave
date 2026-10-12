@@ -313,3 +313,49 @@ alignment and of whether the rate changed. Audio health across the run:
 Where this started: a random 0..23 ms offset re-rolled every session start, plus
 a 25-42 ms jump at every rate change, plus a further up-to-+/-62 ms depending on
 where the entry fell relative to the old period.
+
+## The −2.7 ms residual is probably the flat strip-write constant (HYPOTHESIS)
+
+Not yet confirmed by re-measurement — the arithmetic below is a prediction, and
+the model change it implies has not been made.
+
+The WS2812 timing in `main/led_strip.c:22-25` is `T0H+T0L = T1H+T1L = 1.25 µs`,
+so a pixel is 24 bits = **30.0 µs** and the `CONFIG_LED_COUNT=74` strip takes
+**2.220 ms** to clock out end to end. `devicemodel.py:169` models the light-side
+pipeline as a **flat 2.5 ms** for the neopixel backend, independent of where the
+sensor sits.
+
+But the delay is not flat: `s_addressable_set_channel` (`led_strip.c:464-470`)
+writes a zone's colour into every pixel whose `channel_map[i]` matches, and pixel
+*i*'s bits reach the strip at *i* × 30 µs into the transmission. A sensor on
+pixel *k* therefore sees photons at `rmt_start + k × 30 µs`, anywhere from 0 to
+2.22 ms — so the model **over-subtracts** for any sensor near the head of the
+chain, by up to the full 2.22 ms.
+
+Independent support: the measured **inter-eye offset of 0.33 ms** is
+0.33 ms / 30.0 µs = **exactly 11.0 pixels**, which is what two sensors at
+different chain positions must look like. That number was previously recorded
+without an explanation.
+
+Arithmetic check. If the two sensors sit near the head of the chain, 11 pixels
+apart (so a mean index of ~5.5 = 0.165 ms):
+
+    predicted residual = −(2.5 − 0.165) = −2.34 ms
+    measured  residual =  −2.7 ms
+
+leaving **~0.35 ms** unaccounted — the sensor's own RC rise plus any recorder
+group delay — rather than the full 2.7 ms. If true, the device-side A/V error is
+sub-millisecond and the residual is a model/rig artifact, not a fault.
+
+### What closing this needs
+
+| term | magnitude | how to pin it | needs hands? |
+|---|---|---|---|
+| strip serialisation | 0 .. 2.22 ms | replace the flat 2.5 ms with `rmt_start + k × 30 µs`; take *k* as a measurement input | no (model change) |
+| each sensor's pixel index *k* | — | the rig builder knows it; or light zones in a known order and read the map | **yes** (or one capture) |
+| DAC + analog group delay | unknown, ~0.1–1 ms? | toggle a spare GPIO at the generator block boundary, wire it into a free recorder input: the recorder then holds the digital event time and the analog audio time on **one** timebase | **yes** (one wire + divider) |
+| recorder inter-channel skew | expected < 10 µs | Y-split one signal into an audio input and a light input, one capture | **yes** (one cable) |
+| sensor RC rise | ~0.1 ms? | hard-step the LED and measure 10–90 % rise | no |
+
+The strip term is the only one large enough to explain the residual on its own,
+and it is the one we can fix without touching the rig.
