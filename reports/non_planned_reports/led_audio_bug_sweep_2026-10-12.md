@@ -454,3 +454,77 @@ control for boot state.
 Fixed by calling `s_ensure_timer_and_task(new_freq_milliHz)` on that path too.
 Safe unconditionally: it only ever RAISES the tick within a session, so no other
 channel's timing can be coarsened.
+
+## 12. Repeating a modulation restarted it (FIXED)
+
+Reported from listening: in `17_nondual_awareness_RGB` the LEDs breathe on a 12 s
+cycle, and around the second spoken line they sat at FULL brightness and then
+dropped hard to the floor.
+
+The speech was a red herring. There is an LED entry at the same timestamp:
+
+    300000 >10 50 ~16:44:12000 ...      # inner: 10->7 lockstep
+    300000 >10 50 ~16:44:12000 ...      # outer
+    S 300000 ... "Let awareness open and rest wherever it is..."
+
+`s_apply_mod()` set `start_time_us = now` unconditionally, and that field is the
+LFO's phase origin, so re-arming snapped the value back to `start_q` = 16%, the
+floor. The format's way to carry a modulation across an entry that changes
+something else is to repeat the same `~a:b:p` cell, so this fired on every such
+entry (also t=1560000 and t=1740000, matching "and the one after that as well").
+
+**Why it was at maximum first**, which is the detail that confirms the mechanism:
+the mod is armed at t=30 s with a 12 s period, so by t=300 s it has run 270 s =
+exactly **22.5 cycles** = phase 0.5 = the peak. The reported "at max, then sharp
+drop to lowest" is precisely peak -> start_q.
+
+### The first attempt was a no-op, and only measuring caught it
+
+The fix compared the new spec against the slot's and kept the phase origin when
+they matched -- but gated on the slot being `.active`. The timeline dispatcher
+STOPS every LED mod and then re-arms the ones the entry carries
+(`config_parser.c`: six `mod_engine_stop_led` calls, then `mod_engine_start_led`),
+so the slot is always inactive by the time `s_apply_mod` runs and the guard never
+fired. Re-measuring showed the identical 2.00 s interval as before the change.
+
+What makes the comparison possible across that stop is that
+`led_matrix_clear_mod_masked` only clears the flag and RETAINS the spec and the
+phase origin. The test is now spec-equality plus `period_us != 0`, the latter so a
+zero-initialised slot on a fresh channel cannot "match" an all-zero arm and
+inherit a phase origin of 0.
+
+The audio generator had the same bug and the same trap in
+`audio_generator_set_mod_locked`. It is live content:
+`36_shamanic_trance_drum` repeats `~-100:100:8000` on ch4's pan at t=60000, so its
+8 s rotating pan snapped back to hard-left there.
+
+### Verification
+
+Controlled test, 3.00 s breathing with the same modulation repeated 8 s in
+(phase 0.667, so a restart is unmistakable), both light channels agreeing:
+
+| | peak intervals | worst deviation |
+|---|---|---|
+| before | 3.00 3.00 **2.00** 3.00 3.00 | 1.000 s |
+| after | 3.00 3.00 3.00 3.00 3.00 | **0.000 s** |
+
+Then on the real session, reading the device's own live brightness at 0.5 s
+intervals (24 samples per 12 s cycle) across the reported moment:
+
+    298.8  34      300.7  43      302.7  38
+    299.3  38      301.4  43      303.4  34
+    300.0  42  <-- t=300 row      304.1  30
+
+It sails through the peak. A restart would read 16. Troughs at 295.2 / 307.0 /
+319.3 give 11.8 and 12.3 s spacing, continuous across the entry, and the peak
+lands at t≈300 exactly as 22.5 cycles predicts -- which independently confirms
+the phase origin is still t=30 s. `freq` simultaneously shows the 10->7 ramp
+engaging (10.00 -> 9.97 -> 9.95), so rate ramp and modulation now coexist.
+
+**Measurement note.** The optical envelope estimator could NOT resolve this on the
+real session: it breathes 16..44% on RGB(60,30,200), i.e. effective drive 12..34,
+deep in the non-linear part of the brightness curve, and the rate ramps after
+t=300 so a fixed-window peak-to-peak also tracks cycle count. The two light
+channels disagreed by 1.5 s vs 3.5 s -- the estimator failing, not the device.
+Reading the modulated value from `/api/state` is the right instrument for a slow
+LFO: it is the exact quantity, noise-free, and needs no rig.
