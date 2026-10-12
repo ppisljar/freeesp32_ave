@@ -28,6 +28,15 @@ export AUDIODEV="MiniFuse 4"
 /opt/homebrew/bin/rec -q -c 6 -r 44100 -b 16 "$OUT" trim 0 $SECS
 echo done > "$DONE"
 EOF
+# The interface must be PRESENT. sox falls back to the default device when
+# AUDIODEV is missing, so an unplugged MiniFuse silently records the built-in
+# microphone instead of failing -- a full-length, correctly-sized WAV of the
+# wrong thing. The MiniFuse has dropped off the USB bus mid-session more than
+# once, so this is a real failure mode, not a hypothetical one.
+if ! system_profiler SPAudioDataType 2>/dev/null | grep -q "MiniFuse"; then
+  echo "  REFUSING: MiniFuse 4 is not connected (replug it; check the USB port)" >&2
+  exit 1
+fi
 chmod +x "$CMD"; rm -f "$DONE" "$OUT"
 curl -s -X POST --max-time 10 "http://$IP/api/stop" >/dev/null || true
 sleep 1
