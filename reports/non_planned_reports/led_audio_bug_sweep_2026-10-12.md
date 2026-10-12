@@ -306,3 +306,48 @@ the FUNDAMENTAL's absolute level is comparable too. Always print h1 in dBFS
 beside the ratios; a 7 dB drop in h1 invalidates the ratios built on it. Passing
 `signalcheck.py` is necessary but NOT sufficient -- ch1 cleared the +6 dB gate in
 both captures and still gave a wrong answer in one of them.
+
+## 10. Measured LED-channel-to-eye map (both sensors healthy)
+
+With ch2 repaired, each LED channel was driven at its own rate in one session
+(bit0..bit5 -> 5/7/9/11/13/15 Hz) so each sensor's spectrum names the channels it
+can see. Separation 30-43 dB, so this is unambiguous:
+
+| LED ch | ch1 sensor | ch2 sensor | belongs to |
+|---|---|---|---|
+| LED1 (5 Hz) | -68.2 | **-32.7** | ch2's eye |
+| LED2 (7 Hz) | -72.2 | **-34.1** | ch2's eye |
+| LED3 (9 Hz) | **-33.5** | -63.5 | ch1's eye |
+| LED4 (11 Hz) | **-32.2** | -75.2 | ch1's eye |
+| LED5 (13 Hz) | -78.2 | -73.5 | neither (noise floor) |
+| LED6 (15 Hz) | -65.3 | -41.5 | ch2's eye, ~8 dB down |
+
+**The eye split is {LED1, LED2} vs {LED3, LED4}.** So the per-eye masks are
+**3** and **12** -- which the shipped library uses only 9 times each, versus
+masks 9 and 6 at 216 uses apiece.
+
+That also explains the earlier antiphase cancellation. Masks 9 (LED 1,4) and 6
+(LED 2,3) each take ONE LED from EACH eye, so a session setting them antiphase
+gives every eye one phase-0 and one phase-180 source, which cancel within that
+eye -- the 25.8 dB fundamental cancellation and 178.1 deg measured on
+`17_nondual_awareness_RGB`. This is consistent with the intended "inner ring of
+both eyes vs outer ring of both eyes" provided the per-eye channel order is
+mirrored (eye B = inner,outer = 1,2 while eye A = outer,inner = 3,4), which a
+mirror-image daisy chain would produce. A single sensor per eye cannot separate
+inner from outer within that eye, so this measurement confirms the EYE split only
+-- the ring assignment still rests on the wiring.
+
+Two loose ends for whoever knows the harness:
+
+* **LED5 produces no light either sensor can see** (-78.2 / -73.5 dBFS, i.e. the
+  noise floor). The library never uses a mask above 15, so a 4-zone build is
+  consistent and this is probably unpopulated rather than faulty -- worth
+  confirming rather than assuming.
+* **LED6 IS visible** to ch2's eye at -41.5 dBFS (~8 dB below LED1/LED2), despite
+  never being addressed by any shipped session. If channels map onto ranges of
+  one physical NeoPixel chain, channel 6 may alias onto pixels in that eye.
+
+Practical note for writing sessions: to drive one eye independently use mask 3 or
+mask 12. To check a measurement rig, drive each channel at a distinct rate and
+read the spectrum -- it identifies the map in one capture and needs no knowledge
+of the wiring.
