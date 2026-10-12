@@ -2360,7 +2360,16 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             // audio_generator_start_sweep() after channel start.
             .sweep_type  = AUDIO_GEN_SWEEP_NONE,
             .sweep_target = 0.0f,
-            .duration_ms = 86400000   // 24 h — effectively continuous
+            .duration_ms = 86400000,  // 24 h — effectively continuous
+            // V-S2: absolute modulation anchor. Deliberately the SAME expression
+            // as logical_anchor_us on the LED side, so the audio gate and the LED
+            // cycle origin reference one quantity instead of two corrections that
+            // have to agree. 0 when the timeline isn't running (live/API path),
+            // which tells the generator to leave the phase free-running.
+            .mod_anchor_us = (transport_origin_us != 0)
+                             ? transport_origin_us + (uint64_t)audio->time_ms * 1000ULL
+                               + AUDIO_DMA_PIPELINE_LAG_US
+                             : 0ULL
         };
 
         if (ch_active) {

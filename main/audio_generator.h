@@ -94,6 +94,13 @@ typedef struct {
     audio_gen_sweep_type_t sweep_type;
     float sweep_target;    // Target frequency for sweep
     uint32_t duration_ms;  // Duration in milliseconds
+    // Wall-clock instant (esp_timer us) at which this entry's modulation phase
+    // should read zero. The timeline sets it to the SAME expression the LED
+    // anchor uses -- transport_origin_us + time_ms*1000 + AUDIO_DMA_PIPELINE_LAG_US
+    // -- so audio and light are aligned by construction rather than by two
+    // corrections that have to agree. 0 = no anchor (live/API path): keep the
+    // free-running phase.
+    uint64_t mod_anchor_us;
 } audio_gen_params_t;
 
 typedef struct {
@@ -127,6 +134,13 @@ typedef struct {
     // generation chunk, so this is what lets fill_buffer measure how late that
     // chunk actually is. See "V-S1" in audio_generator.c.
     uint64_t start_request_us;
+    // Absolute modulation anchor latched from the entry, plus a one-shot flag
+    // asking fill_buffer to recompute mod_phase_q32 from it. Set on BOTH entry
+    // paths (fresh start and the pending-params latch), which is the point:
+    // follow-up entries used to keep a free-running phase and drifted ~48 ms
+    // away from the LEDs.
+    uint64_t mod_anchor_us;
+    bool     mod_reanchor;
     uint64_t total_samples;
     bool active;
     // Stop-fade flag: when true, the channel is amp-ramping toward 0 and will

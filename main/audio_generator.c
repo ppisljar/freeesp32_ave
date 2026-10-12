@@ -437,6 +437,9 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
     // V-S1: stamp the arming instant so fill_buffer can advance the phases by
     // however long it takes for the next generation chunk to come around.
     ch->start_request_us = (uint64_t)esp_timer_get_time();
+    // V-S2: absolute modulation anchor (see fill_buffer).
+    ch->mod_anchor_us = params->mod_anchor_us;
+    ch->mod_reanchor  = (params->mod_anchor_us != 0);
     // Noise LFSR seeds: must be non-zero (all-zero is a fixed point).
     // 0xABCD1234 (L) and 0x12345678 (R) are chosen as pseudo-random non-related
     // constants so that L and R produce decorrelated noise streams.
@@ -898,7 +901,43 @@ esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t sam
                 // wave_type is not sweepable — always latch unconditionally.
                 channel->wave_type = channel->params.wave_type;
 
+                // V-S2: a follow-up entry carries its own absolute modulation
+                // anchor. Latching it here is what fixes the ~48 ms offset:
+                // this path deliberately preserves the phase accumulators for
+                // continuity, so without an anchor the gate kept a free-running
+                // phase while the LED cycle origin was re-anchored at every
+                // entry.
+                channel->mod_anchor_us = channel->params.mod_anchor_us;
+                channel->mod_reanchor  = (channel->params.mod_anchor_us != 0);
+
                 channel->applied_version = pv;
+            }
+        }
+
+        /* V-S2 — absolute modulation phase.
+         *
+         * The gate phase is defined by the entry's position on the timeline, not
+         * by how long the accumulator has been running:
+         *
+         *     mod_phase = frac((t_emit - mod_anchor_us) * mod_freq)
+         *
+         * t_emit is this buffer's DAC emission instant, so the generation-chunk
+         * quantisation is absorbed automatically. mod_anchor_us is the same
+         * expression the LED anchor uses, so the two are aligned by construction
+         * instead of relying on two separate corrections agreeing.
+         *
+         * Recomputed once per ENTRY, not per sample -- the hot loop keeps its
+         * plain uint32_t accumulator and costs nothing extra. double, not float:
+         * a 60 min session reaches ~36000 cycles, where float's 24-bit mantissa
+         * would quantise the phase to ~0.2 ms at 10 Hz. */
+        if (channel->mod_reanchor) {
+            channel->mod_reanchor = false;
+            if (channel->current_mod_freq > 0.0f && channel->mod_anchor_us != 0) {
+                const uint64_t t_emit = mod_now_us + AUDIO_DMA_PIPELINE_LAG_US;
+                const double   d_us   = (double)((int64_t)(t_emit - channel->mod_anchor_us));
+                double cycles = d_us * 1e-6 * (double)channel->current_mod_freq;
+                cycles -= floor(cycles);
+                channel->mod_phase_q32 = (uint32_t)(cycles * 4294967296.0);
             }
         }
 
