@@ -44,3 +44,13 @@ miss=100*(1-N/exp)
 print(f"  capture: {N} frames, {miss:+.4f}% missing")
 if abs(miss)>0.01: sys.exit("  REFUSING: lossy capture would corrupt every measurement")
 PY
+
+# Signal gate. The frame count above proves the RECORDER worked; it says nothing
+# about whether the sensor saw anything. A disconnected sensor yields a valid,
+# full-length, perfectly-sized WAV of noise -- and analysing one produced four
+# consecutive confident-but-fictional results before anyone noticed. Pass
+# AVM_FLICKER_HZ to have the capture refuse to return such a file.
+if [ -n "$AVM_FLICKER_HZ" ]; then
+  python3 "$HERE/signalcheck.py" "$OUT" "${AVM_CH:-2}" "$AVM_FLICKER_HZ" 5 || {
+    echo "  REFUSING: capture contains no usable flicker signal"; exit 1; }
+fi
