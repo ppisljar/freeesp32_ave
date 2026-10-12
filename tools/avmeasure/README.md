@@ -530,6 +530,37 @@ AC-coupled sensor, single-audio-channel and no-light degradation, and —
 separately — ~38 firmware-semantics assertions encoding specific `.ledc`
 behaviours as hand-written expectations.
 
+### Per-cycle detector sensitivity (`inject.py`)
+
+The self-test above covers `analyze`/`compare`. `percycle.py` -- the single-cycle
+detector, the one that finds the one flick in a thousand that is wrong -- has its
+own harness, because its failure mode is the mirror image: it was hardened
+against false positives, and a detector that has gone blind prints exactly what
+a clean device prints.
+
+```bash
+# floors on every axis, 10 injection positions per magnitude
+python3 inject.py --sweep /tmp/drift.wav 1 10 100 20
+python3 inject.py --sweep /tmp/drift.wav 1 10 100 20 --old   # pre-fix, for a diff
+
+# one injection, written out so percycle can be run on it by hand
+python3 inject.py /tmp/noop.wav 1 10 5 8 late 0.8 /tmp/inj.wav
+python3 percycle.py /tmp/inj.wav 1 10 5 8
+```
+
+It perturbs ONE cycle of a real clean capture by a known amount -- and only the
+intended quantity: timing by a monotone time warp that is rigid across the
+pulse, amplitude by scaling the pulse against its own OFF level, duty by moving
+the fall alone. Every timing injection is cross-checked against the independent
+NMS edge detector in `ratechange.py`, because an injector is a measuring
+instrument too; the crude predecessor (zero a window, re-add it shifted) changed
+four quantities at once and reported every lateness from 1 to 10 ms as the same
+-14.7 ms.
+
+Measured floors (smallest magnitude caught at 10 of 10 positions) and the clean
+false-positive counts live in the `percycle.py` docstring, which is the one place
+they are allowed to be stated. Rerun this after touching `percycle.py`.
+
 ### Injectable faults (`synth --fault`, repeatable)
 
 ```
