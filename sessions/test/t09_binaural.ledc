@@ -1,0 +1,126 @@
+# t09_binaural.ledc -- BOTH BINAURAL IDIOMS + beat glide + beat jitter.  ~55 s
+# NOT therapeutic.  Feature family: binaural detune.
+#
+# TWO IDIOMS, and they are not equivalent:
+#   (a) ONE channel with freqR set.  The generator drives the left carrier at
+#       freq and the right at freqR and routes them straight to L and R --
+#       "binaural bypass": when frequency_r > 0 AND != frequency, the PAN STAGE
+#       IS SKIPPED ENTIRELY (audio_generator.c:1061-1063).  pan has no effect on
+#       such a channel, which ledc_format.md does not say.
+#   (b) TWO channels hard-panned -100 / +100 with slightly different carriers.
+#       Both go through the normal equal-power pan, so each ear gets -0.0 dB of
+#       its own carrier and nothing of the other's.
+# Both are measured the same way: the FREQUENCY DIFFERENCE between the L and R
+# spectral lines IS the beat.  Nothing in the recorded signal beats -- the beat
+# happens in the listener -- so never look for a beat line in a mono sum.
+#
+# freqR CANNOT BE RAMPED.  ledc_format.md lists it as a prefix-capable compound
+# cell; neither parser implements that.  atof(">250") is 0.0, which forces the
+# channel to MONO and silently destroys the detune.  To glide a beat, ramp the
+# LEFT carrier instead and leave freqR fixed, which is what B3 does -- freqR is
+# the ABSOLUTE right carrier, so moving the left one moves the beat and KEEPS
+# moving it (29 of 83 shipped sessions were silently not performing their
+# central move until that was fixed).
+#
+# LED reference: steady 16 Hz -- a rate used nowhere else in this file, and an
+# exact divisor of the 10 kHz ISR tick (625 ticks), so it adds no period error.
+#
+#
+#
+# CAPTURE-INTEGRITY CARRIER (audio ch15, 1900 Hz sine, hard LEFT, vol 40, from
+# t=700 ms to the end of the file).  This is measurement scaffolding, not
+# content.  A recorder can lose a block of frames mid-capture and still write a
+# file of exactly the right length -- the missing TIME is simply absent -- and
+# the frame-count check is blind to it.  Five such steps were found in one 665 s
+# capture (~1 per 2.2 min), and one of them was written up as a firmware defect
+# because BOTH optical sensors agreed on it: the whole recording had stepped.
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 1900 --audio-ch 1
+# The tool needs a CONTINUOUS SINE: a session cycling square/saw/noise carriers
+# gives ~369 us of phase noise against ~1 us for a sine, which inflates its
+# self-calibrating threshold into a rubber stamp.  Hard LEFT so the RIGHT capture
+# channel stays free of it for envelope and avsync work.  The marker window
+# (0..600 ms) is not covered by this carrier; check it separately with
+# --carrier 3000.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
+A 700 1900 -100 40 0 15 0 0
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
+
+# ---- LED reference, whole file
+1000 16 50 100 255 255 255 15 0 0
+
+# ---- B1  1..13 s : IDIOM (a), two channels, two different beats so the
+#      spectrum cannot confuse them.
+#      ch1  L 240.0  R 250.0  -> beat 10.000 Hz
+#      ch2  L 400.0  R 406.0  -> beat  6.000 Hz
+A 1000 240 0 60 0 1 250 0
+A 1000 400 0 60 0 2 406 0
+
+# ---- B2  13..25 s : IDIOM (b), two hard-panned pairs.
+#      pair ch3/ch4  L 300.0  R 307.0 -> beat 7.000 Hz
+#      pair ch5/ch6  L 500.0  R 504.0 -> beat 4.000 Hz
+#      Expect the left capture channel to show lines at 300 and 500 only, the
+#      right at 307 and 504 only, with >40 dB of channel separation.
+A 13000 240 0 0 0 1 250 0              # silence idiom (a)
+A 13000 400 0 0 0 2 406 0
+A 13000 300 -100 60 0 3 0 0            # pair 1 left
+A 13000 307  100 60 0 4 0 0            # pair 1 right
+A 13000 500 -100 60 0 5 0 0            # pair 2 left
+A 13000 504  100 60 0 6 0 0            # pair 2 right
+
+# ---- B3  25..37 s : BEAT GLIDE.  Left carrier ramps 240 -> 243 linearly over
+#      12 s with freqR pinned at 250, so the beat glides 10.000 -> 7.000 Hz at
+#      0.250 Hz/s.  The ramp target is B4's ch1 freq (243), stated explicitly:
+#      a `-` there would have ramped the carrier to ZERO instead of holding.
+#      The literal 240 also MATCHES ch1's live carrier, because the firmware
+#      discards the file's start value on a running channel and uses the live
+#      one -- writing anything else here would make the file lie.
+A 25000 300 -100 0 0 3 0 0             # silence idiom (b)
+A 25000 307  100 0 0 4 0 0
+A 25000 500 -100 0 0 5 0 0
+A 25000 504  100 0 0 6 0 0
+A 25000 >240 0 60 0 1 250 0
+
+# ---- B4  37..53 s : BEAT JITTER, and the three things about it that are not
+#      in ledc_format.md:
+#        1. it is GLOBAL, not per-line -- one setter, no channel argument, so
+#           ch2 below wanders too despite setting no jitter column;
+#        2. it moves ONLY the binaural detune (current_freq_r = frequency_r +
+#           jitter, gated on frequency_r > 0), NOT the isochronic mod rate, so
+#           ch7's gate below must stay rock steady;
+#        3. a period below 1000 ms is silently IGNORED (the previous period
+#           stays), and the LED side additionally clamps amp to 5 Hz.
+#      Amp is 1.0 Hz with a 5 s cycle (3.2 cycles in the block) -- deliberately
+#      larger than the library-typical 0.3 so it is unmistakable.
+A 37000 243 0 60 0 1 250 0 50 0 0 3 1.0:5000   # beat 7 Hz +/- 1.0 Hz
+A 37000 400 0 60 0 2 406 0                     # no jitter column -- wanders anyway
+A 37000 701 0 60 10 7 0 0 50 0 0               # mono + 10 Hz gate: must NOT wander
+
+# ---- end: jitter explicitly back to 0 so it cannot leak into the next session
+53000 0 50 0 0 0 0 15
+53000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 53000 1900 -100 0 0 15 0 0            # stop the integrity carrier
+A 53000 243 0 0 0 1 250 0 50 0 0 3 0
+A 53000 400 0 0 0 2 406 0
+A 53000 701 0 0 0 7 0 0 50 0 0

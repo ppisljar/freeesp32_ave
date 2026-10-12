@@ -1,0 +1,137 @@
+# t10_audio_interp.ledc -- ALL SEVEN PREFIXES on AUDIO cells.  ~59 s
+# NOT therapeutic.  Feature family: compound-cell animation, audio side.
+#
+# Audio compound cells: freq pan vol mod duty phase attack.  NOT freqR (see
+# t09), NOT ch, NOT waveType, NOT env, NOT jitter.
+#
+# TWO START-VALUE RULES, and they differ by field class -- the file is written
+# so that the expected numbers below are what the DEVICE does, not what the
+# syntax suggests:
+#   * CORE fields (freq pan vol mod): on an ALREADY-RUNNING channel the firmware
+#     DISCARDS the file's literal and starts from the channel's live value
+#     (audio_generator.c:519-551).  On a FRESH channel the literal is used --
+#     EXCEPT for vol, where the channel's amp is already 0 when the sweep is
+#     armed, so a first-entry volume ramp always starts from SILENCE.
+#     Every ramp below therefore lives on a channel whose live value already
+#     equals the literal, or is a deliberate fade-in from 0.
+#   * PULSE fields (duty phase attack): the start value IS the literal, because
+#     config_parser writes it into the iso state before arming the sweep.  The
+#     one exception is duty 0, which the setter refuses, so a `>0` duty ramp
+#     would silently start from the PREVIOUS duty.  No duty 0 appears here.
+# A `>`/`*` ramp also needs a later entry on the same channel that EXPLICITLY
+# sets the same field: core fields take the target with NO present-bit check, so
+# a `-` there ramps to ZERO instead of holding.
+#
+# Channel 1 is deliberately NOT used for ramps: the sync marker leaves it active
+# at freq 0 / vol 0, so a ramp there would start from the live 0 and the file
+# would lie about its own start value.
+#
+# LED reference: steady 20 Hz -- used nowhere else here, and an exact divisor of
+# the 10 kHz ISR tick (500 ticks), so it adds no period error.
+#
+#
+#
+# CAPTURE-INTEGRITY CARRIER (audio ch15, 1900 Hz sine, hard LEFT, vol 40, from
+# t=700 ms to the end of the file).  This is measurement scaffolding, not
+# content.  A recorder can lose a block of frames mid-capture and still write a
+# file of exactly the right length -- the missing TIME is simply absent -- and
+# the frame-count check is blind to it.  Five such steps were found in one 665 s
+# capture (~1 per 2.2 min), and one of them was written up as a firmware defect
+# because BOTH optical sensors agreed on it: the whole recording had stepped.
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 1900 --audio-ch 1
+# The tool needs a CONTINUOUS SINE: a session cycling square/saw/noise carriers
+# gives ~369 us of phase noise against ~1 us for a sine, which inflates its
+# self-calibrating threshold into a rubber stamp.  Hard LEFT so the RIGHT capture
+# channel stays free of it for envelope and avsync work.  The marker window
+# (0..600 ms) is not covered by this carrier; check it separately with
+# --carrier 3000.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
+A 700 1900 -100 40 0 15 0 0
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
+
+# ---- LED reference, whole file
+1000 20 50 100 255 255 255 15 0 0
+
+# ---- B1  1..13 s : CARRIER RAMPS on fresh channels.
+#      ch3 `>` linear    311 -> 900 Hz over 12 s  (+49.08 Hz/s)
+#      ch4 `*` quadratic 1103 -> 500 Hz over 12 s (ease-in-out, same endpoints)
+#      Targets are B2's freq literals.  Grade from a sliding spectrogram: linear
+#      is a straight ridge, quadratic is an S.
+A 1000 >311  0 60 0 3 0 0
+A 1000 *1103 0 60 0 4 0 0
+
+# ---- B2  13..23 s : ALL FIVE PERIODIC MODULATIONS on vol, at once, on five
+#      non-colliding sine carriers.  Each carrier's level envelope shows its own
+#      LFO shape, so one capture grades all five:
+#        ~ sine      ^ triangle      / saw-up      \ saw-down      _ square
+#      All swing vol 20 <-> 80 with a 2000 ms period (5 cycles in the block),
+#      i.e. -14.0 dB <-> -1.9 dB relative to vol 100.
+A 13000 900  0 ~20:80:2000 0 3 0 0     # ch3  ~ sine
+A 13000 500  0 ^20:80:2000 0 4 0 0     # ch4  ^ triangle
+A 13000 701  0 /20:80:2000 0 5 0 0     # ch5  / saw-up
+A 13000 1301 0 \80:20:2000 0 6 0 0     # ch6  \ saw-down
+A 13000 1709 0 _20:80:2000 0 7 0 0     # ch7  _ square
+
+# ---- B3  23..35 s : PAN and MOD-RATE animation.
+#      ch3 ~ pan sine sweep -100 <-> +100, 3 s period (4 cycles): the L/R level
+#          ratio of the 900 Hz line traces an equal-power sine auto-pan.
+#      ch4 > pan linear 0 -> +100 over 12 s, target in B4.  The literal is 0,
+#          not -100, because ch4's LIVE pan is 0 and the firmware starts a
+#          core-field ramp from the live value on a running channel.
+#      ch5 ~ MOD RATE sine 4 <-> 16 Hz, 3 s period, square gate: the sideband
+#          SPACING round the 701 Hz carrier breathes between 4 and 16 Hz.
+A 23000 1301 0 0 0 6 0 0               # silence ch6
+A 23000 1709 0 0 0 7 0 0               # silence ch7
+A 23000 900 ~-100:100:3000 60 0 3 0 0
+A 23000 500 >0 60 0 4 0 0
+A 23000 701 0 60 ~4:16:3000 5 0 0 50 0 0
+
+# ---- B4  35..47 s : PULSE-FIELD RAMPS, all three, each on its own carrier.
+#      ch3 > duty  20 -> 80 % over 12 s (square gate, mod 10 Hz)
+#      ch4 > attack 3 -> 25 ms over 12 s (trapezoid gate, mod 8 Hz; duty 50 so
+#          the duty/2 clamp is 31.25 ms and 25 ms is a real edge).  Its pan is
+#          100 here because that is ALSO B3's pan-ramp target -- a core-field
+#          ramp takes its endpoint from the next entry's struct member with no
+#          present-bit check, so leaving pan at 0 would have cancelled B3's ramp.
+#      ch5 > phase 0 -> 180 deg over 12 s (square gate, mod 10 Hz): the gate
+#          edge advances 15 deg/s = 4.17 ms/s against the 20 Hz LED reference
+#      All three targets are stated explicitly in B5.
+A 35000 900 0 60 10 3 0 0 >20 0 0
+A 35000 500 100 60 8  4 0 0 50 3 0 >3
+A 35000 701 0 60 10 5 0 0 50 0 >0
+
+# ---- B5  47..57 s : the ramp targets, held, so each ramp has a real endpoint
+#      and the final value can be read as a static measurement.
+A 47000 900 0 60 10 3 0 0 80 0 0
+A 47000 500 100 60 8  4 0 0 50 3 0 25
+A 47000 701 0 60 10 5 0 0 50 0 180
+
+# ---- end
+57000 0 50 0 0 0 0 15
+57000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 57000 1900 -100 0 0 15 0 0            # stop the integrity carrier
+A 57000 900 0 0 10 3 0 0 80 0 0
+A 57000 500 100 0 8  4 0 0 50 3 0 25
+A 57000 701 0 0 10 5 0 0 50 0 180

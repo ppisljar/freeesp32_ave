@@ -1,0 +1,101 @@
+# t12_format_edges.ledc -- THE `-` SENTINEL, the 5-token legacy LED line, BG and
+# S rows, inline comments.  ~51 s.  NOT therapeutic.
+# Feature family: format structure rather than signal content.
+#
+# `-` means "leave this field unchanged".  It clears the field's present bit and
+# the execute path substitutes the channel's LIVE value, so the write is a
+# no-op for that field.  At channel start `-` is the field's default.
+# Two sharp edges, both exercised below:
+#   * `-` in the LED freq column on a channel with NO live rate resolves to 0,
+#     which means STOP FLICKER, not "hold".  Every `-` freq here lands on a
+#     channel that is already flickering.
+#   * the substitution reads a snapshot of the LOWEST SET BIT of the mask only,
+#     so a multi-bit mask whose bits have diverged collapses to the low bit's
+#     value.  masks 3 and 12 are used, and both bits of each always carry
+#     identical values, so that collapse cannot confuse the reading here.
+# Note also that an ABSENT trailing column is NOT the same as `-`: omitting
+# waveType on a running audio channel RESETS it to sine, while `-` holds it.
+# That inconsistency is known and deliberately unfixed.
+#
+# BG: the device accepts http:// https:// sdcard:// push://.  The path below
+# almost certainly does not exist on your card -- either point it at a real
+# asset or expect a "BG fetch failed" log line and grade the rest of the file
+# anyway.  DO NOT use push:// in a timing session: a push URL makes the
+# executor HOLD the timeline until the pushed stream has buffered (or a timeout
+# fires), which moves t=0.
+#
+# S rows are browser-only.  The browser strips them before POSTing, so
+# analyze.py strips them too unless you pass --keep-speech, and the device's own
+# parser errors out on them on a non-SD build.  Grade speech only when the
+# session is played THROUGH the web UI.
+#
+# lane A = mask 3 (capture ch4, 10 Hz), lane B = mask 12 (capture ch3, 7 Hz).
+#
+#
+#
+# CAPTURE-INTEGRITY CARRIER: this file needs no extra tone.  ch3's 500 Hz sine
+# runs unbroken from t=1 s to t=51 s at pan 0:
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 500 --audio-ch 1
+# Its VOLUME and gate RATE change at B4/B5, which the tool does not care about --
+# it tracks carrier PHASE, and the carrier frequency never moves.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
+
+# ---- session-global background bed and one spoken cue
+BG sdcard://bg/test_bed.wav 0 30
+S 1500 default 60 "Format edges. Legacy five column, then four sentinel blocks."
+
+# ---- B1  1..11 s : FIVE-TOKEN LEGACY LED LINES.
+#      `time freq duty bright mask` with no RGB.  RGB defaults to FULL WHITE
+#      (255,255,255) and is marked explicitly present, so effective drive is
+#      255 and these are directly comparable with the 8-token white blocks in
+#      t02/t03.
+1000 10 50 100 3                       # lane A, legacy form
+1000  7 50 100 12                      # lane B, legacy form
+A 1000 500 0 70 10 3 0 0 50 0 0        # audio reference: 500 Hz, 10 Hz square gate
+
+# ---- B2  11..21 s : `-` CHANGES ONLY DUTY.  Rate, brightness and colour must
+#      be bit-identical to B1; only the on-fraction moves.
+11000 - 25 - - - - 3                   # lane A: duty 50 -> 25, nothing else
+11000 - 75 - - - - 12                  # lane B: duty 50 -> 75, nothing else
+
+# ---- B3  21..31 s : `-` CHANGES ONLY COLOUR.  Rate and the duty set in B2 must
+#      survive; only R/G/B move.  Drive stays 100 x 255/255 = 255.
+21000 - - - 255 0 0 3                  # lane A: white -> red, duty stays 25
+21000 - - - 0 0 255 12                 # lane B: white -> blue, duty stays 75
+
+# ---- B4  31..41 s : `-` CHANGES ONLY JITTER (LED) and ONLY VOLUME (audio).
+#      This is ledc_format.md's own worked example of the sentinel.
+31000 - - - - - - 3 - - - 1.0:5000     # lane A: jitter on, everything else held
+31000 - - - - - - 12 - - - 0           # lane B: jitter explicitly off
+A 31000 - - 40 - 3                     # audio: vol 70 -> 40, freq/pan/mod held
+
+# ---- B5  41..51 s : `-` CHANGES ONLY THE MOD RATE (audio); LED jitter back off.
+41000 - - - - - - 3 - - - 0            # lane A: jitter off, colour/duty/rate held
+41000 - - - - - - 12 - - - 0
+A 41000 - - - 4 3                      # audio: gate 10 Hz -> 4 Hz, vol stays 40
+
+# ---- end
+51000 0 50 0 0 0 0 15
+51000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 51000 500 0 0 4 3 0 0 50 0 0

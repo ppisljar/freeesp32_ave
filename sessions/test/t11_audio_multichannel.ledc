@@ -1,0 +1,140 @@
+# t11_audio_multichannel.ledc -- ALL 16 AUDIO CHANNELS + the ch8..15 ramp
+# regression.  ~37 s.  NOT therapeutic.  Feature family: channel allocation.
+#
+# CHANNEL NUMBERING.  config_parser.c:1634-1646 accepts 0..15 (NUM_AUDIO_CHANNELS
+# is 16) and an omitted column means 0, so channel 0 is a real, usable channel
+# and is the SAME channel as an omitted `ch`.  ledc_format.md says "1..16",
+# which is wrong in both directions.  /api/state numbers them 1-based, so .ledc
+# ch8 reads back as ch9 there -- do not cross-check the two without shifting.
+#
+# CARRIER MAP.  Channels 1..15 each get a sine (wave 0, no harmonics at all, so
+# no two channels can ever collide) at
+#       f = 300 + 50 x ch   Hz,   i.e. 350 .. 1050 in 50 Hz steps,
+# and channel 0 holds the 1900 Hz integrity carrier described above.  The channel
+# index is therefore readable straight off the spectrum as (f - 300) / 50, which
+# is what makes a 16-way block gradeable at all.
+# vol 20 each: 16 x 0.20 x the 1/16 per-channel headroom = 0.20 peak, no
+# clipping, and every line sits ~34 dB above the noise floor.
+#
+# THE REGRESSION IN B2.  find_next_audio_for_bit used to build its mask as
+# (uint8_t)(1u << channel), which truncates to 0 for channels 8..15: nothing
+# matched, no sweep was armed, and EVERY `>` / `*` ramp on those channels
+# STEPPED instead of ramping -- frequency, volume, pan, mod, duty, phase and
+# attack alike.  It affected 14 shipped Gateway sessions.  B2 ramps all eight
+# high channels at once, at EIGHT DIFFERENT SLOPES, with monotonically ordered
+# start and end frequencies so the ridges can never cross.  A step shows as a
+# vertical jump in a spectrogram; a working ramp shows as a clean fanning ridge.
+#
+# LED reference: steady 25 Hz -- used nowhere else here, and an exact divisor of
+# the 10 kHz ISR tick (400 ticks), so it adds no period error.
+#
+#
+#
+# CAPTURE-INTEGRITY CARRIER: here it is **audio ch0**, not ch15, because ch15 is
+# needed by the 16-channel map and the high-channel ramp block.  ch0 holds a
+# continuous 1900 Hz sine, hard LEFT, vol 40, from t=700 ms to the end:
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 1900 --audio-ch 1
+# A recorder can lose a block of frames mid-capture and still write a file of
+# exactly the right length -- the missing TIME is simply absent -- and the
+# frame-count check is blind to it (five such steps in one 665 s capture, one of
+# which was written up as a firmware defect).  The tool needs a CONTINUOUS SINE;
+# square/saw/noise carriers give ~369 us of phase noise against ~1 us for a sine.
+# ch0 doubles as this file's proof that channel 0 is a real, usable channel and
+# is the one an omitted `ch` column selects.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- capture-integrity carrier: continuous 1900 Hz sine on CHANNEL 0, hard LEFT.
+#      It runs unbroken through every block below, including B2/B3 where every
+#      other low channel is silenced.
+A 700 1900 -100 40 0 0 0 0
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
+
+# ---- LED reference, whole file
+1000 25 50 100 255 255 255 15 0 0
+
+# ---- B1  1..13 s : ALL SIXTEEN channels sounding at once -- the fifteen entries
+#      below at one timestamp, plus ch0 already armed at t=700.  Fifteen entries
+#      is well inside the 50-per-timestamp batch cap (entries 51+ at a timestamp
+#      NEVER fire).  Expect fifteen lines, 350..1050 Hz in 50 Hz steps, within
+#      1% of nominal and within 3 dB of each other, PLUS ch0's 1900 Hz integrity
+#      carrier -- sixteen channels in total, all proven to play.
+A 1000 350  0 20 0 1  0 0             # ch1
+A 1000 400  0 20 0 2  0 0             # ch2
+A 1000 450  0 20 0 3  0 0             # ch3
+A 1000 500  0 20 0 4  0 0             # ch4
+A 1000 550  0 20 0 5  0 0             # ch5
+A 1000 600  0 20 0 6  0 0             # ch6
+A 1000 650  0 20 0 7  0 0             # ch7
+A 1000 700  0 20 0 8  0 0             # ch8  -- high half starts here
+A 1000 750  0 20 0 9  0 0             # ch9
+A 1000 800  0 20 0 10 0 0             # ch10
+A 1000 850  0 20 0 11 0 0             # ch11
+A 1000 900  0 20 0 12 0 0             # ch12
+A 1000 950  0 20 0 13 0 0             # ch13
+A 1000 1000 0 20 0 14 0 0             # ch14
+A 1000 1050 0 20 0 15 0 0             # ch15
+
+# ---- B2  13..25 s : the low eight are silenced, the high eight RAMP.
+#      Each literal equals that channel's LIVE carrier, because a core-field
+#      ramp on a running channel starts from the live value and ignores the
+#      literal -- writing anything else would make the file lie.
+#      slopes: 4.17 / 8.33 / 12.50 / 16.67 / 20.83 / 25.00 / 29.17 / 33.33 Hz/s
+A 13000 350 0 0 0 1 0 0
+A 13000 400 0 0 0 2 0 0
+A 13000 450 0 0 0 3 0 0
+A 13000 500 0 0 0 4 0 0
+A 13000 550 0 0 0 5 0 0
+A 13000 600 0 0 0 6 0 0
+A 13000 650 0 0 0 7 0 0
+A 13000 >700  0 20 0 8  0 0           # ch8   700 ->  750
+A 13000 >750  0 20 0 9  0 0           # ch9   750 ->  850
+A 13000 >800  0 20 0 10 0 0           # ch10  800 ->  950
+A 13000 >850  0 20 0 11 0 0           # ch11  850 -> 1050
+A 13000 >900  0 20 0 12 0 0           # ch12  900 -> 1150
+A 13000 >950  0 20 0 13 0 0           # ch13  950 -> 1250
+A 13000 >1000 0 20 0 14 0 0           # ch14 1000 -> 1350
+A 13000 >1050 0 20 0 15 0 0           # ch15 1050 -> 1450
+
+# ---- B3  25..35 s : the ramp targets, held, so each endpoint is also a static
+#      measurement and no ramp is left orphaned.
+A 25000 750  0 20 0 8  0 0
+A 25000 850  0 20 0 9  0 0
+A 25000 950  0 20 0 10 0 0
+A 25000 1050 0 20 0 11 0 0
+A 25000 1150 0 20 0 12 0 0
+A 25000 1250 0 20 0 13 0 0
+A 25000 1350 0 20 0 14 0 0
+A 25000 1450 0 20 0 15 0 0
+
+# ---- end
+35000 0 50 0 0 0 0 15
+35000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 35000 1900 -100 0 0 0 0 0             # stop the integrity carrier
+A 35000 750  0 0 0 8  0 0
+A 35000 850  0 0 0 9  0 0
+A 35000 950  0 0 0 10 0 0
+A 35000 1050 0 0 0 11 0 0
+A 35000 1150 0 0 0 12 0 0
+A 35000 1250 0 0 0 13 0 0
+A 35000 1350 0 0 0 14 0 0
+A 35000 1450 0 0 0 15 0 0

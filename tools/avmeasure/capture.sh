@@ -25,7 +25,14 @@ CMD=/tmp/.cap_$$.command
 cat > "$CMD" <<EOF
 #!/bin/zsh
 export AUDIODEV="MiniFuse 4"
-/opt/homebrew/bin/rec -q -c 6 -r 44100 -b 16 "$OUT" trim 0 $SECS
+# caffeinate: the Mac going to sleep mid-capture truncates the file while
+# leaving it otherwise valid, and the longer the capture the likelier it is --
+# a 75 s request failed three times in a row at 50%, 16% and 28% missing, and
+# the same sleep killed two long-running agents outright. -i blocks idle sleep,
+# -m keeps the disk awake, -s covers the system while on mains. The recorder is
+# the thing that must not be interrupted, so caffeinate wraps rec itself rather
+# than the orchestrating script.
+/usr/bin/caffeinate -ims /opt/homebrew/bin/rec -q -c 6 -r 44100 -b 16 "$OUT" trim 0 $SECS
 echo done > "$DONE"
 EOF
 # The interface must be PRESENT. sox falls back to the default device when

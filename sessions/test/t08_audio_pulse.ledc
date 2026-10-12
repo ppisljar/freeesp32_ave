@@ -1,0 +1,140 @@
+# t08_audio_pulse.ledc -- ISOCHRONIC GATING: env, duty, mod rate, phase, attack.
+# ~63 s.  NOT therapeutic.  Feature family: audio pulse layer.
+#
+# READ THIS FIRST -- THE GATE IS ONLY 10% DEEP.
+# config_parser.c:2376 hardcodes mod_depth = 0.1f; no .ledc field sets it.  So
+#     env 0..3 (unipolar gate):  envelope = 0.90 .. 1.00   (gates DOWN)
+#     env 4    (sine tremolo):   envelope = 0.90 .. 1.10   (bipolar, exceeds 1)
+# ledc_format.md describes the x((1-depth)+depth.g) law but never says depth is
+# a non-settable 0.1.  Do NOT expect an audible on/off: expect sidebands around
+# 30 dB below the carrier.  Predicted FIRST sideband, relative to that channel's
+# own carrier line (half the envelope's fundamental, over its DC):
+#     env 4 sine tremolo   0.100/2 / 1.00  = -26.0 dB,  carrier at 0.00 dB
+#     env 0 square d=50    0.0637/2 / 0.95 = -29.5 dB,  carrier at -0.45 dB
+#     env 1 sine gate      0.050/2 / 0.95  = -31.6 dB,  carrier at -0.45 dB
+#     env 2 triangle gate  0.0405/2 / 0.95 = -33.4 dB,  carrier at -0.45 dB
+# and the HIGHER sidebands are the shape fingerprint: square falls as 1/n (odd
+# only), triangle as 1/n^2 (odd only), sine has none, trapezoid sits between and
+# moves with attack.
+#
+# WHY SIDEBANDS AND NOT percycle.  percycle.py segments by demodulated phase at
+# the flicker rate; it has no envelope detector, so it grades LIGHT, not an AM
+# audio channel.  The audio gate is graded either from the sideband ladder
+# (multi-carrier blocks) or from a smoothed |x| envelope (single-carrier-per-ear
+# blocks) -- which is exactly what avsync.py builds internally.
+#
+# `duty` IS IGNORED BY env 1 AND env 2, on the audio path too: iso_gate returns
+# 0.5-0.5*cos(2*pi*ph) for SINE and a fixed symmetric triangle for TRIANGLE,
+# neither of which references duty (audio_generator.c:175-205).  Only env 0
+# (square) and env 3 (trapezoid) honour it, which is why B3's duty test uses
+# env 0.  The `50` in the duty column of B1 ch2/ch3 is inert.
+#
+# The SINE gate here was `4*ph*(1-ph)` -- a parabola, not a sine -- until today.
+# It measured h2/h1 = 0.251 and h3/h1 = 0.112 at 8 Hz, i.e. an alpha isochronic
+# gate was also driving 16 and 24 Hz.  After the fix a true raised sine has only
+# DC and the fundamental, so B1 ch2 and B2 ch2 must show NO second or third
+# sideband above the floor.  That is the sharpest single assertion in this file.
+#
+# PANNING AS A SECOND LANE.  Where a block needs the ENVELOPE SHAPE rather than
+# the sideband ladder, two variants are hard-panned L and R so one capture holds
+# two independent envelopes.  Those blocks need BOTH audio channels of the
+# interface (TRS splitter on the headphone jack).
+#
+# LED REFERENCE: a steady 8 Hz square flicker runs for the whole file, so
+# analyze.py gets a light t=0 and B6 has something to measure audio phase
+# against.  8 Hz is deliberately NOT one of the mod rates in B1-B4.
+#
+#
+#
+# CAPTURE-INTEGRITY CARRIER: this file needs no extra tone.  ch1's 311 Hz sine
+# runs unbroken from t=1 s to t=61 s (its gate is only 10 % deep, so it never
+# actually shuts), and it is in the LEFT channel from B3 onward:
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 311 --audio-ch 1
+# No extra ungated tone is added, deliberately: it would add a DC pedestal to the
+# |x| envelopes that B3/B5/B6 are graded from.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
+
+# ---- LED reference, whole file: 8 Hz, phase 0, square carrier.  8 Hz is an
+#      exact divisor of the 10 kHz ISR tick (1250 ticks), and it is also B6's
+#      audio mod rate so the two gates can be timed against each other.
+1000 8 50 100 255 255 255 15 0 0
+
+# ---- B1  1..11 s : env 0 / 1 / 2 / 3 at once, mod 10 Hz, duty 50.
+#      Four non-harmonic carriers, so one spectrum grades all four ladders.
+A 1000 311  0 60 10 1 0 0 50 0 0       # ch1 SQUARE gate
+A 1000 503  0 60 10 2 0 1 50 1 0       # ch2 SINE gate
+A 1000 701  0 60 10 3 0 2 50 2 0       # ch3 TRIANGLE gate
+A 1000 1103 0 60 10 4 0 3 50 3 0 3     # ch4 TRAPEZOID gate, attack 3 ms
+
+# ---- B2  11..21 s : env 4 TREMOLO vs env 1 SINE GATE vs NO modulation.
+#      ch3 carries mod 0, which is the unmodulated absolute-level reference:
+#      it is what makes the 0.45 dB carrier drop of a unipolar gate measurable
+#      rather than a matter of faith.
+A 11000 311  0 60 10 1 0 0 50 4 0      # ch1 env 4, bipolar: carrier 0.00 dB
+A 11000 503  0 60 10 2 0 1 50 1 0      # ch2 env 1, unipolar: carrier -0.45 dB
+A 11000 701  0 60 0  3 0 2 50 1 0      # ch3 mod 0 -> gate OFF, reference
+A 11000 1103 0 0  10 4 0 3 50 3 0 3    # ch4 silenced
+
+# ---- B3  21..31 s : DUTY, graded from the ENVELOPE, one value per ear.
+#      Duty 25 and duty 75 of a square have the SAME magnitude spectrum (they
+#      are time-reverses of each other), so a sideband ladder cannot tell them
+#      apart -- only the time-domain on-fraction can.  Hence hard panning.
+#      Expect on-fraction 25.0% (left) and 75.0% (right) of a 125 ms period at
+#      mod 8 Hz.  Duty 50 was already covered by B1 ch1.
+A 21000 311 -100 60 8 1 0 0 25 0 0     # hard LEFT,  duty 25
+A 21000 503  100 60 8 2 0 1 75 0 0     # hard RIGHT, duty 75
+A 21000 701  0 0 0 3 0 2 50 1 0        # ch3 silenced
+
+# ---- B4  31..41 s : MOD RATE.  Three rates at once; the sideband spacing round
+#      each carrier names its own rate, so one spectrum grades all three.
+A 31000 311  0 60 4  1 0 0 50 0 0      # ch1 4 Hz  (40 cycles)
+A 31000 503  0 60 10 2 0 1 50 0 0      # ch2 10 Hz (100 cycles)
+A 31000 701  0 60 16 3 0 2 50 0 0      # ch3 16 Hz (160 cycles)
+
+# ---- B5  41..51 s : ATTACK on the trapezoid gate, one value per ear.
+#      mod 8 Hz, duty 50 -> the duty/2 clamp sits at 31.25 ms, so both values
+#      below are real edges and not clamped.  Expect the 2nd sideband to RISE
+#      and the 3rd to FALL with attack, the same monotonic trend measured
+#      optically on the LED trapezoid (attack 3/10/20 ms -> h2 0.042/0.221/0.360
+#      and h3 0.316/0.221/0.061).
+A 41000 311 -100 60 8 1 0 0 50 3 0 3   # hard LEFT,  attack 3 ms
+A 41000 503  100 60 8 2 0 1 50 3 0 25  # hard RIGHT, attack 25 ms
+A 41000 701  0 0 16 3 0 2 50 0 0       # ch3 silenced
+
+# ---- B6  51..61 s : AUDIO PULSE PHASE against the LED gate.  Both at 8 Hz, so
+#      avsync.py can time each audio envelope against the light edge.
+#      Audio phase is the SAME LEAD convention as LED phase (the offset is ADDED
+#      to the mod accumulator, audio_generator.c:1491), so:
+#        phase 0   -> the established A/V residual, -2.5 .. -3.5 ms
+#        phase 90  -> 31.25 ms EARLIER than that (90/360 of a 125 ms period)
+A 51000 311 -100 60 8 1 0 0 50 0 0     # hard LEFT,  phase 0
+A 51000 503  100 60 8 2 0 1 50 0 90    # hard RIGHT, phase 90 -> 31.25 ms early
+
+# ---- end
+61000 0 50 0 0 0 0 15
+61000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 61000 311 0 0 8 1 0 0 50 0 0
+A 61000 503 0 0 8 2 0 1 50 0 0
+A 61000 701 0 0 0 3 0 2 50 0 0
+A 61000 1103 0 0 0 4 0 3 50 0 0

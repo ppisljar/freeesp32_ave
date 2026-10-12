@@ -1,0 +1,124 @@
+# t06_led_phase_jitter.ledc -- LED phase and jitter.  ~70 s
+# NOT therapeutic.  Feature family: LED pulse phase + anti-habituation wander.
+#
+# phase IS A LEAD, NOT A LAG.  The firmware adds phase x period / 360 to elapsed
+# time, so the edge arrives EARLIER.  Measured at 10 Hz (100 ms period), timing
+# LED-on edges (ledc_format.md):
+#       phase   if it were a lag   actually measured
+#         0           0 ms              0.00 ms
+#        90          25 ms             74.76 ms
+#       180          50 ms             49.93 ms
+#       270          75 ms             24.69 ms
+# To DELAY by N degrees, write 360 - N.  Every shipped session uses only 0 and
+# 180, which are symmetric under negation, which is why this has never bitten
+# anyone -- and why it is tested here before someone reaches for 90.
+#
+# BOTH LANES RUN AT 10 Hz in the phase blocks, which is the whole point: phase
+# is only meaningful relative to something at the same rate.  That is safe here
+# because the lanes are in DIFFERENT EYES (mask 3 vs mask 12, 30-43 dB apart),
+# so each sensor sees essentially one phase and nothing cancels.
+#
+# DO NOT put phase 180 on two zones ONE sensor can see.  Measured on
+# 17_nondual_awareness_RGB, masks 9 and 6 at antiphase gave -25.8 dB
+# fundamental cancellation on the sensor that saw both, the 2nd harmonic 21.5 dB
+# ABOVE the fundamental, and per-cycle analysis declined to grade 154 of 495
+# cycles.  The reason is the channel map: masks 9 and 6 each take ONE LED from
+# EACH eye.  Masks 3 and 12 do not, so antiphase is measurable here -- but B3
+# still needs one sensor per eye, and is labelled as such.
+#
+# lane A = mask 3 (capture ch4), lane B = mask 12 (capture ch3).
+#
+#
+#
+# CAPTURE-INTEGRITY CARRIER (audio ch15, 1900 Hz sine, hard LEFT, vol 40, from
+# t=700 ms to the end of the file).  This is measurement scaffolding, not
+# content.  A recorder can lose a block of frames mid-capture and still write a
+# file of exactly the right length -- the missing TIME is simply absent -- and
+# the frame-count check is blind to it.  Five such steps were found in one 665 s
+# capture (~1 per 2.2 min), and one of them was written up as a firmware defect
+# because BOTH optical sensors agreed on it: the whole recording had stepped.
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 1900 --audio-ch 1
+# The tool needs a CONTINUOUS SINE: a session cycling square/saw/noise carriers
+# gives ~369 us of phase noise against ~1 us for a sine, which inflates its
+# self-calibrating threshold into a rubber stamp.  Hard LEFT so the RIGHT capture
+# channel stays free of it for envelope and avsync work.  The marker window
+# (0..600 ms) is not covered by this carrier; check it separately with
+# --carrier 3000.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
+A 700 1900 -100 40 0 15 0 0
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
+
+# ---- B1  1..11 s : phase 0 reference vs phase 90
+1000 10 50 100 255 255 255 3  0 0      # lane A: phase 0 (the reference)
+1000 10 50 100 255 255 255 12 0 90     # lane B: phase 90 -> edge 25 ms EARLIER
+
+# ---- B2  11..21 s : phase 0 reference vs phase 270
+11000 10 50 100 255 255 255 3  0 0
+11000 10 50 100 255 255 255 12 0 270   # edge 75 ms earlier = 25 ms later
+
+# ---- B3  21..31 s : ANTIPHASE.  NEEDS ONE SENSOR PER EYE -- a sensor seeing
+#      both lanes measures the residual of a near-cancellation and cannot grade
+#      a single cycle.  With one sensor per eye, expect the relative phase to
+#      read 180 +/- 2 deg (0.55 ms at 10 Hz); 178.1 deg was measured on the
+#      hardest shipped case.
+21000 10 50 100 255 255 255 3  0 0
+21000 10 50 100 255 255 255 12 0 180
+
+# ---- B4  31..43 s : PHASE RAMP.  lane B sweeps phase 180 -> 0 linearly over
+#      12 s while lane A holds phase 0.  phase/attack ramps require the present
+#      bit on BOTH ends, so B5's lane-B entry sets phase explicitly.
+#      NOTE THE START VALUE.  On an ALREADY-RUNNING channel the firmware
+#      discards the file's literal and starts the ramp from the channel's LIVE
+#      phase (led_matrix_example.c:2052-2056), so the literal is written as 180
+#      to MATCH the live value B3 left behind -- a `>0` here would still have
+#      ramped from 180 and the file would have lied about it.
+#      "Applied from the live period, so it stays a fixed phase through
+#      frequency ramps" -- the rate is constant here, so the phase slew is the
+#      only moving quantity: -15 deg/s = 4.17 ms of edge RETARD per second.
+31000 10 50 100 255 255 255 3  0 0
+31000 10 50 100 255 255 255 12 0 >180
+
+# ---- B5  43..53 s : ATTACK MODULATION on lane A (~ sine, 3 <-> 20 ms, 2 s
+#      period, trapezoid carrier) + lane B holding phase 180 as B4's ramp
+#      target.  attack is a compound cell, so the trapezoid edge breathes: the
+#      harmonic ladder should slide between the attack-3 and attack-20 rows of
+#      t04 at the LFO rate.  lane B's phase 0 is B4's ramp endpoint.
+43000 10 50 100 255 255 255 3  3 0 ~3:20:2000
+43000 10 50 100 255 255 255 12 0 0
+
+# ---- B6  53..68 s : JITTER.  lane A wanders +/-1.0 Hz with a 5 s full cycle
+#      (3 cycles in the block); lane B is the un-jittered control at 7 Hz.
+#      Amp is deliberately 1.0 Hz rather than the library-typical 0.3 so the
+#      wander is unmistakable.  Engine limits NOT in ledc_format.md:
+#      amp is clamped to 5 Hz and a period below 1000 ms is IGNORED
+#      (led_matrix_example.c:1696-1709).  A jittered channel is also excluded
+#      from the V-S4 cycle-origin snap, by design: there is no fixed lattice.
+53000 10 50 100 255 255 255 3  0 0 3 1.0:5000
+53000  7 50 100 255 255 255 12 0 0 3 0
+
+# ---- end
+68000 0 50 0 0 0 0 15
+68000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 68000 1900 -100 0 0 15 0 0            # stop the integrity carrier

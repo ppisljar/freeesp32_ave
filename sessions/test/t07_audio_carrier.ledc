@@ -1,0 +1,133 @@
+# t07_audio_carrier.ledc -- ALL EIGHT AUDIO WAVE TYPES, pan, volume.  ~71 s
+# NOT therapeutic.  Feature family: audio carrier.
+#
+# waveType values the parser accepts (config_parser.c:1652-1657, 0..7 because
+# AUDIO_WAVE_COUNT is 8):
+#     0 sine        1 square      2 triangle    3 sawtooth
+#     4 white noise 5 pink noise  6 brown noise 7 EEG contour
+# ledc_format.md documents only 0..6 and omits 7 -- see the README's "doc vs
+# parser" section.  Wave 7 is a CARRIER (it needs a real frequency), not noise.
+#
+# WHY FOUR CARRIERS AT ONCE.  The four geometric waves run simultaneously on
+# distinct, mutually non-harmonic carriers (311 / 503 / 701 / 1103 Hz), so ONE
+# spectrum grades all four at once: each wave is identified by its own harmonic
+# ladder, and no harmonic of one lands on another's.  This is the audio twin of
+# the distinct-flicker-rate trick on the LED side.
+#     sine     311: no harmonics above the noise floor
+#     square   503: ODD harmonics only, h3 0.333, h5 0.200, h7 0.143; h2 ~ 0
+#     triangle 701: ODD harmonics only, h3 0.111, h5 0.040 (1/n^2)
+#     sawtooth 1103: ALL harmonics, h2 0.500, h3 0.333, h4 0.250 (1/n)
+# The NOISE types cannot share a block -- they are broadband and would mask each
+# other -- so they are sequential, each with the previous explicitly silenced.
+#
+# EVERY audio row repeats its waveType column.  An entry on a running channel
+# that OMITS waveType silently resets that channel to sine (wave_type is filled
+# with no present-bit check), which is a real, still-unfixed inconsistency with
+# the `-` sentinel.
+#
+# RIG: capture ch1/ch2 on the device headphone jack (L and R, via a TRS
+# splitter) -- this file needs the AUDIO channels, the LED row is only a timing
+# reference.  Analyse with --sync-tone 3000.
+#
+#
+#
+# CAPTURE-INTEGRITY CARRIER (audio ch15, 1900 Hz sine, hard LEFT, vol 40, from
+# t=700 ms to the end of the file).  This is measurement scaffolding, not
+# content.  A recorder can lose a block of frames mid-capture and still write a
+# file of exactly the right length -- the missing TIME is simply absent -- and
+# the frame-count check is blind to it.  Five such steps were found in one 665 s
+# capture (~1 per 2.2 min), and one of them was written up as a firmware defect
+# because BOTH optical sensors agreed on it: the whole recording had stepped.
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 1900 --audio-ch 1
+# The tool needs a CONTINUOUS SINE: a session cycling square/saw/noise carriers
+# gives ~369 us of phase noise against ~1 us for a sine, which inflates its
+# self-calibrating threshold into a rubber stamp.  Hard LEFT so the RIGHT capture
+# channel stays free of it for envelope and avsync work.  The marker window
+# (0..600 ms) is not covered by this carrier; check it separately with
+# --carrier 3000.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
+# --------------------------------------------------------------- sync marker
+0     40 50 100 255 255 255 15
+A 0   3000 0 70 0 1
+600   0 50 0 0 0 0 15
+A 600 0 0 0 0 1
+
+# ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
+A 700 1900 -100 40 0 15 0 0
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
+
+# ---- LED timing reference: one steady 10 Hz entry for the whole file, so the
+#      light channel still gives analyze.py a t=0 and an event grid.  10 Hz is an
+#      exact divisor of the 10 kHz ISR tick (1000 ticks).
+1000 10 50 80 255 255 255 15 0 0
+
+# ---- B1  1..11 s : the four GEOMETRIC waves, simultaneously
+A 1000 311  0 60 0 1 0 0               # ch1 sine
+A 1000 503  0 60 0 2 0 1               # ch2 square
+A 1000 701  0 60 0 3 0 2               # ch3 triangle
+A 1000 1103 0 60 0 4 0 3               # ch4 sawtooth
+
+# ---- B2  11..21 s : WHITE noise alone (flat spectrum, 0 dB/octave).
+#      The four tone channels are silenced first or their lines would sit in the
+#      noise spectrum and be mistaken for structure.
+A 11000 311  0 0 0 1 0 0
+A 11000 503  0 0 0 2 0 1
+A 11000 701  0 0 0 3 0 2
+A 11000 1103 0 0 0 4 0 3
+A 11000 0 0 60 0 5 0 4                 # ch5 white (Galois LFSR)
+
+# ---- B3  21..31 s : PINK noise alone (-3 dB/octave, Kellet 3-pole IIR)
+A 21000 0 0 0 0 5 0 4
+A 21000 0 0 60 0 6 0 5                 # ch6 pink
+
+# ---- B4  31..41 s : BROWN noise alone (-6 dB/octave, leaky integrator)
+A 31000 0 0 0 0 6 0 5
+A 31000 0 0 60 0 7 0 6                 # ch7 brown
+
+# ---- B5  41..51 s : EEG CONTOUR carrier (wave 7) at 200 Hz on channel 8.
+#      Non-geometric single-cycle LUT, so its ladder matches neither a square
+#      nor a triangle nor a saw; grade it as "a 200 Hz periodic carrier with a
+#      reproducible, non-1/n, non-1/n^2 harmonic signature" and record the
+#      signature as the baseline.  Channel 8 also puts this on the high half of
+#      the channel array.
+A 41000 0 0 0 0 7 0 6
+A 41000 200 0 60 0 8 0 7
+
+# ---- B6  51..61 s : PAN.  Three carriers, three pan values, one block: the
+#      L/R level of each carrier line IS the measurement.  Equal-power law, so
+#      pan 0 puts -3.01 dB in each ear and pan +/-100 puts everything in one.
+A 51000 200 0 0 0 8 0 7
+A 51000 311 -100 60 0 1 0 0            # ch1 hard LEFT
+A 51000 503 0    60 0 2 0 1            # ch2 CENTRE
+A 51000 701 100  60 0 3 0 2            # ch3 hard RIGHT
+
+# ---- B7  61..71 s : VOLUME.  Four carriers at 80 / 40 / 20 / 10, i.e. three
+#      successive -6.02 dB steps -- an absolute-level ladder in one block.
+A 61000 311  0 80 0 1 0 0
+A 61000 503  0 40 0 2 0 1
+A 61000 701  0 20 0 3 0 2
+A 61000 1103 0 10 0 4 0 3
+
+# ---- end
+71000 0 50 0 0 0 0 15
+71000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 71000 1900 -100 0 0 15 0 0            # stop the integrity carrier
+A 71000 311  0 0 0 1 0 0
+A 71000 503  0 0 0 2 0 1
+A 71000 701  0 0 0 3 0 2
+A 71000 1103 0 0 0 4 0 3

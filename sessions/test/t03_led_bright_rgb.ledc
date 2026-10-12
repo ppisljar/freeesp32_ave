@@ -14,15 +14,51 @@
 # across time.  Never across the two sensors: ch1 and ch2 are not gain-matched
 # (they differ by a constant 0.33 ms in timing and by tens of dB in level).
 #
-# lane A = mask 3  (LED1+LED2, ch2 photocell) -- the variable under test, 10 Hz
-# lane B = mask 12 (LED3+LED4, ch1 photocell) -- fixed reference, 7 Hz
+# lane A = mask 3  (LED1+LED2, capture ch4) -- the variable under test, 10 Hz
+# lane B = mask 12 (LED3+LED4, capture ch3) -- fixed reference, 7 Hz
 # Distinct rates so a spectrum cannot confuse the two.
 #
+#
+#
+# CAPTURE-INTEGRITY CARRIER (audio ch15, 1900 Hz sine, hard LEFT, vol 40, from
+# t=700 ms to the end of the file).  This is measurement scaffolding, not
+# content.  A recorder can lose a block of frames mid-capture and still write a
+# file of exactly the right length -- the missing TIME is simply absent -- and
+# the frame-count check is blind to it.  Five such steps were found in one 665 s
+# capture (~1 per 2.2 min), and one of them was written up as a firmware defect
+# because BOTH optical sensors agreed on it: the whole recording had stepped.
+#   python3 tools/avmeasure/captureintegrity.py rec.wav --carrier 1900 --audio-ch 1
+# The tool needs a CONTINUOUS SINE: a session cycling square/saw/noise carriers
+# gives ~369 us of phase noise against ~1 us for a sine, which inflates its
+# self-calibrating threshold into a rubber stamp.  Hard LEFT so the RIGHT capture
+# channel stays free of it for envelope and avsync work.  The marker window
+# (0..600 ms) is not covered by this carrier; check it separately with
+# --carrier 3000.
+# CAPTURE-CHANNEL MAP used throughout sessions/test (see README.md):
+#   capture ch1,ch2 = device headphone jack L,R   capture ch3 = photocell on
+#   lane B's eye (LED3+LED4, mask 12)             capture ch4 = photocell on
+#   lane A's eye (LED1+LED2, mask 3).
 # --------------------------------------------------------------- sync marker
 0     40 50 100 255 255 255 15
 A 0   3000 0 70 0 1
 600   0 50 0 0 0 0 15
 A 600 0 0 0 0 1
+
+# ---- capture-integrity carrier: continuous 1900 Hz sine, ch15, hard LEFT
+A 700 1900 -100 40 0 15 0 0
+
+# ---- ISR TICK PRIMER.  The flicker gptimer is DELETED whenever no channel is
+#      left running and the next activation re-derives its tick from the 1000 Hz
+#      FLOOR, so the marker's `freq 0` stop at 600 ms RESETS it -- the 40 Hz
+#      marker does NOT pin the tick.  Worse, an update on an already-running
+#      channel never calls s_ensure_timer_and_task, so whatever the FIRST
+#      post-marker block sets is what every later block gets.
+#      This row keeps ONE channel alive at 40 Hz for the whole file, pinning the
+#      tick at clamp(40*250,1000,10000) = 10000 Hz = a 100 us grid everywhere
+#      below.  mask 16 = LED5, which neither sensor can see (-78 / -74 dBFS, the
+#      noise floor), and brightness is 0 regardless, so it cannot contaminate a
+#      measurement on any unit.  It raises LEDC_MASK_HIGH_BITS (info) by design.
+1000 40 50 0 0 0 0 16 0 0
 
 # ---- lane B: ONE entry, constant for the whole file.  7 Hz, RGB 255,
 #      bright 100 (drive 255, dead centre of the linear region).  Every lane-A
@@ -63,3 +99,5 @@ A 600 0 0 0 0 1
 
 # ---- end
 71000 0 50 0 0 0 0 15
+71000 0 50 0 0 0 0 16                     # stop the tick primer too
+A 71000 1900 -100 0 0 15 0 0            # stop the integrity carrier
