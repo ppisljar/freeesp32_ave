@@ -643,8 +643,16 @@ def _parse_audio(toks: list[str], raw: str, line_no: int):
     e.channel = c_atol(toks[5]) if (n >= 6 and not tok_is_dash(toks[5])) else 0
 
     if n >= 7 and not tok_is_dash(toks[6]):
-        fr = c_atof(toks[6])      # plain atof -- an interp glyph yields 0.0
-        e.freq_r_had_prefix = toks[6][0] in _PREFIX_MAP
+        # freqR is a COMPOUND cell now (format v3), so strip the interpolation
+        # glyph before reading the number. It used to be a plain atof(), where a
+        # glyph yielded 0.0 and collapsed the channel to mono -- modelling that
+        # faithfully was correct then and is wrong now, because the firmware
+        # honours '>' and '*' here and gliding the right ear is the recommended
+        # way to sweep a beat.
+        tok = toks[6]
+        e.freq_r_had_prefix = tok[0] in _PREFIX_MAP
+        body = tok[1:] if e.freq_r_had_prefix else tok
+        fr = c_atof(body.split(':')[0])
         e.freq_r = fr if 0.0 < fr <= (dm.AUDIO_SAMPLE_RATE / 2.0) else 0.0
         e.present |= AUD_SET_FREQR
     if n >= 8 and not tok_is_dash(toks[7]):
@@ -1222,18 +1230,17 @@ class _Simulator:
         else:
             st["wave"] = a.wave
 
-        if a.freq_r_had_prefix:
-            # ledc_format.md:39 wrongly lists freqR as a prefix-capable cell.
-            # Neither parser implements that: atof(">250") is 0.0, which forces
-            # the channel to MONO and silently destroys the binaural detune.
-            self.lints.append(Finding(
-                code="LEDC_FREQR_PREFIX", severity="error", domain="audio",
-                line_no=a.line_no, t_ms=float(a.time_ms), channel=ch,
-                message=f"audio ch{ch} at t={a.time_ms}: the freqR column carries "
-                        f"an interpolation glyph, which parses as 0.0 and collapses "
-                        f"the channel to MONO (no binaural beat at all). freqR "
-                        f"cannot be ramped -- it can only step.",
-                detail="config_parser.c:1627-1631, ledc_format.md:39"))
+        # freqR used to be parsed with a bare atof(), so an interpolation glyph
+        # became 0.0 and silently collapsed the channel to MONO -- which is what
+        # the LEDC_FREQR_PREFIX lint existed to catch, at error severity. The
+        # parser uses parse_v2_cell now and the ramp works, so the lint would
+        # raise an error on the very idiom the format recommends for gliding a
+        # beat. Retired rather than reworded: there is no longer a defect here.
+        #
+        # One real limitation remains, and the PARSER reports it directly with a
+        # warning rather than needing a lint: a PERIODIC glyph (~ ^ / \ _) on
+        # freqR is dropped, because that needs a MOD_AUDIO_* entry in the mod
+        # engine. '>' and '*' are honoured.
 
         if a.present & AUD_SET_ENV:
             st["env"] = a.env

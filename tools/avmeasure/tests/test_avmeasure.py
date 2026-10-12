@@ -1128,14 +1128,45 @@ class TestFirmwareSemantics(unittest.TestCase):
         self.assertFalse(any(f.code == "LEDC_LAST_ENTRY_CANCELLED"
                              for f in exp2.lints))
 
-    def test_49_freqr_prefix_collapses_to_mono(self):
+    def test_49_freqr_prefix_keeps_the_beat(self):
+        """A glyph on freqR used to collapse the channel to mono. Not any more.
+
+        freqR was parsed with a bare atof(), so '>250' became 0.0 and SILENTLY
+        destroyed the binaural detune -- the worst failure available to a
+        binaural device, and the format doc had listed freqR as rampable all
+        along. It is a real compound cell now (verified on hardware: the beat
+        glided 16.78 -> 50.00 Hz with the left carrier held at 400), so the
+        detune must survive and the LEDC_FREQR_PREFIX lint is retired.
+        """
         p = self._parse_one("A 0 240 0 55 0 1 >250 0\n")
         exp = le.build_expectation(p, duration_s=3.0)
-        self.assertAlmostEqual(exp.audio[1].beat_hz[10], 0.0, places=6)
-        self.assertTrue(any(f.code == "LEDC_FREQR_PREFIX" for f in exp.lints))
+        self.assertAlmostEqual(exp.audio[1].beat_hz[10], 10.0, places=3,
+                               msg="240 vs 250 is a 10 Hz beat; a glyph must not zero it")
+        self.assertFalse(any(f.code == "LEDC_FREQR_PREFIX" for f in exp.lints),
+                         "the lint describes a defect that is now fixed")
 
+    @unittest.skip("model not yet updated for DC channels -- see the note below")
     def test_50_led_freq_zero_stops_flicker(self):
-        # config_parser.c:2729 -- freq <= 0 means STOP, not DC-on.
+        """SKIPPED: the DEVICE behaviour this asserts was fixed; the MODEL lags.
+
+        freq 0 no longer stops a channel -- it selects a DC channel, constant
+        output with no flicker gate. The ISR always implemented that ("DC channel
+        (frequency 0)" in led_matrix_example.c, which even evaluates brightness
+        and colour sweeps every tick) but no timeline could reach it, because the
+        dispatcher turned freq <= 0 into a stop. 19 shipped therapeutic sessions
+        write freq 0 with a non-zero brightness to ask for a steady lamp --
+        including 31_ganzfeld_amber, where a Ganzfeld IS a uniform light field --
+        and every one rendered BLACK. Confirmed on hardware both ways: before the
+        fix 05_focus_smr's opening rows left LED1/LED3 at active=false; after, they
+        report active=true with brightness ramping 2->5->7->10 and the right colour.
+
+        This test is skipped rather than inverted because ledc_expect.py still
+        models freq 0 as a stop, so there is nothing correct to assert against
+        yet. Inverting it against a stale model would have it pass while the model
+        reports every one of those 19 sessions as dark. Updating the model to
+        carry a DC channel (active, no flicker, constant level) is tracked
+        separately; re-enable and invert this test as part of that.
+        """
         p = self._parse_one(
             "0 10 50 60 255 255 255 1\n"
             "5000 0 50 60 255 255 255 1\n"

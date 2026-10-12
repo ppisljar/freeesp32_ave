@@ -2816,8 +2816,24 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
 
     esp_err_t led_ret = ESP_OK;
 
-    if (led->frequency <= 0.0f) {
-        // freq=0 means stop flicker on these channels
+    // freq < 0 stops the channel. freq == 0 does NOT: it means a DC channel,
+    // constant output with no flicker gate, which the ISR has always implemented
+    // and no timeline could reach because this test used to be `<= 0`.
+    //
+    // 19 shipped therapeutic sessions write `freq 0` with a non-zero brightness
+    // to ask for a steady lamp -- 03_deep_relaxation, 05_focus_smr, 06_energize,
+    // 08_calm_anxiety, 12_astral_focus10, 13_astral_deep, 28/29_noise_sleep,
+    // 31_ganzfeld_amber, 33_ego_dissolution_swap and their RGB twins -- and every
+    // one of them rendered BLACK for its whole run. Confirmed on hardware before
+    // the fix: 05_focus_smr's opening rows left LED1 and LED3 at active=false.
+    // 31_ganzfeld_amber is the clearest case, since a Ganzfeld IS a uniform
+    // unstructured light field; with no light the session does nothing at all.
+    //
+    // Turning a channel off still works and needs no special case: a DC channel
+    // at brightness 0 is dark, which is what every session's closing row already
+    // writes, and the end-of-timeline handler stops every channel regardless.
+    if (led->frequency < 0.0f) {
+        // negative freq means stop flicker on these channels
         esp_err_t ret = led_matrix_stop_flicker_masked(led->channel_mask);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to stop LED flicker on mask 0x%02x: %s",

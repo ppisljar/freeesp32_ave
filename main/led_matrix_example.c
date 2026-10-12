@@ -1462,8 +1462,16 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         ESP_LOGE(TAG, "Matrix handle not initialized");
         return ESP_ERR_INVALID_STATE;
     }
-    if (frequency <= 0.0f || frequency > 100.0f) {
-        ESP_LOGE(TAG, "Invalid flicker frequency: %.1f Hz (must be 0.1-100.0)", frequency);
+    // frequency == 0 is LEGAL and means a DC channel: constant output, no flicker
+    // gate. The ISR has implemented that for a long time ("DC channel (frequency
+    // 0)" above, which even evaluates brightness/colour sweeps and modulations
+    // every tick) but no timeline could reach it, because the dispatcher turned
+    // freq 0 into a STOP. 19 shipped therapeutic sessions ask for a steady lamp
+    // this way -- including 31_ganzfeld_amber, where a Ganzfeld IS a uniform
+    // light field -- and every one of them rendered black.
+    if (frequency < 0.0f || frequency > 100.0f) {
+        ESP_LOGE(TAG, "Invalid flicker frequency: %.1f Hz (must be 0 for DC, or 0.1-100.0)",
+                 frequency);
         return ESP_ERR_INVALID_ARG;
     }
     if (duty_cycle > 100) {
@@ -1576,7 +1584,11 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
             // (≈ 166 ms at 6 Hz) before the ISR's cycle-boundary recompute
             // set the real value.  See plans/007_timeline_sync_architecture.md
             // Step 1.3 and bug_led_audio_phase_sync_2026-06-17.md (Inv 10).
-            {
+            if (freq_milliHz == 0u) {
+                // DC: no cycle, so no on-time. The ISR's DC branch ignores this
+                // and publishes the constant level directly.
+                s->latched_on_time_us = 0;
+            } else {
                 uint64_t cycle_duration_us = (1000000ULL * 1000ULL) / (uint64_t)freq_milliHz;
                 s->latched_on_time_us = (cycle_duration_us * (uint64_t)duty_cycle) / 100ULL;
             }
@@ -1770,7 +1782,7 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
                                                   uint8_t duty_cycle, uint8_t brightness,
                                                   uint64_t cycle_hint_us)
 {
-    if (frequency <= 0.0f || frequency > 100.0f) {
+    if (frequency < 0.0f || frequency > 100.0f) {   // 0 = DC channel
         ESP_LOGE(TAG, "Invalid flicker frequency: %.1f Hz", frequency);
         return ESP_ERR_INVALID_ARG;
     }
@@ -2157,7 +2169,15 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
     uint32_t init_freq_milliHz = (spec->freq_curve != LED_INTERP_NONE)
                                   ? spec->freq_milliHz_start
                                   : spec->freq_milliHz_target;
-    if (init_freq_milliHz == 0) return ESP_ERR_INVALID_ARG;
+    // 0 is legal: a DC channel. A brightness RAMP on a DC row (e.g.
+    // `0 0 100 >0 180 200 255 5`, the opening of 05_focus_smr) routes here, so
+    // rejecting 0 is what kept those sessions dark even though the ISR supports
+    // the mode.
+    if (spec->freq_curve != LED_INTERP_NONE && init_freq_milliHz == 0) {
+        ESP_LOGE(TAG, "Cannot SWEEP the flicker rate from 0 Hz (DC): there is no "
+                      "cycle to interpolate. Step to a rate first.");
+        return ESP_ERR_INVALID_ARG;
+    }
 
     /* Range guards. start_flicker_masked rejects freq>100 Hz, duty>100 and
      * bright>100, but this path did not -- so a RAMPED out-of-range entry
