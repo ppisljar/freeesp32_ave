@@ -1202,21 +1202,25 @@ class _Simulator:
         st.update(freq=eff["freq"], pan=eff["pan"], vol=eff["vol"], mod=eff["mod"],
                   freq_r=eff["freq_r"])
 
-        # WAVEFORM RESET BUG (config_parser.c:2358 + audio_generator.c:858-859):
-        # gen_params.wave_type is filled from the parsed value with NO check of
-        # AUD_SET_WAVE and latched unconditionally, so ANY later entry on a
-        # running channel that omits waveType silently resets it to SINE.
-        st["wave"] = a.wave
-        if was_active and not (a.present & AUD_SET_WAVE) and self.aud_kfs[ch]:
-            prev = self.aud_kfs[ch][-1].state.get("wave", 0)
-            if prev != 0:
-                self.lints.append(Finding(
-                    code="LEDC_WAVE_RESET", severity="warning", domain="audio",
-                    line_no=a.line_no, t_ms=float(a.time_ms), channel=ch,
-                    message=f"audio ch{ch} at t={a.time_ms} omits waveType, which "
-                            f"silently RESETS the channel from wave {prev} to 0 "
-                            f"(sine). Repeat the waveType column to keep it.",
-                    detail="config_parser.c:2358, audio_generator.c:858-859"))
+        # WAVEFORM: an omitted waveType now LEAVES the channel's waveform alone,
+        # which is the format's general rule for every optional trailing column.
+        #
+        # It used not to: gen_params.wave_type was filled from the parsed value
+        # with no check of AUD_SET_WAVE and latched unconditionally, so any later
+        # entry on a running channel that omitted the column silently reset it to
+        # SINE. That was LEDC_WAVE_RESET, 21 occurrences across the library.
+        # config_parser.c now substitutes the LIVE value (via
+        # audio_generator_get_wave_type_locked) when the bit is clear, so the
+        # model must carry the previous waveform forward instead of flagging it --
+        # keeping the old lint would raise a warning on 21 entries for a defect
+        # that no longer exists, and keeping the old STATE would make every
+        # downstream waveform expectation wrong.
+        if (a.present & AUD_SET_WAVE):
+            st["wave"] = a.wave
+        elif was_active and self.aud_kfs[ch]:
+            st["wave"] = self.aud_kfs[ch][-1].state.get("wave", 0)
+        else:
+            st["wave"] = a.wave
 
         if a.freq_r_had_prefix:
             # ledc_format.md:39 wrongly lists freqR as a prefix-capable cell.

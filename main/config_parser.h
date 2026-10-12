@@ -100,6 +100,7 @@ static inline bool config_interp_is_modulation(config_interpolation_t i)
 #define AUD_SET_PHASE   (1u << 8)
 #define AUD_SET_ATTACK  (1u << 9)
 #define AUD_SET_JITTER  (1u << 10)
+#define AUD_SET_DEPTH   (1u << 11)   /* isochronic/tremolo depth, 14th column */
 #define AUD_SET_CORE    (AUD_SET_FREQ|AUD_SET_PAN|AUD_SET_VOL|AUD_SET_MOD)
 
 /* Modulation extras: each interpolatable field carries two extra floats
@@ -174,6 +175,14 @@ typedef struct {
     float    attack_ms;       // raised edge duration (ms)
     float    jitter_amp_hz;   // beat-offset jitter amplitude (Hz, 0=off)
     float    jitter_period_ms;// beat-offset jitter period (ms)
+    /* Isochronic/tremolo DEPTH (%), 14th column. How far the gate pulls the
+     * carrier down: applied as sample *= (1-depth) + depth*gate, so 100 reaches
+     * silence between pulses (a true isochronic tone) and 0 is no modulation.
+     * Absent => a per-ENVELOPE default, because the two families want opposite
+     * things: the unipolar gates (env 0..3) want a real pulse, the legacy
+     * bipolar tremolo (env 4) wants a gentle wobble. Depth used to be hardcoded
+     * at 0.1 for both, which measured ~5.8% actual gate depth. */
+    float    depth_pct;
     /* duty/phase/attack are compound cells per ledc_format.md — same treatment
      * as the core fields above. env/jitter are not. */
     config_interpolation_t duty_interp;
@@ -183,6 +192,10 @@ typedef struct {
     uint16_t phase_mod_end;
     uint32_t phase_mod_period_ms;
     float    attack_mod_end, attack_mod_period_ms;
+    config_interpolation_t freqr_interp;
+    float    freqr_mod_end,  freqr_mod_period_ms;
+    config_interpolation_t depth_interp;
+    float    depth_mod_end,  depth_mod_period_ms;
     uint16_t present;         // AUD_SET_* bitmask: which fields this line sets ('-'/absent → leave)
 } config_audio_entry_t;
 

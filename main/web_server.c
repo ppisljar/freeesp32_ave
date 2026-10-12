@@ -1607,7 +1607,11 @@ static esp_err_t iso_env_handler(httpd_req_t *req)
     size_t qlen = httpd_req_get_url_query_len(req) + 1;
     if (qlen > 1 && qlen < 128) {
         char q[128], val[16];
-        uint8_t env = 0; float duty = 0, attack = -1, depth = 0; int ch = -1;
+        // depth defaults to -1 = "leave unchanged", matching duty/attack. It used
+        // to be 0, which was the old "unset" marker; now that 0 is a REAL depth
+        // (no modulation at all) a request omitting ?depth= would have silenced
+        // the gate instead of leaving it alone.
+        uint8_t env = 0; float duty = 0, attack = -1, depth = -1; int ch = -1;
         bool have = false;
         if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
             if (httpd_query_key_value(q, "env",    val, sizeof(val)) == ESP_OK) { env    = (uint8_t)atoi(val); have = true; }

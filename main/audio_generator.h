@@ -72,6 +72,11 @@ typedef enum {
     AUDIO_PARAM_ISO_DUTY,
     AUDIO_PARAM_ISO_PHASE,
     AUDIO_PARAM_ISO_ATTACK,
+    AUDIO_PARAM_ISO_DEPTH,
+    /* Right-ear carrier. Evaluated once per BUFFER rather than per sample like
+     * AUDIO_PARAM_FREQUENCY: a binaural beat glide moves over seconds, so 23 ms
+     * resolution is ample and the phase accumulator keeps it continuous. */
+    AUDIO_PARAM_FREQ_R,
     AUDIO_PARAM_COUNT
 } audio_param_t;
 
@@ -126,7 +131,7 @@ typedef struct {
     uint8_t  iso_env;         // ISO_ENV_* (0 square,1 sine,2 triangle,3 trapezoid,4 tremolo)
     float    iso_duty;        // on-fraction of the mod cycle (0..1)
     float    iso_attack_ms;   // raised edge duration (ms, click-safe ≥2)
-    float    iso_depth;       // 0 = use params.mod_depth; >0 overrides depth
+    float    iso_depth;       // -1 = use params.mod_depth; 0..1 = real depth (0 = none)
     uint64_t samples_generated;
     // Wall-clock instant the channel was armed (esp_timer, us), or 0 once the
     // start-latency catch-up in fill_buffer has consumed it. The channel goes
@@ -383,6 +388,14 @@ esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, flo
 /* Set the waveform of an active channel directly (wave_type isn't sweepable).
  * Used to switch noise type live. Caller must hold audio_gen_mutex. */
 esp_err_t audio_generator_set_wave_type_locked(int channel, audio_wave_type_t wt);
+
+/* Read the ACTIVE waveform of a channel. Needed because an omitted trailing
+ * waveType column means "leave unchanged" (the format's general rule for every
+ * optional trailing field), and the pending-params latch assigns wave_type
+ * unconditionally -- so the dispatcher has to put the LIVE value back into
+ * gen_params rather than let a zero-initialised entry reset the channel to
+ * sine. That silent reset was the LEDC_WAVE_RESET lint. */
+esp_err_t audio_generator_get_wave_type_locked(int channel, uint8_t *out);
 
 /* Set the right-ear (binaural) carrier frequency of an active channel directly.
  * freq_r isn't an AUDIO_PARAM_* sweep field, so live changes (e.g. a Live Control

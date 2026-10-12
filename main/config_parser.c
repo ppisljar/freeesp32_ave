@@ -1641,12 +1641,29 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
         audio_entry->channel = req;
     }
 
-    // Token 6 (optional): freq_r — right-ear frequency for binaural beat. '-'/absent
-    // → leave (present bit clear); 0/out-of-range → 0.0 ("same as left").
+    // Token 6 (optional): freq_r — right-ear frequency for binaural beat.
+    // '-'/absent → leave (present bit clear); 0/out-of-range → 0.0 ("same as left").
+    //
+    // A COMPOUND cell, as ledc_format.md always claimed. It used to be a bare
+    // atof(), so `>250` evaluated to 0.0 and SILENTLY collapsed the channel to
+    // mono — killing the binaural beat with no error at all, which is the worst
+    // possible failure for a binaural device. Ramping the right ear is the direct
+    // way to glide a beat, so the prefix now works rather than being destroyed.
     if (token_count >= 7 && !tok_is_dash(tokens[6])) {
-        float freq_r = atof(tokens[6]);
-        audio_entry->frequency_r = (freq_r > 0.0f && freq_r <= (AUDIO_GEN_SAMPLE_RATE / 2.0f)) ? freq_r : 0.0f;
+        float end_f = 0.0f, period_f = 0.0f;
+        float freq_r = parse_v2_cell(tokens[6], &audio_entry->freqr_interp, &end_f, &period_f);
+        const float nyq = (float)AUDIO_GEN_SAMPLE_RATE / 2.0f;
+        audio_entry->frequency_r = (freq_r > 0.0f && freq_r <= nyq) ? freq_r : 0.0f;
+        audio_entry->freqr_mod_end = (end_f > 0.0f && end_f <= nyq) ? end_f : 0.0f;
+        audio_entry->freqr_mod_period_ms = period_f;
         audio_entry->present |= AUD_SET_FREQR;
+        if (config_interp_is_modulation(audio_entry->freqr_interp)) {
+            ESP_LOGW(TAG, "freqR at t=%u carries a periodic modulation prefix, which "
+                          "is not implemented yet — holding %.2f Hz. Use '>' or '*' to "
+                          "glide the beat.",
+                     (unsigned)audio_entry->time_ms, audio_entry->frequency_r);
+            audio_entry->freqr_interp = CONFIG_INTERP_NONE;
+        }
     }
 
     // Token 7 (optional): wave_type — 0..6 → audio_wave_type_t. '-'/absent → leave.
@@ -1691,6 +1708,23 @@ static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, conf
         audio_entry->jitter_period_ms = 45000.0f;  // default wander period if only amp given
         audio_entry->jitter_amp_hz    = parse_jitter_token(tokens[12], &audio_entry->jitter_period_ms);
         audio_entry->present |= AUD_SET_JITTER;
+    }
+    // Token 13 (optional): depth — isochronic/tremolo depth in percent. Appended
+    // LAST so every pre-existing file keeps its column positions.
+    if (token_count >= 14 && !tok_is_dash(tokens[13])) {
+        float end_f = 0.0f, period_f = 0.0f;
+        float d = parse_v2_cell(tokens[13], &audio_entry->depth_interp, &end_f, &period_f);
+        audio_entry->depth_pct = clamp_pct(d);
+        audio_entry->depth_mod_end = clamp_pct(end_f);
+        audio_entry->depth_mod_period_ms = period_f;
+        audio_entry->present |= AUD_SET_DEPTH;
+        if (config_interp_is_modulation(audio_entry->depth_interp)) {
+            ESP_LOGW(TAG, "depth at t=%u carries a periodic modulation prefix, which "
+                          "is not implemented yet — holding %.1f%%. Use '>' or '*' to "
+                          "ramp it.",
+                     (unsigned)audio_entry->time_ms, audio_entry->depth_pct);
+            audio_entry->depth_interp = CONFIG_INTERP_NONE;
+        }
     }
 
     return ESP_OK;
@@ -2356,6 +2390,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         float eff_pan    = audio->pan / 100.0f;      // -100/+100 → -1.0/+1.0
         float eff_mod    = audio->modulation;
         float eff_freq_r = audio->frequency_r;
+        uint8_t eff_wave = audio->wave_type;
         if (ch_active && lock_held) {
             float v;
             if (!(audio->present & AUD_SET_FREQ)  && audio_generator_get_param_locked(audio->channel, AUDIO_PARAM_FREQUENCY, &v) == ESP_OK) eff_freq = v;
@@ -2363,6 +2398,15 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             if (!(audio->present & AUD_SET_PAN)   && audio_generator_get_param_locked(audio->channel, AUDIO_PARAM_PAN,       &v) == ESP_OK) eff_pan  = v;
             if (!(audio->present & AUD_SET_MOD)   && audio_generator_get_param_locked(audio->channel, AUDIO_PARAM_MOD_FREQ,  &v) == ESP_OK) eff_mod  = v;
             if (!(audio->present & AUD_SET_FREQR) && audio_generator_get_current_freq_r_locked(audio->channel, &v) == ESP_OK) eff_freq_r = v;
+            // An omitted trailing waveType means "leave unchanged", same as '-'.
+            // Without this the zero-initialised entry resets the channel to sine
+            // (the LEDC_WAVE_RESET lint), which contradicts the format's own rule
+            // that trailing fields left off behave like '-'.
+            uint8_t wv;
+            if (!(audio->present & AUD_SET_WAVE) &&
+                audio_generator_get_wave_type_locked(audio->channel, &wv) == ESP_OK) {
+                eff_wave = wv;
+            }
         }
 
         audio_gen_params_t gen_params = {
@@ -2374,7 +2418,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             // mod_depth hardcoded per spec (no field defined); Phase 4 may
             // expose a Kconfig override.
             .mod_depth   = 0.1f,
-            .wave_type   = (audio_wave_type_t)audio->wave_type,
+            .wave_type   = (audio_wave_type_t)eff_wave,
             // Legacy sweep fields unused — sweep is driven via
             // audio_generator_start_sweep() after channel start.
             .sweep_type  = AUDIO_GEN_SWEEP_NONE,
@@ -2420,11 +2464,23 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             // not present is passed as its "leave" sentinel so untouched values
             // stay. phase is per-channel. beat jitter is a session-wide setting
             // (global engine) applied when the field is present.
-            if (audio->present & (AUD_SET_ENV | AUD_SET_DUTY | AUD_SET_ATTACK)) {
+            if (audio->present & (AUD_SET_ENV | AUD_SET_DUTY | AUD_SET_ATTACK | AUD_SET_DEPTH)) {
                 int   env_arg    = (audio->present & AUD_SET_ENV)    ? (int)audio->env       : -1;
                 float duty_arg   = (audio->present & AUD_SET_DUTY)   ? audio->duty_pct       : -1.0f;
                 float attack_arg = (audio->present & AUD_SET_ATTACK) ? audio->attack_ms      : -1.0f;
-                audio_generator_set_iso_channel(audio->channel, env_arg, duty_arg, attack_arg, -1.0f);
+                /* Depth: explicit column wins. Otherwise, an entry that SELECTS an
+                 * envelope also picks that envelope's natural depth, because the
+                 * two families want opposite things -- a unipolar gate (env 0..3)
+                 * is meant to be a discrete pulse, while env 4 is a gentle
+                 * bipolar tremolo. Before this, both shared a hardcoded 0.1 and
+                 * every "isochronic" gate measured ~5.8% depth: a tremolo, not a
+                 * pulse. An entry that touches neither passes the leave-alone
+                 * sentinel so a channel's depth survives unrelated edits. */
+                float depth_arg;
+                if (audio->present & AUD_SET_DEPTH)    depth_arg = audio->depth_pct;
+                else if (audio->present & AUD_SET_ENV) depth_arg = (audio->env <= 3) ? 100.0f : 10.0f;
+                else                                   depth_arg = -1.0f;
+                audio_generator_set_iso_channel(audio->channel, env_arg, duty_arg, attack_arg, depth_arg);
             }
             if (audio->present & AUD_SET_PHASE) {
                 audio_generator_set_phase(audio->channel, audio->phase_deg);
@@ -2608,7 +2664,7 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                 }
             }
 
-            /* Pulse-shape ramps (duty / phase / attack).
+            /* Pulse-shape ramps (duty / phase / attack / depth).
              *
              * Deliberately outside the block above, which ramps toward the
              * immediately-next entry. These scan forward for the next entry that
@@ -2629,6 +2685,10 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
                       audio->duty_pct,         "duty"   },
                     { AUD_SET_PHASE,  audio->phase_interp,  AUDIO_PARAM_ISO_PHASE,
                       (float)audio->phase_deg, "phase"  },
+                    { AUD_SET_FREQR,  audio->freqr_interp,  AUDIO_PARAM_FREQ_R,
+                      audio->frequency_r,      "freqR"  },
+                    { AUD_SET_DEPTH,  audio->depth_interp,  AUDIO_PARAM_ISO_DEPTH,
+                      audio->depth_pct,        "depth"  },
                     { AUD_SET_ATTACK, audio->attack_interp, AUDIO_PARAM_ISO_ATTACK,
                       audio->attack_ms,        "attack" },
                 };
@@ -2643,6 +2703,8 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
 
                     float target = (pulse[pi].param == AUDIO_PARAM_ISO_DUTY)  ? nx->duty_pct
                                  : (pulse[pi].param == AUDIO_PARAM_ISO_PHASE) ? (float)nx->phase_deg
+                                 : (pulse[pi].param == AUDIO_PARAM_ISO_DEPTH) ? nx->depth_pct
+                                 : (pulse[pi].param == AUDIO_PARAM_FREQ_R)    ? nx->frequency_r
                                  :                                              nx->attack_ms;
                     uint32_t win_ms = nx->time_ms - audio->time_ms;
                     uint64_t win_samples = ((uint64_t)win_ms * AUDIO_GEN_SAMPLE_RATE) / 1000ULL;

@@ -143,7 +143,11 @@ static SemaphoreHandle_t audio_gen_mutex = NULL;
 static volatile uint8_t  s_iso_env       = ISO_ENV_TREMOLO; // legacy bipolar sine tremolo
 static volatile float    s_iso_duty      = 0.5f;         // on-fraction of the mod cycle (0..1)
 static volatile float    s_iso_attack_ms = 3.0f;         // raised edge duration (click-safe ≥2 ms)
-static volatile float    s_iso_depth     = 0.0f;         // >0 overrides mod_depth (test aid)
+// Depth override. -1 = UNSET (fall back to params.mod_depth); 0..1 = a real
+// depth, and 0 genuinely means "no modulation". The marker cannot be 0: `depth 0`
+// in a .ledc, or a depth ramp reaching 0, would otherwise land back on the
+// hardcoded params.mod_depth and produce 10% modulation instead of silence.
+static volatile float    s_iso_depth     = -1.0f;
 // Complement 4: audio pulse phase is PER-CHANNEL (only relative phase matters);
 // stored as channel->mod_phase_offset_q32 (a fixed fraction of the mod cycle → so
 // it's frequency-independent by construction). Set via audio_generator_set_phase().
@@ -211,7 +215,7 @@ void audio_generator_set_iso(uint8_t env, float duty_pct, float attack_ms, float
     s_iso_env       = (env <= ISO_ENV_TREMOLO) ? env : ISO_ENV_TREMOLO;
     if (duty_pct   > 0.0f) s_iso_duty      = (duty_pct   > 100.0f ? 100.0f : duty_pct)   * 0.01f;
     if (attack_ms >= 0.0f) s_iso_attack_ms = attack_ms;
-    s_iso_depth = (depth_pct <= 0.0f) ? 0.0f : (depth_pct > 100.0f ? 1.0f : depth_pct * 0.01f);
+    s_iso_depth = (depth_pct < 0.0f) ? -1.0f : (depth_pct > 100.0f ? 1.0f : depth_pct * 0.01f);
     for (int c = 0; c < NUM_AUDIO_CHANNELS; c++) {
         audio_channels[c].iso_env       = s_iso_env;
         audio_channels[c].iso_duty      = s_iso_duty;
@@ -260,6 +264,15 @@ void audio_generator_set_beat_jitter(float amp_hz, float period_ms) {
 /* Unit conversions shared by the setters and the per-block sweep/mod evaluation,
  * so an animated value lands in exactly the same representation a static one
  * does. duty: percent -> 0..1 on-fraction. phase: degrees -> Q32 cycle fraction. */
+/* Depth: percent -> 0..1 gate amplitude. Clamped exactly like duty, and note
+ * that 0 is meaningful here (no modulation at all), which is why the generator's
+ * "use params.mod_depth" sentinel has to be a NEGATIVE value rather than 0. */
+static inline float iso_depth_from_pct(float pct) {
+    if (pct < 0.0f)   pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
+    return pct * 0.01f;
+}
+
 static inline float iso_duty_from_pct(float pct) {
     if (pct < 0.0f)   pct = 0.0f;
     if (pct > 100.0f) pct = 100.0f;
@@ -428,7 +441,7 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
     ch->iso_env       = s_iso_env;
     ch->iso_duty      = s_iso_duty;
     ch->iso_attack_ms = s_iso_attack_ms;
-    ch->iso_depth     = s_iso_depth;
+    ch->iso_depth     = s_iso_depth;   /* -1 = unset; see s_iso_depth */
 
     // Layer 3 (Plan 007 Step 3.3): pre-advance Q32 phase by the DMA pipeline depth
     // so that phase = 0 lands at the moment the channel's first sample emerges from
@@ -879,6 +892,24 @@ esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t sam
             channel->iso_attack_ms = fmaxf(0.0f, audio_eval_mod(channel, AUDIO_PARAM_ISO_ATTACK, mod_now_us));
         } else if (channel->sweeps[AUDIO_PARAM_ISO_ATTACK].duration_samples > 0) {
             channel->iso_attack_ms = fmaxf(0.0f, audio_eval_sweep_block(channel, AUDIO_PARAM_ISO_ATTACK));
+        }
+        /* freqR ramp. Writing the interpolated value straight into
+         * params.frequency_r is deliberate: the two places that derive
+         * current_freq_r (and the binaural_bypass test) all read that field, so
+         * they pick the glide up with no change to the per-sample hot path. The
+         * pending-params latch runs earlier in this same buffer, so it sets the
+         * entry's start value and this overrides it; on later buffers the latch
+         * does not fire and the ramp simply continues. */
+        if (channel->sweeps[AUDIO_PARAM_FREQ_R].duration_samples > 0) {
+            float fr = audio_eval_sweep_block(channel, AUDIO_PARAM_FREQ_R);
+            if (fr > 0.0f && fr <= (float)AUDIO_SAMPLE_RATE * 0.5f) {
+                channel->params.frequency_r = fr;
+            }
+        }
+        if (channel->mods[AUDIO_PARAM_ISO_DEPTH].active) {
+            channel->iso_depth = iso_depth_from_pct(audio_eval_mod(channel, AUDIO_PARAM_ISO_DEPTH, mod_now_us));
+        } else if (channel->sweeps[AUDIO_PARAM_ISO_DEPTH].duration_samples > 0) {
+            channel->iso_depth = iso_depth_from_pct(audio_eval_sweep_block(channel, AUDIO_PARAM_ISO_DEPTH));
         }
         if (channel->mods[AUDIO_PARAM_ISO_PHASE].active) {
             channel->mod_phase_offset_q32 = iso_phase_to_q32(audio_eval_mod(channel, AUDIO_PARAM_ISO_PHASE, mod_now_us));
@@ -1506,7 +1537,7 @@ esp_err_t IRAM_ATTR audio_generator_fill_buffer(float* output_buffer, size_t sam
             // so that mod-frequency sweeps take effect sample-accurately.
             if (channel->current_mod_freq > 0 && channel->params.mod_depth > 0) {
                 // A2: depth per-channel (iso_depth>0 overrides params.mod_depth).
-                float depth = (channel->iso_depth > 0.0f) ? channel->iso_depth : channel->params.mod_depth;
+                float depth = (channel->iso_depth >= 0.0f) ? channel->iso_depth : channel->params.mod_depth;
                 // C4: apply the per-channel pulse phase offset (Q32 = fixed fraction
                 // of the mod cycle, frequency-independent).
                 uint32_t mphase = channel->mod_phase_q32 + channel->mod_phase_offset_q32;
@@ -1736,6 +1767,15 @@ esp_err_t audio_generator_set_param(int channel, audio_param_t param, float valu
  * it directly. Updates current, params and pending copies so the change sticks
  * regardless of whether a pending-params latch happens next buffer. Caller must
  * hold audio_gen_mutex. */
+esp_err_t audio_generator_get_wave_type_locked(int channel, uint8_t *out)
+{
+    if (channel < 0 || channel >= NUM_AUDIO_CHANNELS || !out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out = (uint8_t)audio_channels[channel].wave_type;
+    return ESP_OK;
+}
+
 esp_err_t audio_generator_set_wave_type_locked(int channel, audio_wave_type_t wt)
 {
     if (channel < 0 || channel >= NUM_AUDIO_CHANNELS) return ESP_ERR_INVALID_ARG;

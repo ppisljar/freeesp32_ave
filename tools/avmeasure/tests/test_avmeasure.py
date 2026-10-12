@@ -1039,9 +1039,23 @@ class TestFirmwareSemantics(unittest.TestCase):
             exp2.audio[7].amp[int(np.searchsorted(exp2.audio[7].t, 5.0))],
             0.4, places=2)
 
-    def test_47_wave_type_reset_bug(self):
-        # config_parser.c:2358 -- wave_type is latched unconditionally, so a
-        # later entry omitting it resets a noise channel to sine.
+    def test_47_omitted_wave_type_leaves_the_waveform(self):
+        """An omitted waveType leaves the waveform alone. It used not to.
+
+        wave_type was latched unconditionally from the parsed entry with no check
+        of AUD_SET_WAVE, so ANY later entry omitting the column silently reset a
+        noise channel to sine -- 21 occurrences across the shipped library, and a
+        direct contradiction of the format's own rule that a trailing field left
+        off behaves like '-'. config_parser.c now substitutes the LIVE value via
+        audio_generator_get_wave_type_locked().
+
+        Verified on hardware: one session setting wave 5 at t=0 and omitting the
+        column at t=6000 reports wave 5 throughout, where it previously reported
+        0 from t=6000 on.
+
+        This test asserted the broken behaviour and so would have blocked the
+        fix; inverted and renamed deliberately.
+        """
         p = self._parse_one(
             "A 0 200 0 50 0 3 0 5\n"
             "A 10000 200 0 50 0 3\n"
@@ -1049,8 +1063,10 @@ class TestFirmwareSemantics(unittest.TestCase):
         exp = le.build_expectation(p, duration_s=22.0)
         A = exp.audio[3]
         self.assertEqual(int(A.wave[int(np.searchsorted(A.t, 5.0))]), 5)
-        self.assertEqual(int(A.wave[int(np.searchsorted(A.t, 15.0))]), 0)
-        self.assertTrue(any(f.code == "LEDC_WAVE_RESET" for f in exp.lints))
+        self.assertEqual(int(A.wave[int(np.searchsorted(A.t, 15.0))]), 5,
+                         "pink must survive an entry that omits waveType")
+        self.assertFalse(any(f.code == "LEDC_WAVE_RESET" for f in exp.lints),
+                         "the WAVE_RESET lint describes a defect that is now fixed")
 
     def test_48_carrier_ramp_glides_the_beat(self):
         """main/audio_generator.c:995-1013 -- freq_r is the ABSOLUTE right-ear

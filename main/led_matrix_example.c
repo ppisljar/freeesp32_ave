@@ -2159,6 +2159,29 @@ esp_err_t led_matrix_start_sweep_masked(uint8_t channel_mask, const led_sweep_sp
                                   : spec->freq_milliHz_target;
     if (init_freq_milliHz == 0) return ESP_ERR_INVALID_ARG;
 
+    /* Range guards. start_flicker_masked rejects freq>100 Hz, duty>100 and
+     * bright>100, but this path did not -- so a RAMPED out-of-range entry
+     * executed unchecked while the same value stepped was refused. Validate both
+     * endpoints of every ramp, since either can be the out-of-range one. */
+    const uint32_t max_milliHz = 100u * 1000u;
+    if (spec->freq_milliHz_start  > max_milliHz ||
+        spec->freq_milliHz_target > max_milliHz) {
+        ESP_LOGE(TAG, "Invalid swept flicker frequency: %.1f->%.1f Hz (max 100.0)",
+                 (float)spec->freq_milliHz_start / 1000.0f,
+                 (float)spec->freq_milliHz_target / 1000.0f);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (spec->duty_start > 100 || spec->duty_target > 100) {
+        ESP_LOGE(TAG, "Invalid swept duty cycle: %u->%u%% (max 100)",
+                 (unsigned)spec->duty_start, (unsigned)spec->duty_target);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (spec->bright_start > 100 || spec->bright_target > 100) {
+        ESP_LOGE(TAG, "Invalid swept brightness: %u->%u%% (max 100)",
+                 (unsigned)spec->bright_start, (unsigned)spec->bright_target);
+        return ESP_ERR_INVALID_ARG;
+    }
+
     esp_err_t ret = s_ensure_timer_and_task(init_freq_milliHz);
     if (ret != ESP_OK) return ret;
 
