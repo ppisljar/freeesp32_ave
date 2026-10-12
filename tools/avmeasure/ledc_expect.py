@@ -1143,9 +1143,14 @@ class _Simulator:
             self.lints.append(Finding(
                 code="LEDC_AUDIO_CH_RANGE", severity="error", domain="ledc",
                 line_no=a.line_no, t_ms=float(a.time_ms), channel=ch,
-                message=f"audio channel {ch} is outside 0..15; the timeline path "
-                        f"has NO bounds check and writes out of bounds",
-                detail="config_parser.c:1623, audio_generator.c:376-377"))
+                message=f"audio channel {ch} is outside 0..15, so this entry is "
+                        f"silently clamped to channel 0 and does not play where "
+                        f"the file says. (It used to be worse: the generator's "
+                        f"_locked entry points had no bounds check and this wrote "
+                        f"a whole channel struct past audio_channels[].)",
+                detail="config_parser.c (parse-time clamp), "
+                       "audio_generator.c start_channel_locked / "
+                       "update_params_locked / start_sweep_locked (bounds check)"))
             return
 
         st = self.aud_state[ch]
@@ -1263,10 +1268,19 @@ class _Simulator:
                     period_s=cell.mod_period_ms / 1000.0, t0_s=t_s)
 
         # ---- ramps -----------------------------------------------------
-        # config_parser.c:2465 -- `uint8_t ch_bit = 1u << audio->channel`.
-        # For channel >= 8 that truncates to 0, so find_next_* can never match
-        # and NO sweep is ever armed: `>` and `*` silently degrade to steps.
-        ch_bit = (1 << ch) & 0xFF
+        # HISTORY, kept because the lint below is now unreachable by design.
+        # config_parser.c used `uint8_t ch_bit = 1u << audio->channel`, which
+        # truncates to 0 for channel >= 8, so find_next_audio_for_bit could never
+        # match and NO sweep was armed: `>` and `*` silently degraded to steps on
+        # channels 8..15. That hit 14 shipped Gateway sessions.
+        #
+        # Fixed in firmware (the helper and its three call sites are uint16_t
+        # now), so this model must follow: mask to 16 bits, which is never 0 for
+        # a valid channel, so the LEDC_AUDIO_CH8_NO_RAMP branch is dead and every
+        # channel gets the real ramp modelling in the `else` below. Leaving the
+        # 0xFF mask here would both raise a false ERROR on those 14 sessions AND
+        # fail to model the ramps that now actually happen.
+        ch_bit = (1 << ch) & 0xFFFF
         if ch_bit == 0:
             wants_ramp = any(is_ramp(a.cell(f).interp) for f in _AUD_FIELDS)
             if wants_ramp:
