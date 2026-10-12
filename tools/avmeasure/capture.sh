@@ -37,6 +37,18 @@ if ! system_profiler SPAudioDataType 2>/dev/null | grep -q "MiniFuse"; then
   echo "  REFUSING: MiniFuse 4 is not connected (replug it; check the USB port)" >&2
   exit 1
 fi
+# A REFUSED capture leaves its recorder running. The recorder lives in a Terminal
+# window (see the `open` below, which exists for TCC reasons), so it keeps holding
+# the interface for its full requested duration after this script has already
+# exited with an error. A prompt retry then collides with it and gets a TRUNCATED
+# file -- which the frame-count check refuses, leaving yet another recorder
+# running. Three captures in a row were lost to that loop (190 s requested,
+# 46.5 s and 98 s delivered) before closing the stale windows by hand fixed it.
+# So clear any previous recorder before starting, not after failing.
+pkill -9 -f '/opt/homebrew/bin/rec' 2>/dev/null || true
+osascript -e 'tell application "Terminal" to close (every window whose name contains ".cap_")' \
+          >/dev/null 2>&1 || true
+
 chmod +x "$CMD"; rm -f "$DONE" "$OUT"
 curl -s -X POST --max-time 10 "http://$IP/api/stop" >/dev/null || true
 sleep 1

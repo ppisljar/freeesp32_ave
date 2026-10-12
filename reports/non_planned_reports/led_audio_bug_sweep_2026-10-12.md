@@ -136,3 +136,53 @@ Deliberately NOT changed: it affects only test files (`test.ledc`, `test2a/b/c`,
 `test_iso`), no shipped therapeutic session, and altering the semantics would
 change what every existing file plays. Worth fixing together with a pass over
 the trailing-column defaults rather than piecemeal.
+
+## 6. Antiphase luminance-flat pair: VERIFIED on hardware
+
+`17_nondual_awareness_RGB` runs the inner zones (mask 9) at `phase 0` and the
+outer zones (mask 6) at `phase 180`, with a sine carrier and 8->22% brightness
+breathing -- the hardest case for the measurement chain, and the session the
+dropped-flick bug lived in.
+
+Measured during the breathing section (t=60..80 s):
+
+| | ch1 sensor | ch2 sensor |
+|---|---|---|
+| 10 Hz fundamental | -83.2 dBFS | -57.5 dBFS |
+| 20 Hz 2nd harmonic | -61.7 dBFS | -59.8 dBFS |
+| fundamental vs own rms | -40.1 dB | -16.3 dB |
+
+ch1/ch2 fundamental ratio **-25.8 dB**, relative phase **+178.1 deg** against a
+commanded 180.
+
+That is the antiphase design working, not a fault: ch1's sensor happens to sit
+where an inner and an outer zone contribute almost equally, so the 10 Hz
+fundamental very nearly cancels and the 2nd harmonic dominates (21.5 dB above the
+fundamental on that channel). The pair is luminance-flat to within 1.9 deg, which
+at 10 Hz is 0.53 ms.
+
+**Measurement consequence.** On an antiphase session a photocell must see ONE
+zone. A sensor viewing both measures the residual of a near-cancellation, and
+per-cycle analysis of the 10 Hz cycle becomes impossible -- percycle left 154 of
+495 cycles ungraded there and raised its new >5%-slip WARNING, whereas ch2
+(dominated by a single zone) measured cleanly at 0.86-0.97 ms timing noise with 3
+and then 0 anomalies. Before the percycle hardening this configuration produced
+59 confident anomalies with claims up to +59.8 ms; it now declines to grade
+instead, which is the behaviour that matters.
+
+## 7. capture.sh lost three captures to its own failure path (FIXED)
+
+A refused capture leaves its recorder running. The recorder lives in a Terminal
+window (the `open` indirection exists so Terminal, not the tmux server, is the
+TCC-responsible process for microphone access), so after this script exits with
+an error the recorder keeps holding the interface for the full requested
+duration. A prompt retry collides with it and gets a TRUNCATED file, which the
+frame-count check then refuses -- leaving yet another recorder running.
+
+Observed: 190 s requested, 46.5 s then 98 s delivered (75.5% and 48.3% "missing"),
+and the loop only broke after closing the stale Terminal windows by hand. Note
+the symptom reads as sample loss but is really truncation, and that the earlier
+665 s capture succeeding is what made it look intermittent rather than causal.
+
+Fixed by clearing any previous recorder at the START of a capture rather than
+after a failure.
