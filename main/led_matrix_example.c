@@ -72,7 +72,16 @@ typedef struct {
     volatile uint8_t red, green, blue; // LED colors when ON; written at cycle boundary by ISR
     volatile bool led_state;           // Target ON/OFF state; written by ISR, read by flicker task
     volatile bool led_dirty;           // ISR sets true when led_state changes; task clears it
-    volatile uint64_t cycle_start_time_us; // Timestamp of current cycle start (ISR-owned)
+    /* Timestamp of the current cycle's origin.
+     *
+     * 64 bits on a 32-bit core, so a read is TWO loads and a writer can land
+     * between them. Task-context writers hold s_flicker_mux, but the ISR's reads
+     * do not -- and portENTER_CRITICAL only masks interrupts on the WRITER's
+     * core, so today the only thing preventing a torn read is that the flicker
+     * gptimer ISR, timeline_exec and httpd all happen to sit on core 0. That is
+     * an implicit invariant nobody would notice breaking. Read it through
+     * s_read_cycle_origin() instead of directly. */
+    volatile uint64_t cycle_start_time_us;
     // V-S4: timeline anchor of the most recent entry, consumed at the next cycle
     // boundary to pull the cycle grid back onto the entry's lattice. 0 = nothing
     // pending. Set only by the timeline path (which has a canonical anchor); the
@@ -736,6 +745,33 @@ static inline int32_t IRAM_ATTR led_jitter_millihz_iram(uint32_t now_lo, uint32_
  * ISR budget cap: plan specifies max 5000 cycles for all 4 channels combined.
  * Four channels × ~250 cycles/channel ≈ 1000 cycles baseline — well within cap.
  */
+/* Torn-read-safe read of a 64-bit field that a task may write concurrently.
+ *
+ * Read high, low, high again: if the high word did not move, the pair is
+ * consistent. When only the low word changed -- the common case, since
+ * esp_timer's high word advances once every ~71.6 minutes -- both the old and
+ * the new value share that high word, so either low word yields a VALID
+ * timestamp, which is all the caller needs. The dangerous case is a write that
+ * crosses the 2^32 us boundary, which would otherwise produce a ~71-minute-future
+ * origin (channel goes dark on the pre-anchor wait) or a near-zero one (elapsed
+ * underflows, taking the stall path and destroying the anchor). Note a
+ * therapeutic session routinely runs past that boundary.
+ *
+ * Chosen over taking s_flicker_mux in the ISR: at a 10 kHz tick across 8
+ * channels that would be 80k lock/unlock pairs per second, and this is three
+ * volatile loads with no interrupt masking. */
+static inline uint64_t s_read_cycle_origin(const led_flicker_state_t *s)
+{
+    for (;;) {
+        uint32_t hi1 = (uint32_t)(s->cycle_start_time_us >> 32);
+        uint32_t lo  = (uint32_t)(s->cycle_start_time_us);
+        uint32_t hi2 = (uint32_t)(s->cycle_start_time_us >> 32);
+        if (hi1 == hi2) {
+            return ((uint64_t)hi1 << 32) | (uint64_t)lo;
+        }
+    }
+}
+
 static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
     ISR_PROFILE_BEGIN(1);
 
@@ -769,7 +805,12 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
         // clamp to 0 → should_be_on=(0 < latched_on_time_us)=true → LED stays
         // ON for the entire ~46 ms anchor wait, producing one very long first
         // pulse that visually reads as "first blink at full power".
-        if (now_us < s->cycle_start_time_us) {
+        /* ONE snapshot used for both the pre-anchor test and elapsed_us below.
+         * Reading the field twice let a task write land between them: elapsed_us
+         * would underflow to ~1.8e19, take the stall path, and destroy the
+         * anchor -- one visibly wrong flick per entry. */
+        const uint64_t cycle_origin_us = s_read_cycle_origin(s);
+        if (now_us < cycle_origin_us) {
             continue;
         }
 
@@ -853,8 +894,9 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
         // value, and the phase-locked advance at the publish site needs the one
         // that actually elapsed.
         const uint64_t ended_cycle_us = cycle_duration_us;
-        // now_us >= cycle_start_time_us is guaranteed by the pre-anchor check above.
-        uint64_t elapsed_us = now_us - s->cycle_start_time_us;
+        // now_us >= cycle_origin_us is guaranteed by the pre-anchor check above,
+        // and it is the SAME snapshot, so that guarantee actually holds.
+        uint64_t elapsed_us = now_us - cycle_origin_us;
 
         // --- Cycle boundary: advance cycle and recompute all swept params ---
         // A1: to shrink interrupts-off time, the per-channel sweep/mod/interp math
