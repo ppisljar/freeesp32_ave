@@ -1434,7 +1434,27 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         // Critical section: all per-channel writes happen atomically vs the ISR's
         // cycle-boundary read of sw_r/g/b/w and overwrite of red/green/blue.
         portENTER_CRITICAL(&s_flicker_mux);
-        s->frequency_milliHz   = freq_milliHz;
+        // V-S3: do NOT write frequency_milliHz on an ALREADY-RUNNING channel.
+        // It is the key to the A2 duration cache (cd_cache_freq), so writing it
+        // here re-times the cycle that is currently IN FLIGHT: the ISR closes
+        // that cycle at the NEW period and then advances the origin by the new
+        // period from a start that sat on the old grid. The cycle grid picks up
+        // a one-time shift of exactly (new_period - old_period).
+        //
+        // Measured optically against the audio gate, which IS anchored to the
+        // entry (tools/avmeasure/avsync.py):
+        //   8 Hz -> 6 Hz   predicted +41.67 ms   measured +41.53 ms
+        //   8 Hz -> 10 Hz  predicted -25.00 ms   measured -24.85 ms
+        //
+        // sw_freq below carries the new rate, and the ISR's cycle-boundary
+        // recompute applies it to the NEXT cycle -- which is what the comment in
+        // led_matrix_update_flicker_masked always claimed happened, and what this
+        // one line was quietly defeating. On a FRESH channel the write is still
+        // needed: there is no in-flight cycle to protect and the pre-anchor path
+        // below needs the rate to compute latched_on_time_us.
+        if (!s->active) {
+            s->frequency_milliHz = freq_milliHz;
+        }
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
         s->duty_q8             = (uint16_t)duty_cycle * 256u;   // Q8.8 mirrors
@@ -1698,7 +1718,12 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
 
         led_flicker_state_t *s = &flicker_state[ch];
         portENTER_CRITICAL(&s_flicker_mux);
-        s->frequency_milliHz   = new_freq_milliHz;
+        // V-S3: every channel reaching here is already active (see the `continue`
+        // above), so frequency_milliHz is deliberately NOT written -- it keys the
+        // A2 duration cache, and writing it would re-time the in-flight cycle and
+        // shift the grid by (new_period - old_period). sw_freq below carries the
+        // new rate to the next cycle boundary, which is what the note below has
+        // always described.
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
         s->duty_q8             = (uint16_t)duty_cycle * 256u;

@@ -54,7 +54,7 @@ Result: range **21.92 ms -> 1.30 ms** (n=8, sd 0.38), residual constant -1.79 ms
 No regression: `write_errors`/`short_writes`/`gen_fail` all 0, `fill_avg_us`
 1710 of a 23220 us budget.
 
-## Finding 2 -- entries on an ALREADY-ACTIVE channel are ~48 ms out (OPEN)
+## Finding 2 -- entries on an ALREADY-ACTIVE channel are ~48 ms out (FIXED)
 
 A .ledc entry targeting a channel that is already playing does not go through
 `start_channel` at all; it goes through the lock-free pending-params latch,
@@ -116,3 +116,86 @@ click):
   giving a true sensor SNR of +45.2 dB (ch1) / +41.8 dB (ch2).
 * ch1 vs ch2 (the two eyes) differ by a constant 0.33 ms, reproducible across
   runs -- the serial LED update order, not a fault.
+
+
+## Finding 2a -- the audio half: gate phase was free-running (FIXED, V-S2)
+
+A .ledc entry aimed at a channel that is already playing goes through
+`audio_generator_update_params_locked`, whose pending-params latch deliberately
+preserves `phase_l/phase_r/mod_phase` for continuity -- so it received neither
+the DMA-lag pre-advance nor the V-S1 start catch-up.
+
+Fix: the gate phase is now defined by the entry's position on the timeline,
+
+    mod_phase = frac((t_emit - mod_anchor_us) * mod_freq)
+
+where `mod_anchor_us` is set by config_parser to the SAME expression
+`logical_anchor_us` uses on the LED side, so audio and light reference one
+quantity instead of two corrections that must agree.  Recomputed once per entry,
+not per sample, so the hot loop keeps its plain uint32_t accumulator.  `double`
+rather than `float`: a 60 min session reaches ~36000 cycles, where float's
+24-bit mantissa quantises the phase to ~0.2 ms at 10 Hz.
+
+Measured: the rate-change block's run-to-run spread collapsed from 6.43 ms to
+0.94 ms, and the audio grid became consistent across the change.
+
+## Finding 2b -- the LED half: a mid-session rate change re-timed the IN-FLIGHT cycle (FIXED, V-S3)
+
+With the audio anchored, a constant ~44.6 ms remained on the rate-change block.
+Timing each stream against its own entry localised it to the LIGHT channel: the
+audio grid held steady across the change (-18.98 -> -20.17 ms) while the light
+grid jumped ~+42 ms.
+
+`frequency_milliHz` keys the A2 cycle-duration cache (`cd_cache_freq`).  Both
+task-context writers -- `start_flicker_masked` and
+`led_matrix_update_flicker_masked` -- wrote it immediately, so the ISR closed the
+cycle that was currently IN FLIGHT at the NEW period and then advanced the origin
+by that new period from a start that sat on the old grid.  The grid therefore
+picked up a one-time shift of exactly `new_period - old_period`.
+
+This is a case where the comment was right and the code was wrong: the note in
+`led_matrix_update_flicker_masked` already said "the new frequency takes effect
+at the next cycle boundary when the ISR recomputes cycle_duration_us from
+sw_freq", and the one immediate write was quietly defeating it.
+
+Prediction tested against two rate pairs BEFORE changing anything -- this is what
+confirmed the mechanism rather than merely fitting the first number:
+
+| change | predicted shift | measured |
+|---|---|---|
+| 8 Hz -> 6 Hz  | `166.667 - 125 = +41.67` ms | +41.53 ms |
+| 8 Hz -> 10 Hz | `100 - 125 = -25.00` ms     | -24.85 ms |
+
+Fix (V-S3): do not write `frequency_milliHz` on an already-running channel.
+`sw_freq` already carries the new rate and the ISR's boundary recompute applies
+it to the NEXT cycle.  The write is still needed on a FRESH channel, where there
+is no in-flight cycle to protect and the pre-anchor path needs the rate to
+compute `latched_on_time_us`.
+
+Result, 3 runs per rate pair:
+
+    8 -> 6 Hz   block1 -2.45 -2.31 -3.41    block2 -2.70 -2.46 -2.64
+    8 -> 10 Hz  block1 -2.97 -2.50 -2.89    block2 -2.97 -2.48 -3.00
+
+i.e. the two blocks now agree, where before they differed by 42.8 and 24.8 ms.
+
+Side effect worth knowing: `/api/state` reads `frequency_milliHz`, so after a
+rate change on a running channel it reports the OLD rate for up to one cycle
+(<=167 ms at 6 Hz) before the boundary applies the new one.  Harmless, but do not
+treat a single `/api/state` poll taken immediately after a dispatch as proof the
+rate did not change.
+
+## Where A/V sync stands after V-S1 + V-S2 + V-S3
+
+A constant **-2.7 ms** (audio early), stable across rate changes and across
+session restarts, versus a random 0..23 ms plus a 25-42 ms jump per rate change
+before.
+
+This residual is deliberately NOT trimmed to zero.  It cannot currently be
+separated into device-side offset versus measurement-chain bias: the audio path
+adds the codec's interpolation-filter group delay and analog output stage, the
+light path adds the LED turn-on and the photocell's RC, and neither is
+independently known.  Calibrating the constant away would bake my rig's bias into
+the firmware.  To zero it honestly, first measure the codec's own output latency
+(e.g. an electrical loopback from the DAC output back into the interface) and
+subtract only the device-side part.
