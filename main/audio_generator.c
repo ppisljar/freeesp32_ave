@@ -400,6 +400,40 @@ void audio_generator_unlock(void) {
     xSemaphoreGive(audio_gen_mutex);
 }
 
+/* ---------------------------------------------------------------------------
+ * Session-path range guards.
+ *
+ * The _locked entry points below are what the timeline batch executor calls,
+ * and their values come straight from atof() on an UPLOADED .ledc -- so a typo
+ * reached the mixer unfiltered. The public (non-_locked) wrappers validate and
+ * REJECT (see :669); rejecting here would silence a channel mid-session over
+ * one bad row, so these CLAMP and let the session continue.
+ *
+ * `amplitude` is the hearing-safety one. vol is divided by 100, so `vol 10000`
+ * arrives as 100.0, and even after the 1/16 mix divisor that is 6.25 -- hard
+ * clipping at full output, into headphones, possibly on someone asleep.
+ *
+ * Every shipped session is already inside these bounds (max vol 100, max freq
+ * 10000 Hz across sessions/library and sessions/test), so this is a no-op for
+ * all of them.
+ *
+ * freq 0 is NOT clamped away: it is legitimate for the noise wave types, and
+ * `freq 0` on a carrier is documented to produce silence (sine) or a DC offset
+ * (square). Only negatives and above-Nyquist values are pulled in.
+ */
+static inline float s_clamp_amp(float a)
+{
+    if (!(a >= 0.0f)) return 0.0f;        /* also catches NaN */
+    return (a > 1.0f) ? 1.0f : a;
+}
+
+static inline float s_clamp_freq(float f)
+{
+    if (!(f >= 0.0f)) return 0.0f;        /* also catches NaN */
+    const float nyq = (float)(AUDIO_SAMPLE_RATE / 2);
+    return (f > nyq) ? nyq : f;
+}
+
 // ---------------------------------------------------------------------------
 // _locked variants — assume audio_gen_mutex is already held by the caller.
 // Must not be called from ISR. Declared in audio_generator.h so the timeline
@@ -421,6 +455,13 @@ esp_err_t audio_generator_start_channel_locked(int channel, const audio_gen_para
     audio_gen_channel_t* ch = &audio_channels[channel];
 
     memcpy(&ch->params, params, sizeof(audio_gen_params_t));
+
+    /* Clamp the stored copy, then derive everything from it (see the range
+     * guards above). params is const, so the caller's struct is untouched. */
+    ch->params.frequency   = s_clamp_freq(ch->params.frequency);
+    ch->params.frequency_r = s_clamp_freq(ch->params.frequency_r);
+    ch->params.amplitude   = s_clamp_amp(ch->params.amplitude);
+    params = &ch->params;
 
     ch->current_freq     = params->frequency;
     ch->current_freq_r   = params->frequency_r > 0 ? params->frequency_r : params->frequency;
@@ -559,6 +600,11 @@ esp_err_t audio_generator_update_params_locked(int channel, const audio_gen_para
 
     memcpy(&ch->pending_params, new_params, sizeof(audio_gen_params_t));
 
+    /* Range guards (see above) -- fill_buffer applies pending_params verbatim. */
+    ch->pending_params.frequency   = s_clamp_freq(ch->pending_params.frequency);
+    ch->pending_params.frequency_r = s_clamp_freq(ch->pending_params.frequency_r);
+    ch->pending_params.amplitude   = s_clamp_amp(ch->pending_params.amplitude);
+
     // Bump version after releasing the mutex in the public wrapper, but here
     // we are already inside the caller's lock scope — bump immediately so that
     // fill_buffer (which also holds audio_gen_mutex) sees the new version on its
@@ -634,6 +680,19 @@ esp_err_t audio_generator_start_sweep_locked(int channel, audio_param_t param,
     // bug at the call site anyway.
     if (param == AUDIO_PARAM_AMPLITUDE && !ch->stopping) {
         ch->amp_ramp_remaining = 0;
+    }
+
+    /* Range guards (see above). The ramp's TARGET comes from the .ledc, and
+     * fill_buffer interpolates straight into current_freq / current_amp, so an
+     * out-of-range target walks the live value out of range over the ramp's
+     * duration instead of snapping it. `start` is clamped too: on an inactive
+     * channel it is still the caller's literal. */
+    if (param == AUDIO_PARAM_FREQUENCY || param == AUDIO_PARAM_FREQ_R) {
+        start  = s_clamp_freq(start);
+        target = s_clamp_freq(target);
+    } else if (param == AUDIO_PARAM_AMPLITUDE) {
+        start  = s_clamp_amp(start);
+        target = s_clamp_amp(target);
     }
 
     ch->sweeps[param].start            = start;
@@ -1739,8 +1798,8 @@ esp_err_t audio_generator_set_param_locked(int channel, audio_param_t param, flo
     ch->sweeps[param].duration_samples = 0;
 
     switch (param) {
-        case AUDIO_PARAM_FREQUENCY: ch->current_freq     = value; break;
-        case AUDIO_PARAM_AMPLITUDE: ch->current_amp      = value; break;
+        case AUDIO_PARAM_FREQUENCY: ch->current_freq     = s_clamp_freq(value); break;
+        case AUDIO_PARAM_AMPLITUDE: ch->current_amp      = s_clamp_amp(value);  break;
         case AUDIO_PARAM_PAN:       ch->current_pan      = value; break;
         case AUDIO_PARAM_MOD_FREQ:  ch->current_mod_freq = value; break;
         /* Pulse shape. Stored in the channel's native representation, so a
