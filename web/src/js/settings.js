@@ -195,7 +195,7 @@ function fieldHtml(f, val, settings) {
     } else { // num | pin
         inner = `<input type="number" id="${id}" value="${val}" style="width:90px;">`;
     }
-    const note = f.note ? ` <span style="color:#999;font-size:11px;">(${f.note})</span>` : '';
+    const note = f.note ? ` <span style="color:var(--fg-dim);font-size:11px;">(${f.note})</span>` : '';
     return `<div class="set-row" id="row-${f.key}" style="display:flex;align-items:center;gap:8px;margin:4px 0;">
         <label for="${id}" style="min-width:220px;font-size:13px;">${f.label}${helpIcon(f)}${note}</label>
         ${inner}
@@ -208,7 +208,7 @@ function render(settings) {
     if (!root) return;
     let html = '';
     for (const g of GROUPS) {
-        html += `<div class="set-group" id="group-${g.id}" style="margin:12px 0;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
+        html += `<div class="set-group" id="group-${g.id}" style="margin:12px 0;padding:10px;background:var(--bg-2);border:1px solid var(--edge);border-radius:8px;">
             <h3 style="margin:0 0 6px 0;font-size:14px;">${g.title}</h3>`;
         for (const f of g.fields) {
             html += fieldHtml(f, settings[f.key], settings);
@@ -377,7 +377,7 @@ async function preloadSpeech() {
     if (getEngine() === 'puter') connectPuter();
     const btn = document.getElementById('btnTtsPreload');
     const out = document.getElementById('ttsPreloadStatus');
-    const say = (msg, color) => { if (out) { out.textContent = msg; out.style.color = color || '#888'; } };
+    const say = (msg, color) => { if (out) { out.textContent = msg; out.style.color = color || 'var(--fg-dim)'; } };
     if (btn) btn.disabled = true;
     say('Scanning sessions…');
     try {
@@ -385,14 +385,14 @@ async function preloadSpeech() {
             say(`Preloading speech… ${done}/${total} (${ok} new, ${cached} cached${failed ? ', ' + failed + ' failed' : ''})`);
         });
         if (r.total === 0) {
-            say('No speech (S) lines found in any session.', '#888');
+            say('No speech (S) lines found in any session.', 'var(--fg-dim)');
         } else if (r.failed === 0) {
-            say(`✓ Done — ${r.total} phrases ready offline (${r.ok} generated, ${r.cached} already cached) for the "${r.engine}" engine.`, '#28a745');
+            say(`✓ Done — ${r.total} phrases ready offline (${r.ok} generated, ${r.cached} already cached) for the "${r.engine}" engine.`, 'var(--ok)');
         } else {
-            say(`Finished with ${r.failed} failure(s): ${r.ok} generated, ${r.cached} cached, ${r.failed} failed (${r.total} total). Check your connection / engine and run again.`, '#dc3545');
+            say(`Finished with ${r.failed} failure(s): ${r.ok} generated, ${r.cached} cached, ${r.failed} failed (${r.total} total). Check your connection / engine and run again.`, 'var(--err)');
         }
     } catch (e) {
-        say('Preload failed: ' + ((e && e.message) || e), '#dc3545');
+        say('Preload failed: ' + ((e && e.message) || e), 'var(--err)');
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -405,14 +405,14 @@ async function preloadSpeech() {
 async function sdSync() {
     const btn = document.getElementById('btnSdSync');
     const out = document.getElementById('sdSyncStatus');
-    const say = (msg, color) => { if (out) { out.textContent = msg; out.style.color = color || '#888'; } };
+    const say = (msg, color) => { if (out) { out.textContent = msg; out.style.color = color || 'var(--fg-dim)'; } };
     if (getEngine() === 'puter') connectPuter();   // off the click gesture — see tts.js
     if (btn) btn.disabled = true;
     say('Checking the card…');
     try {
         const card = await listCard();
         if (!card.mounted) {
-            say('No SD card detected on the device. Insert one and reboot it.', '#dc3545');
+            say('No SD card detected on the device. Insert one and reboot it.', 'var(--err)');
             return;
         }
         const freeMb = Math.round((card.free_bytes || 0) / 1048576);
@@ -423,14 +423,14 @@ async function sdSync() {
         });
         if (r.failed === 0) {
             say(`✓ Card ready — ${r.total} phrase(s) available offline `
-                + `(${r.uploaded} uploaded, ${r.skipped} already present).`, '#28a745');
+                + `(${r.uploaded} uploaded, ${r.skipped} already present).`, 'var(--ok)');
         } else {
             say(`Finished with ${r.failed} failure(s): ${r.uploaded} uploaded, `
                 + `${r.skipped} already present. Sessions with missing phrases `
-                + `still play via the browser.`, '#dc3545');
+                + `still play via the browser.`, 'var(--err)');
         }
     } catch (e) {
-        say('Sync failed: ' + ((e && e.message) || e), '#dc3545');
+        say('Sync failed: ' + ((e && e.message) || e), 'var(--err)');
     } finally {
         if (btn) btn.disabled = false;
     }

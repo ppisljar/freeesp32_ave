@@ -199,14 +199,14 @@ function saveAs() {
     const back = document.createElement('div');
     back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
     const box = document.createElement('div');
-    box.style.cssText = 'background:#fff;padding:20px;border-radius:8px;min-width:300px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-size:14px;';
+    box.style.cssText = 'background:#12151f;color:var(--fg);border:1px solid var(--edge-2);padding:20px;border-radius:12px;min-width:300px;box-shadow:0 20px 60px rgba(0,0,0,.6);font-size:14px;';
     box.innerHTML =
         '<h3 style="margin:0 0 12px 0;">Save Config As</h3>'
       + '<div style="margin-bottom:10px;"><label>Filename<br><input id="genSaveName" type="text" style="width:100%;padding:6px;" value="' + (currentName || 'untitled.ledc') + '"></label></div>'
       + '<div style="margin-bottom:14px;"><label>Destination<br><select id="genSaveDest" style="width:100%;padding:6px;">'
       + '<option value="spiffs">Device (SPIFFS)</option><option value="local">Browser (local)</option><option value="generator">Generator (server)</option>'
       + '</select></label></div>'
-      + '<div style="text-align:right;"><button id="genSaveCancel">Cancel</button> <button id="genSaveOk" style="background:#28a745;">Save</button></div>';
+      + '<div style="text-align:right;"><button id="genSaveCancel">Cancel</button> <button id="genSaveOk" style="background:var(--ok);color:#06240f;border-color:transparent;">Save</button></div>';
     back.appendChild(box);
     document.body.appendChild(back);
     const close = () => document.body.removeChild(back);

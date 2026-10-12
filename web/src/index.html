@@ -36,19 +36,19 @@
                 <div class="controls">
                     <button id="btnUpload">📂 Upload File…</button>
                     <input type="file" id="configFile" accept=".led,.ledc,.txt" style="display:none">
-                    <button id="btnPlay" style="background: #28a745;">▶ PLAY Config</button>
-                    <label style="font-size:13px;color:#555;" title="Countdown before playback starts, so you can put on the glasses & headphones">
+                    <button id="btnPlay" style="background:var(--ok);color:#06240f;border-color:transparent;">▶ PLAY Config</button>
+                    <label style="font-size:13px;color:var(--fg-mut);" title="Countdown before playback starts, so you can put on the glasses & headphones">
                         Delay <input type="number" id="playDelay" value="60" min="0" max="600" step="5" style="width:56px;padding:4px;"> s
                     </label>
                     <button id="btnClear">Clear</button>
                 </div>
-                <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
+                <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px;background:var(--bg-2);border:1px solid var(--edge);border-radius:4px;">
                     <strong style="font-size:13px;">Configs:</strong>
                     <select id="ledcDropdown" style="min-width:240px;padding:4px;"></select>
                     <button id="btnRefreshLedc" title="Reload list from all sources">⟳</button>
                     <button id="btnSaveGen">Save</button>
                     <button id="btnSaveAsGen">Save As…</button>
-                    <span id="loadedFilename" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
+                    <span id="loadedFilename" style="color:var(--fg-mut);font-style:italic;font-size:13px;margin-left:8px;"></span>
                 </div>
                 <textarea id="exampleConfig" placeholder="Enter .led config here..."></textarea>
             </div>
@@ -58,7 +58,7 @@
         <div class="page" id="page-generator">
             <div class="section">
                 <h2>Generator</h2>
-                <div style="font-size:12px;color:#888;margin-bottom:8px;">Visual <code>.led</code> timeline editor over one shared model: raw Text, a Table grid, DAW Lanes, and a guided Wizard — all edit the same model.</div>
+                <div style="font-size:12px;color:var(--fg-dim);margin-bottom:8px;">Visual <code>.led</code> timeline editor over one shared model: raw Text, a Table grid, DAW Lanes, and a guided Wizard — all edit the same model.</div>
 
                 <!-- View sub-tabs -->
                 <div class="gen-subtabs">
@@ -77,12 +77,12 @@
                     <button id="btnGenLoad">Load</button>
                     <button id="btnGenSave">Save</button>
                     <button id="btnGenSaveAs">Save As…</button>
-                    <span id="genLoadedName" style="color:#666;font-style:italic;font-size:13px;margin-left:8px;"></span>
+                    <span id="genLoadedName" style="color:var(--fg-mut);font-style:italic;font-size:13px;margin-left:8px;"></span>
                 </div>
 
                 <!-- Transport bar -->
                 <div class="gen-transport">
-                    <button id="btnGenPlay" style="background:#28a745;">▶ Play</button>
+                    <button id="btnGenPlay" style="background:var(--ok);color:#06240f;border-color:transparent;">▶ Play</button>
                     <button id="btnGenApply">⚡ Apply live</button>
                     <button id="btnGenBounce" title="Render the whole session (BG + Speech + A) to one WAV">⭯ Bounce</button>
                     <span id="genRowMeter" class="gen-meter">0 / 100 entries</span>
@@ -118,7 +118,7 @@
                 </div>
 
                 <!-- Read-only serialized preview -->
-                <h3 style="margin:14px 0 4px 0;font-size:14px;color:#444;">Serialized preview (read-only)</h3>
+                <h3 style="margin:14px 0 4px 0;font-size:14px;color:var(--fg);">Serialized preview (read-only)</h3>
                 <pre id="genPreview" class="gen-preview"></pre>
             </div>
         </div>
@@ -126,8 +126,8 @@
         <!-- ================== LIVE CONTROL ================== -->
         <div class="page" id="page-live">
             <div class="section" id="liveCtrl">
-                <h2>Live Control <span id="ctrl-status" style="font-size:12px;color:#666;margin-left:8px;font-weight:normal;"></span></h2>
-                <div style="font-size:12px;color:#888;margin-bottom:8px;">Sliders animate over 1 s. Pauses polling for a control while you're dragging it.</div>
+                <h2>Live Control <span id="ctrl-status" style="font-size:12px;color:var(--fg-mut);margin-left:8px;font-weight:normal;"></span></h2>
+                <div style="font-size:12px;color:var(--fg-dim);margin-bottom:8px;">Sliders animate over 1 s. Pauses polling for a control while you're dragging it.</div>
                 <div id="ctrl-audio" class="ctrl-block"></div>
                 <div id="ctrl-noise" class="ctrl-block"></div>
                 <div id="ctrl-led" class="ctrl-block"></div>
@@ -141,36 +141,36 @@
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                     <strong style="font-size:13px;">Saved reports:</strong>
                     <select id="reportDropdown" style="min-width:240px;padding:4px;"></select>
-                    <button id="btnReportDelete" style="background:#dc3545;" title="Delete selected report">🗑</button>
+                    <button id="btnReportDelete" style="background:var(--err);color:#2a0808;border-color:transparent;" title="Delete selected report">🗑</button>
                     <button id="btnReportRefresh" title="Reload report list">⟳</button>
                 </div>
-                <div style="font-size:12px;color:#888;margin-top:6px;">Reports are generated after a config session. Where they're stored is configured in Settings; they're always uploaded to the generator when its URL is set.</div>
-                <div id="reportEditor" style="display:none;margin-top:15px;padding:12px;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;">
+                <div style="font-size:12px;color:var(--fg-dim);margin-top:6px;">Reports are generated after a config session. Where they're stored is configured in Settings; they're always uploaded to the generator when its URL is set.</div>
+                <div id="reportEditor" style="display:none;margin-top:15px;padding:12px;background:var(--bg-2);border:1px solid var(--edge);border-radius:4px;">
                     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                         <label style="font-size:13px;">Title
                             <input type="text" id="reportTitle" placeholder="Report title" style="min-width:260px;padding:4px;margin-left:4px;">
                         </label>
-                        <button id="btnReportSave" style="background:#28a745;">💾 Save</button>
-                        <span id="reportSavedName" style="color:#666;font-style:italic;font-size:12px;"></span>
+                        <button id="btnReportSave" style="background:var(--ok);color:#06240f;border-color:transparent;">💾 Save</button>
+                        <span id="reportSavedName" style="color:var(--fg-mut);font-style:italic;font-size:12px;"></span>
                     </div>
                     <label style="font-size:13px;display:block;margin-top:8px;">Comments</label>
                     <textarea id="reportComments" placeholder="Notes about this session (how you felt, effects observed, tweaks to try…)" style="width:100%;min-height:72px;margin-top:4px;padding:6px;box-sizing:border-box;"></textarea>
                     <div id="reportLogRow" style="display:none;margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap;">
                         <strong style="font-size:13px;">Device log:</strong>
-                        <span id="reportLogInfo" style="font-size:12px;color:#666;">—</span>
+                        <span id="reportLogInfo" style="font-size:12px;color:var(--fg-mut);">—</span>
                         <button id="btnReportLogView" title="Show/hide the full ESP32 device log captured during this session">👁 View</button>
                         <button id="btnReportLogDownload" title="Download the full device log as a .log file">⬇ Download</button>
                     </div>
-                    <pre id="reportLogBox" style="display:none;margin-top:8px;max-height:340px;overflow:auto;background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:12px;white-space:pre-wrap;"></pre>
+                    <pre id="reportLogBox" style="display:none;margin-top:8px;max-height:340px;overflow:auto;background:var(--code-bg);color:var(--code-fg);border-radius:4px;padding:10px;font-size:12px;white-space:pre-wrap;"></pre>
                     <div id="reportBLogRow" style="display:none;margin-top:10px;align-items:center;gap:8px;flex-wrap:wrap;">
                         <strong style="font-size:13px;">Browser log:</strong>
-                        <span id="reportBLogInfo" style="font-size:12px;color:#666;">—</span>
+                        <span id="reportBLogInfo" style="font-size:12px;color:var(--fg-mut);">—</span>
                         <button id="btnReportBLogView" title="Show/hide the browser-side session log (compile, HTTP, WebSocket, errors)">👁 View</button>
                         <button id="btnReportBLogDownload" title="Download the browser session log as a .log file">⬇ Download</button>
                     </div>
-                    <pre id="reportBLogBox" style="display:none;margin-top:8px;max-height:340px;overflow:auto;background:#1e1e1e;color:#d4d4d4;border-radius:4px;padding:10px;font-size:12px;white-space:pre-wrap;"></pre>
+                    <pre id="reportBLogBox" style="display:none;margin-top:8px;max-height:340px;overflow:auto;background:var(--code-bg);color:var(--code-fg);border-radius:4px;padding:10px;font-size:12px;white-space:pre-wrap;"></pre>
                 </div>
-                <div id="reportBox" style="margin-top:15px;display:none;background:#f0f4f8;border:1px solid #c3d0e0;border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;"></div>
+                <div id="reportBox" style="margin-top:15px;display:none;background:var(--info-bg);border:1px solid var(--info-edge);border-radius:4px;padding:12px;font-family:monospace;font-size:13px;white-space:pre-wrap;"></div>
             </div>
         </div>
 
@@ -178,12 +178,12 @@
         <div class="page" id="page-settings">
             <div class="section" id="settings">
                 <h2>Device Settings</h2>
-                <div style="font-size:12px;color:#888;margin-bottom:8px;">Hardware settings (pins, codec, LED) take effect after a reboot. Generator URL and default volume are seeds applied at next boot.</div>
+                <div style="font-size:12px;color:var(--fg-dim);margin-bottom:8px;">Hardware settings (pins, codec, LED) take effect after a reboot. Generator URL and default volume are seeds applied at next boot.</div>
                 <div id="settings-body"></div>
                 <div class="controls" style="margin-top:10px;">
-                    <button id="btnSettingsSave" style="background:#28a745;">Save</button>
-                    <button id="btnSettingsReboot" style="background:#fd7e14;">Save &amp; Reboot</button>
-                    <button id="btnSettingsRestore" style="background:#dc3545;">Restore Defaults</button>
+                    <button id="btnSettingsSave" style="background:var(--ok);color:#06240f;border-color:transparent;">Save</button>
+                    <button id="btnSettingsReboot" style="background:var(--amber);color:var(--amber-ink);border-color:transparent;">Save &amp; Reboot</button>
+                    <button id="btnSettingsRestore" style="background:var(--err);color:#2a0808;border-color:transparent;">Restore Defaults</button>
                     <button id="btnSettingsReload">Reload</button>
                 </div>
                 <div class="controls" style="margin-top:10px;">
@@ -191,31 +191,31 @@
                     <button id="btnSettingsImport">⬆ Import settings</button>
                     <input type="file" id="settingsImportFile" accept=".json,application/json" style="display:none">
                 </div>
-                <div style="font-size:12px;color:#888;margin-top:6px;">Password is not included in exports; importing preserves the device's stored password.</div>
+                <div style="font-size:12px;color:var(--fg-dim);margin-top:6px;">Password is not included in exports; importing preserves the device's stored password.</div>
 
                 <!-- Browser-local preferences (not stored on the device). -->
-                <h3 style="margin:18px 0 6px 0;font-size:14px;color:#444;border-top:1px solid #e0e0e0;padding-top:12px;">Browser preferences</h3>
+                <h3 style="margin:18px 0 6px 0;font-size:14px;color:var(--fg);border-top:1px solid var(--edge);padding-top:12px;">Browser preferences</h3>
                 <div class="bg-group">
                   <strong>Speech (TTS) engine</strong>
                   <select id="ttsEngineSetting" title="Used to synthesize S (speech) rows when playing/bouncing">
                     <option value="puter">Puter.js (browser, neural — no key)</option>
                     <option value="google">Google (proxied via the device)</option>
                   </select>
-                  <span style="font-size:12px;color:#888;">Puter needs internet in the browser (may prompt a Puter sign-in). Google needs the device online. Stored in this browser only.</span>
+                  <span style="font-size:12px;color:var(--fg-dim);">Puter needs internet in the browser (may prompt a Puter sign-in). Google needs the device online. Stored in this browser only.</span>
                 </div>
                 <div class="bg-group">
                   <strong>Offline speech (preload)</strong>
-                  <span style="font-size:12px;color:#888;">Generate the speech for every session's S lines now (using the engine above) and cache it in this browser. Afterwards you can play/bounce any session's speech with no internet — handy on the road. Needs internet now; run again if you change the engine or add sessions.</span>
+                  <span style="font-size:12px;color:var(--fg-dim);">Generate the speech for every session's S lines now (using the engine above) and cache it in this browser. Afterwards you can play/bounce any session's speech with no internet — handy on the road. Needs internet now; run again if you change the engine or add sessions.</span>
                   <div class="controls" style="margin-top:6px;">
                     <button id="btnTtsPreload">⤓ Preload all speech</button>
                   <button id="btnSdSync">⇪ Sync speech to SD card</button>
                   </div>
-                  <div id="ttsPreloadStatus" style="font-size:12px;color:#888;margin-top:6px;"></div>
-                  <div id="sdSyncStatus" style="font-size:12px;color:#888;margin-top:6px;"></div>
+                  <div id="ttsPreloadStatus" style="font-size:12px;color:var(--fg-dim);margin-top:6px;"></div>
+                  <div id="sdSyncStatus" style="font-size:12px;color:var(--fg-dim);margin-top:6px;"></div>
                 </div>
                 <div class="bg-group">
                   <strong>Safety notice</strong>
-                  <span id="safetyStatus" style="font-size:12px;color:#888;">Flicker sessions show a one-time epilepsy/photosensitivity notice before the first play in this browser.</span>
+                  <span id="safetyStatus" style="font-size:12px;color:var(--fg-dim);">Flicker sessions show a one-time epilepsy/photosensitivity notice before the first play in this browser.</span>
                   <div class="controls" style="margin-top:6px;">
                     <button id="btnSafetyReset">Show safety info again</button>
                   </div>
@@ -227,7 +227,7 @@
             <div class="section">
                 <h2>Firmware Update</h2>
                 <div id="fwVersion" class="fw-version">Current firmware: loading…</div>
-                <div style="font-size:12px;color:#888;margin-bottom:10px;">
+                <div style="font-size:12px;color:var(--fg-dim);margin-bottom:10px;">
                     Over-the-air update via the dual-boot updater. The device reboots into the
                     <strong>OTA updater</strong>, receives the new image (verified by SHA-256),
                     flashes it, then boots back into the main app. Do not power off during an update.
@@ -250,8 +250,8 @@
                 </div>
 
                 <div class="controls" style="margin-top:10px;">
-                    <button id="fwStart" style="background:#28a745;" disabled>Start Update</button>
-                    <button id="fwRetry" style="background:#fd7e14;display:none;">Retry</button>
+                    <button id="fwStart" style="background:var(--ok);color:#06240f;border-color:transparent;" disabled>Start Update</button>
+                    <button id="fwRetry" style="background:var(--amber);color:var(--amber-ink);border-color:transparent;display:none;">Retry</button>
                     <button id="fwReset" style="display:none;">Start Over</button>
                 </div>
 
@@ -269,12 +269,12 @@
         <div class="page" id="page-diagnostics">
             <div class="section">
                 <h2>Diagnostics</h2>
-                <div style="font-size:12px;color:#888;margin-bottom:10px;">
+                <div style="font-size:12px;color:var(--fg-dim);margin-bottom:10px;">
                     Serial-parity over WiFi — device health, the live log tail, and crash
                     core dumps, no USB cable needed.
                 </div>
 
-                <div id="diagHealth" style="color:#c00;font-size:13px;margin-bottom:6px;"></div>
+                <div id="diagHealth" style="color:var(--err);font-size:13px;margin-bottom:6px;"></div>
 
                 <!-- Subsystem health: warnings for anything that failed to init at boot -->
                 <div id="diagSubsystems"></div>
@@ -287,7 +287,7 @@
                     <div class="diag-stat"><span class="diag-k">Log buffered</span><span id="diagLogBytes">—</span></div>
                 </div>
 
-                <h3 style="margin:14px 0 4px 0;">Audio real-time <span id="diagAudioNote" style="font-size:12px;color:#666;font-weight:normal;"></span></h3>
+                <h3 style="margin:14px 0 4px 0;">Audio real-time <span id="diagAudioNote" style="font-size:12px;color:var(--fg-mut);font-weight:normal;"></span></h3>
                 <div class="diag-grid">
                     <div class="diag-stat"><span class="diag-k">CPU clock</span><span id="diagAudCpu">—</span></div>
                     <div class="diag-stat"><span class="diag-k">Underruns</span><span id="diagAudUnder" class="diag-reason">—</span></div>
@@ -302,7 +302,7 @@
                     <label style="font-size:13px;display:inline-flex;align-items:center;gap:4px;">
                         <input type="checkbox" id="diagAuto"> Auto-refresh
                     </label>
-                    <button id="diagReboot" style="background:#dc3545;margin-left:auto;">Reboot Device</button>
+                    <button id="diagReboot" style="background:var(--err);color:#2a0808;border-color:transparent;margin-left:auto;">Reboot Device</button>
                 </div>
             </div>
 
@@ -310,14 +310,14 @@
                 <h3>Device log</h3>
                 <div class="controls" style="margin-bottom:6px;">
                     <button id="diagCopy">Copy</button>
-                    <button id="diagClear" style="background:#fd7e14;">Clear buffer</button>
+                    <button id="diagClear" style="background:var(--amber);color:var(--amber-ink);border-color:transparent;">Clear buffer</button>
                 </div>
                 <pre id="diagLog" class="diag-log">(loading…)</pre>
             </div>
 
             <div class="section">
                 <h3>Log levels</h3>
-                <div style="font-size:12px;color:#888;margin-bottom:6px;">Per-category runtime log level. <code>debug</code>/<code>verbose</code> are off by default; raise a category to capture more detail in the device log above. Applies immediately on the device.</div>
+                <div style="font-size:12px;color:var(--fg-dim);margin-bottom:6px;">Per-category runtime log level. <code>debug</code>/<code>verbose</code> are off by default; raise a category to capture more detail in the device log above. Applies immediately on the device.</div>
                 <div id="diagLogLevels">(loading…)</div>
             </div>
 
@@ -327,7 +327,7 @@
                     <div id="diagCdText">—</div>
                     <div id="diagCdActions" style="display:none;margin-top:8px;">
                         <a class="diag-dl" href="/api/coredump" download="coredump.bin">Download core dump</a>
-                        <button id="diagErase" style="background:#fd7e14;">Erase</button>
+                        <button id="diagErase" style="background:var(--amber);color:var(--amber-ink);border-color:transparent;">Erase</button>
                         <pre id="diagCdCmd" class="diag-cmd"></pre>
                     </div>
                 </div>

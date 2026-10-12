@@ -173,7 +173,7 @@ export function saveAsDialog() {
     const back = document.createElement('div');
     back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
     const box = document.createElement('div');
-    box.style.cssText = 'background:#fff;padding:20px;border-radius:8px;min-width:300px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-size:14px;';
+    box.style.cssText = 'background:#12151f;color:var(--fg);border:1px solid var(--edge-2);padding:20px;border-radius:12px;min-width:300px;box-shadow:0 20px 60px rgba(0,0,0,.6);font-size:14px;';
     const dests = ['spiffs', 'local'];
     const defaultDest = (currentSrc && dests.includes(currentSrc)) ? currentSrc : dests[0];
     box.innerHTML =
@@ -182,7 +182,7 @@ export function saveAsDialog() {
       + '<div style="margin-bottom:14px;"><label>Destination<br><select id="saveAsDest" style="width:100%;padding:6px;">'
       + dests.map(d => '<option value="' + d + '"' + (d === defaultDest ? ' selected' : '') + '>' + SRC_LABEL[d] + '</option>').join('')
       + '</select></label></div>'
-      + '<div style="text-align:right;"><button id="saveAsCancel">Cancel</button> <button id="saveAsOk" style="background:#28a745;">Save</button></div>';
+      + '<div style="text-align:right;"><button id="saveAsCancel">Cancel</button> <button id="saveAsOk" style="background:var(--ok);color:#06240f;border-color:transparent;">Save</button></div>';
     back.appendChild(box);
     document.body.appendChild(back);
 

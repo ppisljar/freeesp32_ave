@@ -40,11 +40,38 @@ const FIELD_LABELS = {
     freqR: 'Binaural', wave: 'Wave',
 };
 
+// Canvas colours. A <canvas> cannot read CSS custom properties, so these mirror
+// the tokens in css/style.css by hand — opaque values throughout, because the
+// canvas composites onto its own transparency rather than onto the panel behind
+// it, and translucent fills would wash out unpredictably. If you retheme the
+// stylesheet, retheme this with it.
+const PAL = {
+    laneHead:   '#161a26',   // lane header band
+    laneText:   '#eeecf6',   // --fg
+    rulerBg:    '#0e121c',
+    rulerEdge:  '#2a3040',
+    grid:       '#1a1f2b',   // vertical time gridlines
+    dim:        '#7a7791',   // --fg-dim: tick labels, ghost curve
+    stripBg:    '#090c14',   // automation strip background
+    stripEdge:  '#1d2230',
+    gutterBg:   '#10141e',   // field-label gutter
+    gutterText: '#aba8c0',   // --fg-mut
+    selRing:    '#ffffff',   // selected keyframe ring (was #222, invisible now)
+    handleFill: '#0b0e18',   // mid-handle disc, so the coloured ring reads
+    step:       '#5fd8e8',   // --cyan
+    lin:        '#4ade80',   // --ok
+    quad:       '#ffb454',   // --amber
+    mod:        '#a98bff',   // --violet: periodic modulation
+    modFill:    'rgba(169,139,255,0.14)',
+    wave:       '#ff7ac6',   // --magenta: waveType markers
+    playhead:   '#ff6b6b',   // --err
+};
+
 function shapeColor(shape) {
-    if (shape === 'step') return '#5b8def';
-    if (shape === 'lin') return '#37b24d';
-    if (shape === 'quad') return '#f08c00';
-    return '#ae3ec9'; // periodic mods
+    if (shape === 'step') return PAL.step;
+    if (shape === 'lin') return PAL.lin;
+    if (shape === 'quad') return PAL.quad;
+    return PAL.mod; // periodic mods
 }
 
 export function createLaneCanvas(canvas, cb) {
@@ -155,9 +182,9 @@ export function createLaneCanvas(canvas, cb) {
         // Lane headers + sublanes.
         let y = RULER_H;
         for (const lane of model().lanes) {
-            ctx2d.fillStyle = '#eef1f6';
+            ctx2d.fillStyle = PAL.laneHead;
             ctx2d.fillRect(0, y, cssW, LANE_HEAD_H);
-            ctx2d.fillStyle = '#333';
+            ctx2d.fillStyle = PAL.laneText;
             ctx2d.fillText((lane.collapsed ? '▸ ' : '▾ ') + lane.name,
                            6, y + LANE_HEAD_H / 2);
             y += LANE_HEAD_H;
@@ -170,36 +197,36 @@ export function createLaneCanvas(canvas, cb) {
     }
 
     function drawRuler(cssW) {
-        ctx2d.fillStyle = '#fafbfc';
+        ctx2d.fillStyle = PAL.rulerBg;
         ctx2d.fillRect(0, 0, cssW, RULER_H);
-        ctx2d.strokeStyle = '#dde1e7';
+        ctx2d.strokeStyle = PAL.rulerEdge;
         ctx2d.beginPath(); ctx2d.moveTo(0, RULER_H - 0.5); ctx2d.lineTo(cssW, RULER_H - 0.5); ctx2d.stroke();
         // Nice tick spacing in ms.
         const targetPx = 80;
         const rawMs = targetPx * msPerPx;
         const step = niceStep(rawMs);
         const startT = Math.ceil(t0 / step) * step;
-        ctx2d.fillStyle = '#888';
-        ctx2d.strokeStyle = '#eceff3';
+        ctx2d.fillStyle = PAL.dim;
+        ctx2d.strokeStyle = PAL.grid;
         for (let t = startT; ; t += step) {
             const x = timeToX(t);
             if (x > cssW) break;
             if (x < plotX) continue;
             ctx2d.beginPath(); ctx2d.moveTo(x, 0); ctx2d.lineTo(x, totalH); ctx2d.stroke();
-            ctx2d.fillStyle = '#888';
+            ctx2d.fillStyle = PAL.dim;
             ctx2d.fillText(fmtMs(t), x + 3, RULER_H / 2);
         }
     }
 
     function drawStrip(s) {
         // background + label gutter
-        ctx2d.fillStyle = '#fff';
+        ctx2d.fillStyle = PAL.stripBg;
         ctx2d.fillRect(s.x, s.y, s.w, s.h);
-        ctx2d.strokeStyle = '#f0f2f5';
+        ctx2d.strokeStyle = PAL.stripEdge;
         ctx2d.strokeRect(s.x, s.y + 0.5, s.w, s.h);
-        ctx2d.fillStyle = '#f7f8fa';
+        ctx2d.fillStyle = PAL.gutterBg;
         ctx2d.fillRect(0, s.y, LABEL_W, s.h);
-        ctx2d.fillStyle = '#666';
+        ctx2d.fillStyle = PAL.gutterText;
         ctx2d.fillText(FIELD_LABELS[s.field] || s.field, 6, s.y + s.h / 2);
 
         const sub = s.lane.sub[s.field];
@@ -251,7 +278,7 @@ export function createLaneCanvas(canvas, cb) {
             ctx2d.arc(x, yy, sel ? 6 : 4, 0, Math.PI * 2);
             ctx2d.fillStyle = shapeColor(k.shape);
             ctx2d.fill();
-            if (sel) { ctx2d.strokeStyle = '#222'; ctx2d.lineWidth = 2; ctx2d.stroke(); ctx2d.lineWidth = 1; }
+            if (sel) { ctx2d.strokeStyle = PAL.selRing; ctx2d.lineWidth = 2; ctx2d.stroke(); ctx2d.lineWidth = 1; }
         }
     }
 
@@ -261,12 +288,12 @@ export function createLaneCanvas(canvas, cb) {
         const yStart = valToY(s, k.v);
         const yEnd = valToY(s, (k.lfoEnd !== undefined && k.lfoEnd !== null) ? k.lfoEnd : k.v);
         const top = Math.min(yStart, yEnd), bot = Math.max(yStart, yEnd);
-        ctx2d.fillStyle = 'rgba(174,62,201,0.12)';
+        ctx2d.fillStyle = PAL.modFill;
         ctx2d.fillRect(x1, top, x2 - x1, bot - top || 2);
         // tiled waveshape
         const period = (k.lfoPeriodMs && k.lfoPeriodMs > 0) ? k.lfoPeriodMs : 1000;
         const pxPer = period / msPerPx;
-        ctx2d.strokeStyle = '#ae3ec9';
+        ctx2d.strokeStyle = PAL.mod;
         ctx2d.lineWidth = 1.5;
         ctx2d.beginPath();
         const mid = (top + bot) / 2, amp = (bot - top) / 2 || 4;
@@ -281,7 +308,7 @@ export function createLaneCanvas(canvas, cb) {
         // "≈ N cycles" readout
         if (x2 - x1 > 40) {
             const cycles = (next ? (next.t - k.t) : (xToTime(s.x + s.w) - k.t)) / period;
-            ctx2d.fillStyle = '#ae3ec9';
+            ctx2d.fillStyle = PAL.mod;
             ctx2d.fillText('≈ ' + cycles.toFixed(1) + ' cyc', x1 + 4, top - 2 < s.y ? top + 8 : top - 2);
         }
     }
@@ -290,7 +317,7 @@ export function createLaneCanvas(canvas, cb) {
         if (x2 - x1 < 30) return;
         const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
         k._mid = { x: mx, y: my };
-        ctx2d.fillStyle = '#fff';
+        ctx2d.fillStyle = PAL.handleFill;
         ctx2d.strokeStyle = shapeColor(k.shape);
         ctx2d.beginPath(); ctx2d.arc(mx, my, 6, 0, Math.PI * 2); ctx2d.fill(); ctx2d.stroke();
         ctx2d.fillStyle = shapeColor(k.shape);
@@ -299,14 +326,14 @@ export function createLaneCanvas(canvas, cb) {
     }
 
     function drawApproxBadge(x, y) {
-        ctx2d.fillStyle = '#f08c00';
+        ctx2d.fillStyle = PAL.quad;
         ctx2d.fillText('≈', x - 3, y - 10);
     }
 
     function drawGhost(s, sub) {
         if (!sub || !sub.keys.length) return;
         const keys = sub.keys.slice().sort((a, b) => a.t - b.t);
-        ctx2d.strokeStyle = '#888';
+        ctx2d.strokeStyle = PAL.dim;
         ctx2d.setLineDash([4, 3]);
         ctx2d.beginPath();
         for (let i = 0; i < keys.length; i++) {
@@ -318,7 +345,7 @@ export function createLaneCanvas(canvas, cb) {
         ctx2d.setLineDash([]);
         for (const k of keys) {
             ctx2d.beginPath(); ctx2d.arc(timeToX(k.t), valToY(s, k.v), 3, 0, Math.PI * 2);
-            ctx2d.fillStyle = '#888'; ctx2d.fill();
+            ctx2d.fillStyle = PAL.dim; ctx2d.fill();
         }
     }
 
@@ -327,9 +354,9 @@ export function createLaneCanvas(canvas, cb) {
         const WAVE = ['sin', 'sqr', 'tri', 'saw', 'wht', 'pnk', 'brn'];
         for (const k of sub.keys.slice().sort((a, b) => a.t - b.t)) {
             const x = timeToX(k.t);
-            ctx2d.strokeStyle = '#c2255c';
+            ctx2d.strokeStyle = PAL.wave;
             ctx2d.beginPath(); ctx2d.moveTo(x, s.y + 4); ctx2d.lineTo(x, s.y + s.h - 4); ctx2d.stroke();
-            ctx2d.fillStyle = '#c2255c';
+            ctx2d.fillStyle = PAL.wave;
             ctx2d.fillText(WAVE[k.v] || String(k.v), x + 3, s.y + s.h / 2);
         }
     }
@@ -339,7 +366,7 @@ export function createLaneCanvas(canvas, cb) {
         if (ms === null || ms === undefined) return;
         const x = timeToX(ms);
         if (x < plotX || x > cssW) return;
-        ctx2d.strokeStyle = '#e03131';
+        ctx2d.strokeStyle = PAL.playhead;
         ctx2d.lineWidth = 1.5;
         ctx2d.beginPath(); ctx2d.moveTo(x, 0); ctx2d.lineTo(x, totalH); ctx2d.stroke();
         ctx2d.lineWidth = 1;

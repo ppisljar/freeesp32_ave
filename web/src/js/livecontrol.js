@@ -149,7 +149,7 @@ function ctrlOpenModPopup(domain, idx, field) {
     const back = document.createElement('div');
     back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
     const box = document.createElement('div');
-    box.style.cssText = 'background:#fff;padding:20px;border-radius:8px;min-width:280px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-size:14px;';
+    box.style.cssText = 'background:#12151f;color:var(--fg);border:1px solid var(--edge-2);padding:20px;border-radius:12px;min-width:280px;box-shadow:0 20px 60px rgba(0,0,0,.6);font-size:14px;';
     box.innerHTML =
         '<h3 style="margin:0 0 12px 0;">Modulation — ' + label + '</h3>'
       + '<div style="margin-bottom:8px;"><label>Type<br><select id="modWave" style="width:100%;padding:6px;">'
@@ -160,7 +160,7 @@ function ctrlOpenModPopup(domain, idx, field) {
       + '<label style="flex:1;">To<br><input id="modTo" type="number" step="any" value="' + st.to + '" style="width:100%;padding:6px;"></label>'
       + '</div>'
       + '<div style="margin-bottom:14px;"><label>Period (ms)<br><input id="modPeriod" type="number" min="1" step="1" value="' + st.period + '" style="width:100%;padding:6px;"></label></div>'
-      + '<div style="text-align:right;"><button id="modCancel">Cancel</button> <button id="modApply" style="background:#28a745;">Apply</button></div>';
+      + '<div style="text-align:right;"><button id="modCancel">Cancel</button> <button id="modApply" style="background:var(--ok);color:#06240f;border-color:transparent;">Apply</button></div>';
     back.appendChild(box);
     document.body.appendChild(back);
     const close = () => document.body.removeChild(back);
@@ -207,7 +207,7 @@ function ctrlOpenPulsePopup(domain, idx) {
     const back = document.createElement('div');
     back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
     const box = document.createElement('div');
-    box.style.cssText = 'background:#fff;padding:20px;border-radius:8px;min-width:300px;box-shadow:0 4px 20px rgba(0,0,0,0.3);font-size:14px;';
+    box.style.cssText = 'background:#12151f;color:var(--fg);border:1px solid var(--edge-2);padding:20px;border-radius:12px;min-width:300px;box-shadow:0 20px 60px rgba(0,0,0,.6);font-size:14px;';
     box.innerHTML =
         '<h3 style="margin:0 0 12px 0;">Pulse — ' + label + '</h3>'
       + '<div style="margin-bottom:8px;"><label>' + envLabel + '<br><select id="pEnv" style="width:100%;padding:6px;">'
@@ -223,8 +223,8 @@ function ctrlOpenPulsePopup(domain, idx) {
       + num('pJamp', 'Jitter Hz', st.jamp, 0)
       + num('pJper', 'Jitter period ms', st.jper, 1)
       + '</div>'
-      + (isAud ? '<div style="font-size:12px;color:#888;margin-bottom:10px;">Beat jitter is device-wide (affects all audio channels).</div>' : '')
-      + '<div style="text-align:right;"><button id="pCancel">Cancel</button> <button id="pApply" style="background:#28a745;">Apply</button></div>';
+      + (isAud ? '<div style="font-size:12px;color:var(--fg-dim);margin-bottom:10px;">Beat jitter is device-wide (affects all audio channels).</div>' : '')
+      + '<div style="text-align:right;"><button id="pCancel">Cancel</button> <button id="pApply" style="background:var(--ok);color:#06240f;border-color:transparent;">Apply</button></div>';
     back.appendChild(box);
     document.body.appendChild(back);
     const close = () => document.body.removeChild(back);

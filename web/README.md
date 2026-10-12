@@ -9,8 +9,8 @@ partition. No framework.
 ```
 web/
   src/
-    index.html          markup only (no inline JS/CSS)
-    css/style.css        styles
+    index.html          markup + a few inline layout styles (no inline JS)
+    css/style.css        the whole design system (see "Theming" below)
     js/
       main.js            entry point: boot, wire events, init
       util.js            showMessage + runtime appConfig
@@ -24,6 +24,39 @@ web/
 ```
 
 `dist/` and `data/` are generated and git-ignored.
+
+
+## Theming
+
+`css/style.css` defines every colour as a custom property on `:root`, and the
+palette is the project site's palette — amber and cyan, because that is the
+complementary pair the antiphase flicker mode uses. It is **dark only, on
+purpose**: this gets used in a dim room next to a device whose whole job is
+controlled light.
+
+Three rules, each of which has already been broken once:
+
+1. **No colour literals.** Not in `style.css`, not in `index.html`'s inline
+   styles, not in JS. Inline styles resolve `var()` perfectly well, so markup
+   written from JavaScript uses `background:var(--bg-2)` like everything else.
+   Inline styles that carry a colour bypass the stylesheet completely, which is
+   how the Settings panel ended up rendering light-on-light.
+
+2. **`gen/views/lane_canvas.js` is the one exception**, because a `<canvas>`
+   cannot read CSS custom properties. It carries a `PAL` object of opaque
+   values that mirrors the tokens by hand; retheme it alongside the stylesheet.
+
+3. **Never rename a selector without grepping `src/js` first.** The JS toggles
+   classes on these elements (`.active`, `.on`, `.inactive`, `.locked`,
+   `.has-error`, …) and the settings renderer writes inline widths that the
+   mobile block overrides with `!important`.
+
+The layout is mobile-first-capable rather than mobile-first: one breakpoint at
+640 px stacks the live-control fields, swaps the generator's wide grid for
+cards, and turns popovers into bottom sheets. To check it without a phone, the
+media queries respond to an **iframe's** width — point one at the dev server at
+`width="390"` and the real breakpoints apply.
+
 
 ## Build
 
