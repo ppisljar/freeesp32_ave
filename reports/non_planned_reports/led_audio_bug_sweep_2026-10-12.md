@@ -187,7 +187,7 @@ the symptom reads as sample loss but is really truncation, and that the earlier
 Fixed by clearing any previous recorder at the START of a capture rather than
 after a failure.
 
-## 8. env carrier shapes re-measured; TRAPEZOID even harmonics unexplained (OPEN)
+## 8. env carrier shapes re-measured; TRAPEZOID was a MEASUREMENT ARTIFACT (RESOLVED)
 
 Regression check on the `env` carriers after today's changes, 10 Hz, duty 50,
 bright 100, RGB 255 (effective drive 255, inside the linear region), default
@@ -260,3 +260,49 @@ couples onto the wiring past the joint.
 Discriminating test (seconds, needs hands): shine a bright light directly on the
 ch2 cell. If the level jumps, it is aim/shading. If it stays ~38 dB down, it is
 the joint.
+
+
+## 8a. TRAPEZOID resolved: no firmware defect
+
+The h2 = 0.547 / h4 = 0.518 figures in section 8 were wrong, and the way they
+were wrong is the useful part.
+
+**The trapezoid shape is correct.** Sweeping `attack` at 10 Hz / duty 50 (so the
+duty/2 clamp sits at 25 ms), both light channels agreeing:
+
+| attack | ch1 h2/h1 | ch1 h3/h1 | ch2 h2/h1 | ch2 h3/h1 |
+|---|---|---|---|---|
+| 3 ms | 0.042 | 0.316 | 0.107 | 0.297 |
+| 10 ms | 0.221 | 0.221 | 0.271 | 0.196 |
+| 20 ms | 0.360 | 0.061 | 0.420 | 0.056 |
+
+h2 rises and h3 falls monotonically with attack, which is exactly what widening
+a trapezoid's edges does. At the default attack the numbers sit near the
+documented row.
+
+**Two hypotheses tested and refuted before the real cause was found:**
+
+1. *A stale global `attack`.* `attack` is latched from a module global, so a
+   session omitting the column might inherit the previous session's value.
+   Tested directly -- ran a session setting attack=20 ms, then one with the
+   column omitted: h2 came out 0.042, identical to attack=3, not 0.360. It
+   defaults correctly; there is no cross-session contamination.
+
+2. *A real asymmetry in the shape computation.* Refuted by re-running the ORIGINAL
+   session unchanged after the ch2 wiring was repaired:
+
+       earlier    h1 -34.2 dBFS   h2/h1 0.547   h3/h1 0.330   h4/h1 0.518
+       now        h1 -26.8 dBFS   h2/h1 0.044   h3/h1 0.317   h4/h1 0.048
+
+Same .ledc, same analysis, same channel. The fundamental is **7.4 dB stronger**
+now, and the even harmonics collapsed by more than a decade. The earlier capture
+was taken while the ch2 sensor wiring was faulty, and repairing it changed ch1's
+level too -- a shared-wiring/positioning disturbance.
+
+**The generalisable lesson:** a degraded signal path inflates EVEN harmonics
+specifically, because whatever attenuates or distorts the photo-signal is not
+symmetric within the cycle. So h2/h1 is not safe to compare between runs unless
+the FUNDAMENTAL's absolute level is comparable too. Always print h1 in dBFS
+beside the ratios; a 7 dB drop in h1 invalidates the ratios built on it. Passing
+`signalcheck.py` is necessary but NOT sufficient -- ch1 cleared the +6 dB gate in
+both captures and still gave a wrong answer in one of them.
