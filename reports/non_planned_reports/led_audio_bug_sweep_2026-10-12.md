@@ -234,3 +234,29 @@ than the fundamental, which is physically impossible for those shapes). This is
 the same trap `signalcheck.py` exists to catch, and the lesson is to run the gate
 BEFORE interpreting, not after the numbers look odd. Resolder/reseat ch2 and
 re-check before trusting any two-channel result.
+
+
+## 9a. ch2 after reconnection: a FLAT 38 dB optical/series loss (needs hands)
+
+Reconnecting the ch2 cell did not restore it. `signalcheck.py` still says NO
+SIGNAL (10 Hz line -1.7 dB over its neighbourhood, versus +32.5 dB on ch1).
+
+Four hypotheses tested and three eliminated, which is worth recording because the
+first one looked obvious and was wrong:
+
+| hypothesis | test | result |
+|---|---|---|
+| missing 1k load -> cell capacitance into 1 Mohm Hi-Z, RC roll-off | flicker at 1 / 3 / 10 Hz | **REFUTED.** ch2-ch1 = -38.7 / -38.1 / -38.6 dB, dead flat across a decade. An RC corner loses ~20 dB/decade. |
+| MiniFuse ch2 preamp gain turned down (it dropped ~39 dB once before) | compare 50 Hz hum | **REFUTED.** ch2 hum -51.3 dBFS vs ch1 -53.0, i.e. ch2 amplifies normally; only the photo-signal is missing. |
+| cell now faces zones outside `mask 15` | repeat with `mask 255` (all 8 channels) | **REFUTED.** -38.1 dB -> -40.0 dB, unchanged. |
+| cell receives almost no light, or a high-resistance joint divides the signal | — | **REMAINING.** |
+
+A flat, frequency-independent loss with intact hum pickup places the attenuation
+between the cell and the cable: either the cell is physically not receiving light
+(covered, face-down, moved away) or a cold/dirty joint forms a resistive divider
+with the 1k load, which attenuates the photocurrent flatly while mains hum still
+couples onto the wiring past the joint.
+
+Discriminating test (seconds, needs hands): shine a bright light directly on the
+ch2 cell. If the level jumps, it is aim/shading. If it stays ~38 dB down, it is
+the joint.
