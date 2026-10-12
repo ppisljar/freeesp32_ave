@@ -73,6 +73,11 @@ typedef struct {
     volatile bool led_state;           // Target ON/OFF state; written by ISR, read by flicker task
     volatile bool led_dirty;           // ISR sets true when led_state changes; task clears it
     volatile uint64_t cycle_start_time_us; // Timestamp of current cycle start (ISR-owned)
+    // V-S4: timeline anchor of the most recent entry, consumed at the next cycle
+    // boundary to pull the cycle grid back onto the entry's lattice. 0 = nothing
+    // pending. Set only by the timeline path (which has a canonical anchor); the
+    // live/API path leaves it alone.
+    volatile uint64_t pending_anchor_us;
     volatile uint64_t latched_on_time_us;  // ON-time latched at cycle boundary; prevents mid-cycle duty glitch
 
     // CPU-efficiency caches (ISR-owned; purely derived — do NOT affect output).
@@ -855,6 +860,7 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
         // then take it again only to PUBLISH the handful of output fields. The
         // snapshot is a consistent (untorn) view exactly as before, and the
         // published values are bit-identical to the previous in-lock computation.
+        bool wait_anchor = false;   // V-S4: grid re-anchored into the future
         if (elapsed_us >= cycle_duration_us) {
             // -- snapshot shared inputs (consistent view vs task writers) --
             portENTER_CRITICAL_ISR(&s_flicker_mux);
@@ -991,6 +997,39 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
                 s->cached_cycle_duration_us = cycle_duration_us;  // A2 cache stays coherent
                 s->cd_cache_freq            = new_freq;
             }
+            /* V-S4: snap the cycle origin to the pending entry anchor's lattice.
+             *
+             * Target the lattice point NEAREST the natural origin, so the
+             * correction is bounded by half a period in either direction. A
+             * point in the past is fine and in fact preferable: the ISR simply
+             * sees a cycle already partway through, which is the correct phase,
+             * at the cost of one shortened cycle. A point in the future needs the
+             * LED held dark for the wait (see wait_anchor below) -- otherwise
+             * elapsed_us = 0 makes should_be_on true and the LED latches ON for
+             * the whole wait, which is the "first blink at full power" artifact
+             * the pre-anchor note at the top of this function describes.
+             *
+             * Skipped while the rate is being swept, modulated or jittered: those
+             * change the period every cycle, so there is no fixed lattice to snap
+             * to and forcing one would fight the modulation. (An earlier fix in
+             * this file was reintroduced wholesale by exactly that oversight on
+             * the jitter column, so the guard is deliberate.) */
+            if (s->pending_anchor_us != 0u) {
+                if (cycle_duration_us > 0u && sw_freq.curve == LED_INTERP_NONE &&
+                    !md_freq.active && snap_jitter_mhz == 0u) {
+                    const int64_t per = (int64_t)cycle_duration_us;
+                    const int64_t d   = (int64_t)(s->cycle_start_time_us
+                                                  - s->pending_anchor_us);
+                    const int64_t k   = (d >= 0) ? (d + per / 2) / per
+                                                 : -(((-d) + per / 2) / per);
+                    const int64_t origin = (int64_t)s->pending_anchor_us + k * per;
+                    if (origin > 0) {
+                        s->cycle_start_time_us = (uint64_t)origin;
+                        if ((uint64_t)origin > now_us) wait_anchor = true;
+                    }
+                }
+                s->pending_anchor_us = 0u;
+            }
             s->duty_cycle         = new_duty_cycle;
             s->duty_q8            = new_duty_q8;
             s->latched_on_time_us = new_latched_on;
@@ -1001,6 +1040,17 @@ static bool IRAM_ATTR led_flicker_timer_callback(gptimer_handle_t timer, const g
             s->blue  = new_b;
             portEXIT_CRITICAL_ISR(&s_flicker_mux);
             elapsed_us = 0;
+            if (wait_anchor) {
+                // Grid re-anchored to an instant still in the future: hold the LED
+                // dark until it arrives. The pre-anchor check at the top of the
+                // per-channel loop skips subsequent ticks until then.
+                if (s->led_state) {
+                    s->led_state = false;
+                    s->led_dirty = true;
+                    any_dirty    = true;
+                }
+                continue;
+            }
         }
 
         // V-E2: apply the phase offset at use-time from the LIVE period, so it is a
@@ -1454,6 +1504,19 @@ esp_err_t led_matrix_start_flicker_masked(uint8_t channel_mask, float frequency,
         // below needs the rate to compute latched_on_time_us.
         if (!s->active) {
             s->frequency_milliHz = freq_milliHz;
+        } else if (cycle_hint_us != 0u) {
+            // V-S4: an already-running channel keeps its rhythm, but the grid is
+            // pulled back onto this entry's lattice at the next boundary. Without
+            // it the rate change takes effect at the first boundary at or after
+            // dispatch -- a point on the OLD rate's lattice -- so the whole
+            // post-change block sits (boundary - entry) away from the audio gate,
+            // which IS anchored to the entry. That error ranges over a full old
+            // period as the entry time moves: measured +37.1 ms for an entry at
+            // t=9040 and -47.3 ms at t=9080 (8 Hz -> 6 Hz), i.e. up to +/-62.5 ms
+            // at 8 Hz. Armed on EVERY timeline entry, not just rate changes: when
+            // the grid is already aligned the correction lands on the same instant
+            // and is a no-op, so this also self-heals any accumulated slip.
+            s->pending_anchor_us = cycle_hint_us;
         }
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
@@ -1700,7 +1763,8 @@ esp_err_t led_matrix_stop_flicker_masked(uint8_t channel_mask)
  * @param brightness   New maximum brightness (0-100).
  */
 esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float frequency,
-                                                    uint8_t duty_cycle, uint8_t brightness)
+                                                  uint8_t duty_cycle, uint8_t brightness,
+                                                  uint64_t cycle_hint_us)
 {
     if (frequency <= 0.0f || frequency > 100.0f) {
         ESP_LOGE(TAG, "Invalid flicker frequency: %.1f Hz", frequency);
@@ -1724,6 +1788,15 @@ esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float fr
         // shift the grid by (new_period - old_period). sw_freq below carries the
         // new rate to the next cycle boundary, which is what the note below has
         // always described.
+        //
+        // V-S4: this is the path the timeline actually uses for an entry with no
+        // swept fields on an already-flickering channel (config_parser routes it
+        // via orphan_mask), so it is where the grid must be re-anchored. Arming it
+        // only in start_flicker_masked left the fix dead on exactly the case it was
+        // written for.
+        if (cycle_hint_us != 0u) {
+            s->pending_anchor_us = cycle_hint_us;
+        }
         s->duty_cycle          = duty_cycle;
         s->brightness          = brightness;
         s->duty_q8             = (uint16_t)duty_cycle * 256u;
@@ -2240,7 +2313,8 @@ esp_err_t led_matrix_stop_flicker(void) {
 }
 
 esp_err_t led_matrix_update_flicker_params(float frequency, uint8_t duty_cycle, uint8_t brightness) {
-    return led_matrix_update_flicker_params_masked(0x01u, frequency, duty_cycle, brightness);
+    // 0 anchor: this legacy wrapper has no timeline T0, so no grid re-anchor.
+    return led_matrix_update_flicker_params_masked(0x01u, frequency, duty_cycle, brightness, 0);
 }
 
 esp_err_t led_matrix_set_flicker_color(uint8_t red, uint8_t green, uint8_t blue) {

@@ -2962,7 +2962,8 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
             fr = led_matrix_update_flicker_params_masked(orphan_mask,
                                                          led->frequency,
                                                          led->duty_cycle,
-                                                         led->brightness);
+                                                         led->brightness,
+                                                         logical_anchor_us);
         } else {
             fr = led_matrix_start_flicker_masked(orphan_mask,
                                                  led->frequency,

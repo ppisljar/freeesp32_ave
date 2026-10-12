@@ -199,3 +199,81 @@ independently known.  Calibrating the constant away would bake my rig's bias int
 the firmware.  To zero it honestly, first measure the codec's own output latency
 (e.g. an electrical loopback from the DAC output back into the interface) and
 subtract only the device-side part.
+
+## Finding 2c -- a rate change lands at the next OLD-rate boundary, not at the entry (FIXED, V-S4)
+
+V-S3 removed the in-flight re-timing, but the rate change still takes effect at
+the first LED cycle boundary at or after dispatch.  That boundary sits on the
+OLD rate's lattice, while the audio gate is anchored to the entry itself -- so
+the whole post-change block is misaligned by (boundary - entry), which ranges
+over a full old period as the entry time varies.  At 8 Hz that is up to
++/-62.5 ms, i.e. LARGER than the 42 ms V-S3 fixed.
+
+The avs4/avs5 sessions missed this because t=9000 happens to be an exact
+multiple of 125 ms after t=2000, so the boundary coincided with the entry.
+
+Measured by moving the entry within one old period (8 Hz -> 6 Hz at t=9040 and
+t=9080).  Boundaries lie at `2000 + DMA_LAG + k*125`; the first at or after
+dispatch gives:
+
+| entry | first boundary >= dispatch | predicted block-2 offset | measured |
+|---|---|---|---|
+| 9040 ms | 9046.44 ms | +40 ms  | +37.1 ms |
+| 9080 ms | 9171.44 ms | -45 ms  | -47.3 ms |
+
+Tool note: `tools/avmeasure/avsync.py` only knows the offset modulo the period,
+which is useless once the error exceeds half a period, so
+`tools/avmeasure/ratechange.py` was added to find the changepoint directly from
+the inter-edge intervals.  Its first edge detector was wrong in an instructive
+way: behind the 100 nF / Hi-Z high-pass the OFF phase recovers toward baseline
+with a positive slope, giving a second broad positive bump per cycle, and a
+left-to-right "threshold then skip min_gap" scan with min_gap at half a period
+accepted both -- an 8 Hz 50% cycle measured as intervals 63.3 / 62.9 ms (the ON
+and OFF durations) instead of 125 ms.  Ranking candidates by slope and
+suppressing neighbours fixes it: intervals then read a clean 125.0 ms.
+
+
+### V-S4 fix and a routing trap worth remembering
+
+Fix: the timeline anchor is stashed in `pending_anchor_us` and consumed at the
+next cycle boundary, where the cycle origin is snapped to the lattice point
+NEAREST the natural origin (`anchor + k*period`, k rounded).  Nearest, not next,
+bounds the one-time distortion to half a period either way.  A lattice point in
+the past is preferable -- the ISR just sees a cycle already partway through,
+which is the correct phase -- while a point in the future needs the LED held dark
+for the wait, else `elapsed_us = 0` makes `should_be_on` true and the LED latches
+ON for the whole wait (the "first blink at full power" artifact the pre-anchor
+note describes).
+
+Armed on EVERY timeline entry, not only rate changes: when the grid is already
+aligned the correction lands on the same instant and is a no-op, so it also
+self-heals accumulated slip.  Skipped while the rate is swept, modulated or
+jittered -- those change the period every cycle so there is no fixed lattice, and
+an earlier fix in this file was reintroduced wholesale by exactly that oversight
+on the jitter column.
+
+**The trap:** the first attempt armed the anchor only in `start_flicker_masked`
+and measured NO change at all.  config_parser routes an entry with no swept
+fields through `orphan_mask`, which for an already-flickering channel calls
+`led_matrix_update_flicker_params_masked` -- a function that did not even take an
+anchor parameter.  The fix was dead on exactly the case it was written for.  When
+a firmware change measures as a perfect no-op, check that the code path you
+edited is the one the timeline actually takes before concluding the mechanism was
+wrong.  (Three LED entry points exist: `start_sweep_masked` for entries with
+swept fields, `start_flicker_masked` for inactive orphan bits, and
+`update_flicker_params_masked` for active orphan bits.)
+
+Result -- entry time swept across one old period, which is what makes the bug
+visible at all:
+
+| entry | before V-S4 | after V-S4 |
+|---|---|---|
+| 9000 ms | -2.44 ms | -2.55 ms |
+| 9040 ms | +36.83 ms | -3.05 ms |
+| 9080 ms | -47.46 ms | -3.00 ms |
+| 9100 ms | -27.68 ms | -2.74 ms |
+
+Still OPEN: the sweep path (`start_sweep_masked`) does not arm the anchor. An
+entry whose brightness or colour is swept but whose RATE is constant
+(`freq_curve == LED_INTERP_NONE`) has a well-defined lattice and should be
+re-anchored too; it currently is not.

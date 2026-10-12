@@ -232,10 +232,17 @@ void led_matrix_set_jitter_masked(uint8_t channel_mask, float amp_hz, float peri
  * @param frequency    New flicker frequency in Hz.
  * @param duty_cycle   New duty cycle percentage (0-100).
  * @param brightness   New maximum brightness (0-100).
+ * @param cycle_hint_us Timeline anchor of the entry being applied, or 0 for
+ *                      callers with no canonical T0 (live sliders, /api). When
+ *                      non-zero the cycle grid is pulled onto this anchor's
+ *                      lattice at the next cycle boundary (V-S4), so the rate
+ *                      change lands on the .ledc timestamp instead of on
+ *                      whichever old-rate boundary happened to come next.
  * @return ESP_OK on success.
  */
 esp_err_t led_matrix_update_flicker_params_masked(uint8_t channel_mask, float frequency,
-                                                    uint8_t duty_cycle, uint8_t brightness);
+                                                    uint8_t duty_cycle, uint8_t brightness,
+                                                    uint64_t cycle_hint_us);
 
 /**
  * @brief Update ONLY brightness on the masked channels.
