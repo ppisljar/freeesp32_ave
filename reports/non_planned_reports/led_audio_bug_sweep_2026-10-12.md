@@ -62,28 +62,67 @@ An 11-minute constant-10 Hz capture (0.0000% missing samples, 6523 cycles):
   **-2.54 / -2.44 / -2.48 / -2.47 ms** -- flat to 0.1 ms over 9 minutes, i.e.
   **< 0.2 ppm** divergence between `esp_timer` (LED clock) and the I2S sample
   clock. Extrapolated over a 60 min session that is well under 1 ms.
-* no per-cycle glitches: max inter-edge deviation 1.16 ms, against 0.52 ms at a
-  control point.
+* ONE confirmed per-cycle timing event in 11 minutes: a cycle 6.24 ms short
+  (6% of a period) at device t = 577.84 s, seen independently by both detectors
+  (-6.24 ms and 6.24 ms). Cause not yet identified -- most likely the flicker ISR
+  being delayed ~16 ticks by something (RMT transmission, WiFi, a flash op), with
+  the phase-locked advance then absorbing it. ~5 per hour, 6% of a period, so low
+  priority next to what was fixed, but it IS real.
+* 101 single-ISR-tick steps (0.400 ms at 10 Hz), which are expected quantisation
+  rather than faults -- see section 4.
 
-## 4. percycle.py cries wolf on long windows (TOOL BUG, OPEN)
+## 4. percycle.py cried wolf on long windows (TOOL BUG, FIXED)
 
 Worth recording because it nearly produced a false bug report. Run over 55 s
 windows, `percycle.py` flagged 138 "anomalies" across 6000 cycles (2.3%),
 including an apparent **-36.8 ms** single-cycle glitch at t=433 s with a smooth
 +/-6 ms ramp around it.
 
-It is not real. Dumping the raw waveform at that instant showed clean 100 ms
-cycles, and the independent NMS edge detector in `ratechange.py` measured a
-maximum deviation of 1.16 ms there versus 0.52 ms at a control point. The
-signature -- one huge value flanked by a smooth ramp of residuals -- is the
-sliding-quadratic reference reacting to a segmentation slip, not a device fault.
+Most of it was not real, and the way I nearly got this wrong is the part worth
+recording.
 
-The cause is `percycle.py`'s phase segmentation: it demodulates against the
-nominal rate over the whole window, so on a long window the accumulated phase
-can slip past a segment boundary and one segment captures two edges or none.
-Until it is fixed, keep percycle windows short (<= 20 s, where it measured 0
-anomalies repeatedly) and corroborate any single-cycle finding against
-`ratechange.py`'s edge intervals before believing it.
+**A time-base mistake almost buried a real bug AND almost shipped a false one.**
+`percycle.py` reports DEVICE time (measured from the sync marker); I
+cross-checked those timestamps by feeding them to a detector working in FILE
+time, about 2 s apart on this capture. That made a genuine event look clean, so I
+first wrote "no per-cycle glitches" -- wrong. Re-running the cross-check inside
+the tool, on the same already-sliced array, confirmed the t=577.84 s event at
+-6.24 ms in both detectors. Never compare two measurements until both are in the
+same time base, and prefer a cross-check that physically cannot disagree about
+the origin.
+
+Three real causes, all now addressed:
+
+1. **pi slip in the phase lattice.** Wherever `|z|` dips, `np.unwrap` can take a
+   pi step, shifting every later segment boundary by HALF a cycle -- after which
+   `argmax(g)` latches the FALL instead of the RISE. At 50% duty the duty check
+   cannot see the swap, so it surfaced as the phantom -36.8 ms at t=433 s. The
+   tell was that edges after the event stayed ~54 ms out of step with those
+   before: 24.46 cycles between two edges instead of a whole number. Fixed by
+   driving the lattice from a robust degree-2 fit to the total phase (still
+   tracks a rate sweep; a localised pi step becomes an outlier the fit ignores).
+
+2. **ISR-tick steps counted as faults.** The flicker ISR runs at
+   `clamp(f0 * 250, 1000, 10000)` Hz, so a boundary can only land on a tick and
+   occasionally slips exactly one. At 10 Hz that is 0.400 ms -- just above the
+   0.335 ms threshold, so every slip was a "finding": 12-24 per 55 s window,
+   always in adjacent +/- pairs, measured mean 0.402 ms against a one-tick
+   0.400 ms. Now counted and reported SEPARATELY rather than suppressed, because
+   hiding them would also hide a genuine one-tick fault.
+
+3. **No independent corroboration.** Every timing finding is now cross-checked
+   against the amplitude-ranked NMS edge detector in `ratechange.py`, which never
+   uses phase and so fails differently. A displacement only one detector sees is
+   discarded as an artifact -- but still counted, since a rising discarded count
+   means the tool needs work, not that the device is clean.
+
+Net effect on the same 11-minute capture: **138 "anomalies" -> 1 real event,
+101 ISR-tick steps, 0 discarded.**
+
+Also hardened while here: `robust_sigma` and `local_resid` are NaN-aware. Without
+that, one unmeasurable cycle would make every threshold NaN and the detector
+would silently report zero anomalies for ever -- a detector that never fires
+looks exactly like a clean device.
 
 ## 5. Known issue not changed: omitting waveType resets the channel to sine
 
