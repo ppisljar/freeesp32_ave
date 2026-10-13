@@ -142,6 +142,14 @@ const GROUPS = [
         ],
     },
     {
+        id: 'markers', title: 'Stimulus markers',
+        fields: [
+            { key: 'marker_sinks', label: 'Sinks', type: 'sinks',
+              note: 'every enabled sink receives every marker',
+              help: 'Where M-line markers are sent, so an external recorder (an EEG) can be aligned with the stimulus. Add as many as you need — several of the same type is fine, e.g. two UDP destinations. GPIO fires a TTL pulse and is the most precise; UDP feeds the LSL bridge; SD writes a JSONL log that works with nothing attached.' },
+        ],
+    },
+    {
         id: 'reports', title: 'Reports',
         fields: [
             { key: 'report_storage', label: 'Store reports in', type: 'select',
@@ -157,6 +165,88 @@ function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'
 function helpIcon(f) {
     if (!f.help) return '';
     return ` <span class="help" title="${esc(f.help)}">ⓘ</span>`;
+}
+
+/* ---- marker sinks: a dynamic LIST, not a fixed set of fields ---------------
+ * The rest of this page is declarative (one GROUPS entry per control), which a
+ * variable-length list does not fit, so this type renders and reads itself.
+ * Row markup carries data-idx so collect() can walk the rows in order without
+ * tracking ids. */
+const SINK_TYPES = ['gpio', 'udp', 'sdjsonl'];
+const SINK_LABEL = { gpio: 'GPIO (TTL pulse)', udp: 'UDP (→ LSL bridge)', sdjsonl: 'SD card (JSONL)' };
+const MAX_SINKS = 4;
+
+function sinkRowHtml(k, i) {
+    const t = SINK_TYPES.includes(k.type) ? k.type : 'gpio';
+    const opt = SINK_TYPES.map(o =>
+        `<option value="${o}"${o === t ? ' selected' : ''}>${SINK_LABEL[o]}</option>`).join('');
+    const num = (name, v, w, extra) =>
+        `<input type="number" data-f="${name}" value="${v}" style="width:${w}px;"${extra || ''}>`;
+    return `<div class="sink-row" data-idx="${i}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0;padding:6px;background:var(--panel-2);border:1px solid var(--edge);border-radius:6px;max-width:100%;box-sizing:border-box;">
+      <select data-f="type">${opt}</select>
+      <span class="sink-gpio" style="display:${t === 'gpio' ? 'inline-flex' : 'none'};gap:4px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:11px;color:var(--fg-dim);">pin</label>${num('gpio_pin', k.gpio_pin ?? -1, 60)}
+        <label style="font-size:11px;color:var(--fg-dim);">pulse µs</label>${num('gpio_pulse_us', k.gpio_pulse_us ?? 5000, 76, ' min="100" max="50000"')}
+        <select data-f="gpio_timing" title="When the pulse fires">
+          <option value="0"${(k.gpio_timing | 0) === 0 ? ' selected' : ''}>at predicted onset</option>
+          <option value="1"${(k.gpio_timing | 0) === 1 ? ' selected' : ''}>at dispatch</option>
+        </select>
+        <label style="font-size:11px;color:var(--fg-dim);"><input type="checkbox" data-f="gpio_active_low"${(k.gpio_active_low | 0) ? ' checked' : ''}> active-low</label>
+      </span>
+      <span class="sink-udp" style="display:${t === 'udp' ? 'inline-flex' : 'none'};gap:4px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:11px;color:var(--fg-dim);">host</label>
+        <input type="text" data-f="udp_host" value="${esc(k.udp_host || '')}" placeholder="10.0.0.5" style="width:130px;">
+        <label style="font-size:11px;color:var(--fg-dim);">port</label>${num('udp_port', k.udp_port ?? 9009, 72, ' min="1" max="65535"')}
+      </span>
+      <span class="sink-sdjsonl" style="display:${t === 'sdjsonl' ? 'inline-flex' : 'none'};gap:4px;align-items:center;">
+        <label style="font-size:11px;color:var(--fg-dim);">folder</label>
+        <input type="text" data-f="sd_dir" value="${esc(k.sd_dir || 'logs')}" style="width:110px;">
+      </span>
+      <button type="button" class="sink-del" title="Remove this sink" style="margin-left:auto;">✕</button>
+    </div>`;
+}
+
+function sinksHtml(list) {
+    const arr = Array.isArray(list) ? list : [];
+    const rows = arr.slice(0, MAX_SINKS).map(sinkRowHtml).join('');
+    const empty = arr.length ? '' :
+        `<p style="margin:4px 0;color:var(--fg-dim);font-size:12px;">No sinks configured — markers are recorded for the live view only.</p>`;
+    return `<div id="marker-sinks">${rows}${empty}</div>
+      <button type="button" id="sink-add" style="margin-top:4px;"${arr.length >= MAX_SINKS ? ' disabled' : ''}>+ Add sink</button>
+      <p style="margin:6px 0 0;color:var(--fg-dim);font-size:11px;">
+        A GPIO pin must never be connected to an electrode or an input that is not
+        designed for a digital trigger.</p>`;
+}
+
+/* Re-render just the list, preserving whatever is currently typed in. */
+function redrawSinks(list) {
+    const host = document.getElementById('row-marker_sinks');
+    if (!host) return;
+    const ctrl = host.querySelector('.sink-host');
+    if (ctrl) ctrl.innerHTML = sinksHtml(list);
+}
+
+function readSinks() {
+    const out = [];
+    document.querySelectorAll('#marker-sinks .sink-row').forEach(row => {
+        const g = f => row.querySelector(`[data-f="${f}"]`);
+        const type = g('type') ? g('type').value : 'gpio';
+        const k = { type };
+        if (type === 'gpio') {
+            k.gpio_pin        = parseInt(g('gpio_pin').value, 10);
+            k.gpio_pulse_us   = parseInt(g('gpio_pulse_us').value, 10) || 5000;
+            k.gpio_timing     = parseInt(g('gpio_timing').value, 10) || 0;
+            k.gpio_active_low = g('gpio_active_low').checked ? 1 : 0;
+            if (!Number.isFinite(k.gpio_pin)) k.gpio_pin = -1;
+        } else if (type === 'udp') {
+            k.udp_host = g('udp_host').value.trim();
+            k.udp_port = parseInt(g('udp_port').value, 10) || 0;
+        } else {
+            k.sd_dir = g('sd_dir').value.trim() || 'logs';
+        }
+        out.push(k);
+    });
+    return out;
 }
 
 function fieldHtml(f, val, settings) {
@@ -188,6 +278,8 @@ function fieldHtml(f, val, settings) {
             arr.map((v, i) =>
                 `<input type="number" id="${id}-${i}" value="${v}" style="width:52px;" title="ch${i}">`
             ).join('') + '</span>';
+    } else if (f.type === 'sinks') {
+        inner = `<span class="sink-host" style="display:block;max-width:100%;">${sinksHtml(val)}</span>`;
     } else if (f.type === 'text') {
         inner = `<input type="text" id="${id}" value="${esc(val)}" style="min-width:260px;">`;
     } else if (f.type === 'vol') {
@@ -196,6 +288,16 @@ function fieldHtml(f, val, settings) {
         inner = `<input type="number" id="${id}" value="${val}" style="width:90px;">`;
     }
     const note = f.note ? ` <span style="color:var(--fg-dim);font-size:11px;">(${f.note})</span>` : '';
+    if (f.type === 'sinks') {
+        /* NOT a .set-row: that is a two-column grid (label left, control right)
+         * and a sink row is far too wide for the control column — it overflowed
+         * the panel and collided with the label. Stack it instead: label on its
+         * own line, list full width. */
+        return `<div id="row-${f.key}" style="margin:6px 0;">
+            <div style="margin-bottom:4px;">${f.label}${helpIcon(f)}${note}</div>
+            ${inner}
+        </div>`;
+    }
     // Layout lives in css/style.css (.set-row): a two-column grid, label left,
     // control right. It used to be an inline flex row with a 220px min-width on
     // the label, which the stylesheet then had to fight with !important.
@@ -221,6 +323,34 @@ function render(settings) {
     root.innerHTML = html;
     // Re-evaluate visibility whenever a dependency (a select) changes.
     root.addEventListener('change', applyVisibility);
+
+    /* Sink list: add / remove / switch type. Delegated, because the rows are
+     * replaced wholesale on every change. Read the list back before redrawing
+     * so half-typed values survive. */
+    root.addEventListener('click', ev => {
+        if (ev.target.id === 'sink-add') {
+            const list = readSinks();
+            if (list.length < MAX_SINKS) {
+                list.push({ type: 'gpio', gpio_pin: -1, gpio_pulse_us: 5000,
+                            gpio_timing: 0, gpio_active_low: 0 });
+                redrawSinks(list);
+            }
+            return;
+        }
+        if (ev.target.classList && ev.target.classList.contains('sink-del')) {
+            const row = ev.target.closest('.sink-row');
+            const idx = row ? parseInt(row.dataset.idx, 10) : -1;
+            const list = readSinks();
+            if (idx >= 0) list.splice(idx, 1);
+            redrawSinks(list);
+        }
+    });
+    root.addEventListener('change', ev => {
+        if (ev.target.dataset && ev.target.dataset.f === 'type') {
+            redrawSinks(readSinks());
+        }
+    });
+
     applyVisibility();
 }
 
@@ -255,7 +385,9 @@ function collect() {
     for (const g of GROUPS) {
         for (const f of g.fields) {
             const id = inputId(f.key);
-            if (f.type === 'select') {
+            if (f.type === 'sinks') {
+                out[f.key] = readSinks();
+            } else if (f.type === 'select') {
                 out[f.key] = document.getElementById(id).value;
             } else if (f.type === 'pins8') {
                 const arr = [];
