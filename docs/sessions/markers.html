@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stimulus markers — Session developer — ESP32 AVE</title>
+<meta name="description" content="Announce experiment events to an EEG recorder: M lines, the three timestamps that must never be conflated, and the GPIO, UDP and SD sinks.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html" aria-current="page">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
+<main class="page">
+
+<div class="hero">
+  <h1>Stimulus markers</h1>
+  <p class="lead">A session makes light and sound. A marker makes a <em>timestamp</em> — the
+  announcement that something meaningful just happened, delivered to whatever else is recording.
+  Without one, an EEG trace and the stimulus that drove it are two files with no way to line them
+  up.</p>
+</div>
+
+<h2 id="why">The problem markers solve</h2>
+
+<p>Picture a twenty-minute session: ten-hertz flicker, a ten-hertz binaural beat, a glide down to
+six hertz, then a return. Alongside it, an EEG is recording brain activity.</p>
+
+<p>The EEG has no idea when any of that happened. It has a continuous signal and no boundaries. You
+cannot ask whether the response grew after the light came on, how fast it settled, or whether it
+returned to baseline afterwards — because you do not know where "after the light came on" is in the
+recording.</p>
+
+<p>A marker is that boundary, written into the record:</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Session time</th><th>Marker</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>0&nbsp;ms</td><td><code>SESSION_START</code></td><td>experiment begins</td></tr>
+    <tr><td>5,000&nbsp;ms</td><td><code>BASELINE_START</code></td><td>no stimulation</td></tr>
+    <tr><td>35,000&nbsp;ms</td><td><code>LIGHT_ON</code></td><td>10&nbsp;Hz LED starts</td></tr>
+    <tr><td>65,000&nbsp;ms</td><td><code>AUDIO_ON</code></td><td>audio added</td></tr>
+    <tr><td>95,000&nbsp;ms</td><td><code>GLIDE_START</code></td><td>rate begins changing</td></tr>
+    <tr><td>185,000&nbsp;ms</td><td><code>SESSION_END</code></td><td>complete</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="m-lines"><code>M</code> lines</h2>
+
+<pre><code>M &lt;time_ms&gt; &lt;LABEL&gt; [key=value ...]</code></pre>
+
+<p>A new line type, scheduled by the same timeline that runs the light and the sound. Nothing about
+the existing syntax changes.</p>
+
+<pre><code># Begin with a baseline
+M 0      BASELINE_START
+
+# Start 10 Hz stimulation
+M 30000  STIM_START      condition=alpha10 block=3
+30000 10 50 60 0 0 255 15
+
+# Change condition
+M 60000  CONDITION_CHANGE condition=audio_visual
+
+# End the trial
+M 90000  STIM_END</code></pre>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Field</th><th>Rules</th></tr></thead>
+  <tbody>
+    <tr><td><code>LABEL</code></td><td><code>[A-Z0-9_]</code>, 1&ndash;31 characters. An
+      out-of-charset label is <strong>rejected, not sanitised</strong> — these strings become event
+      names in an analysis script, and an event silently renamed by the firmware is not recoverable
+      from the data.</td></tr>
+    <tr><td><code>key=value</code></td><td>Up to <strong>four</strong> pairs; key ≤15 chars, value
+      ≤31. A token with no <code>=</code> is warned about and skipped.</td></tr>
+    <tr><td><code>mod=</code></td><td><strong>Reserved.</strong> Sets the modality (below) rather
+      than inferring it. Never stored as a key/value pair.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><code>SESSION_START</code> and <code>SESSION_END</code> are emitted by the firmware when your
+file does not carry them, so a recording always has its boundaries.</p>
+
+<h2 id="timestamps">Three timestamps, and why they are not one</h2>
+
+<p>This is the part worth reading twice. Every marker carries three times, and treating them as
+interchangeable is the error the whole design exists to prevent.</p>
+
+<div class="spec-table">
+<table>
+  <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>t_sched_us</code></td><td>when the <code>.ledc</code> <strong>intended</strong> the event</td></tr>
+    <tr><td><code>t_disp_us</code></td><td>when the firmware <strong>processed</strong> it</td></tr>
+    <tr><td><code>t_onset_pred_us</code></td><td>when the signal is <strong>expected</strong> at the output</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="warn">
+  <p><strong>The third is predicted, not measured.</strong> It is <code>t_disp_us</code> plus the
+  modality's pipeline latency, and it is named <code>..._pred_us</code> in the struct, the JSON, the
+  log and the API so that it cannot quietly be read as a verified onset.</p>
+  <p>A marker timestamp is <em>not</em> a verified physical onset. If the difference matters for
+  your experiment, validate the GPIO sink against a capture rather than trusting the prediction.</p>
+</div>
+
+<p>The latencies come from the device's measured audio/LED synchronisation:</p>
+
+<ul>
+  <li><strong>audio</strong> — 46.439&nbsp;ms, the 8&nbsp;&times;&nbsp;256-frame I2S DMA ring.</li>
+  <li><strong>LED</strong> — that same anchor <em>plus</em> the strip write, at
+  <code>led_count &times; 30&nbsp;µs</code> (1.25&nbsp;µs/bit &times; 24 bits per pixel). The
+  midpoint is used, which on a 74-pixel strip leaves about &plusmn;1.1&nbsp;ms of honest
+  uncertainty: a zone's pixels are scattered along the serial chain, so the honest answer is a range, not
+  a number.</li>
+</ul>
+
+<p>Measured on hardware, dispatch runs 0.5&ndash;0.6&nbsp;ms behind schedule, and predicted onsets
+land at dispatch&nbsp;+&nbsp;46.439&nbsp;ms (audio) or +&nbsp;47.549&nbsp;ms (LED).</p>
+
+<h3 id="modality">Modality is inferred, so you need not think about it</h3>
+
+<p>A marker takes its modality from whatever shares its timestamp: beside an LED row it marks an LED
+event, beside an audio row an audio event, beside both it uses the later lag. Override with
+<code>mod=led</code>, <code>mod=audio</code>, <code>mod=both</code> or <code>mod=none</code>
+(<code>none</code> being bookkeeping only — predicted onset equals dispatch).</p>
+
+<p>Markers are stamped with the <strong>batch's</strong> dispatch time rather than the instant the
+executor's third pass reaches them, so a marker and the stimulus it announces share one
+reference.</p>
+
+<h2 id="sinks">Sinks: a list, not a fixed set</h2>
+
+<p>Configured on the Settings page. Every enabled sink receives every marker, and several of the
+same type are allowed — two UDP destinations for two recording machines, or two GPIO pins for two
+marked modalities.</p>
+
+<h3 id="gpio">GPIO — a TTL pulse</h3>
+
+<p>The lowest timing uncertainty, and independent of WiFi. Pin, pulse width and active level are
+configurable, plus <strong>when</strong> it fires:</p>
+
+<ul>
+  <li><code>onset</code> (default) — scheduled for the predicted physical onset, so the pulse lines
+  up with photons and sound rather than with the parser.</li>
+  <li><code>dispatch</code> — fires immediately. Useful for <em>measuring</em> the difference
+  between the two, which is the only honest way to check the prediction.</li>
+</ul>
+
+<div class="warn">
+  <p><strong>Never connect this pin to an EEG electrode, or to an input that is not designed for a
+  digital trigger.</strong> The recorder must support a trigger input electrically. Use
+  opto-isolation if there is any doubt — see the hardware section.</p>
+</div>
+
+<h3 id="udp">UDP — into research software</h3>
+
+<p>One JSON object per datagram. <code>tools/lslbridge/</code> turns that stream into a
+<a href="https://labstreaminglayer.readthedocs.io/" rel="nofollow">Lab Streaming Layer</a> marker
+stream, which LabRecorder can record into an XDF alongside the EEG.</p>
+
+<p>The bridge maps the device's monotonic clock onto LSL's with periodic round-trip offset
+estimation. <strong>Timestamping on arrival is not good enough</strong> for precise work: the
+variation in network delay would land directly in your marker times.</p>
+
+<h3 id="sd">SD card — reproducibility with nothing attached</h3>
+
+<p>Appends JSONL under the card root, opening with a provenance header:</p>
+
+<pre><code>{"rec":"header","session":"session","session_sha256":"f522ea9a…",
+ "fw_elf_sha256":"0b8bc44f6af6a1c6","origin_mono_us":…,
+ "pipeline":{"audio_lag_us":46439,"led_lag_us":47549,"led_count":74,
+             "note":"onset times are PREDICTED from these lags, not measured"}}
+{"rec":"marker","seq":3,"label":"AUDIO_ON","t_sched_us":3000000,
+ "t_disp_us":3000533,"t_onset_pred_us":3046972,"modality":"audio"}
+{"rec":"footer","markers":6,"dropped":0,"max_sched_disp_delta_us":611}</code></pre>
+
+<p>The firmware ELF hash and the session-file SHA-256 are there so a log can be tied to the exact
+firmware and the exact session that produced it. "I think it was that version" is not a basis for a
+reproducible experiment.</p>
+
+<h2 id="drops">Dropped markers are counted, never silent</h2>
+
+<p>Markers are queued into a preallocated ring and written out by a low-priority task — nothing
+touches the card or the network from a dispatch path. If that ring overflows, the count reaches the
+log footer and <code>/api/state</code>. A marker that silently never existed is the one failure that
+quietly invalidates a recording, so it is always reported.</p>
+
+<p>Full column semantics are on the <a href="../sessions/reference.html">reference page</a>; pacing,
+testing and the trap list are in the <a href="../sessions/authoring.html">authoring guide</a>.</p>
+
+</main>
+
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

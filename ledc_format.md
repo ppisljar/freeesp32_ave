@@ -51,6 +51,7 @@ new in v3; see "depth".
 A <time> <freq> <pan> <vol> <mod> [ch] [freqR] [waveType] [duty] [env] [phase] [attack] [jitter] [depth]
 BG <url> <pan> <loudness>                                                                   # background audio
 S <time> <voice> <volume> "<text>"                                                          # speech
+M <time> <LABEL> [key=value ...]                                                            # stimulus marker
 ```
 
 Token counts, from `parse_led_line` / `parse_audio_line`:
@@ -93,6 +94,85 @@ always and *plays* it when the firmware is built with `CONFIG_BG_SDCARD_ENABLED`
 occupies a slot, and does nothing. `voice` defaults to `default` and `volume` to
 80 if unparsable; the text is read from the raw line between the first and the
 **last** `"`, so inner quotes survive and a trailing comment is ignored.
+
+## `M` — stimulus markers
+
+```
+M <time_ms> <LABEL> [key=value ...]
+```
+
+A marker produces no sound and no light. It exists to tell an external recorder
+— an EEG, typically — that something happened at a known instant, so a brain
+signal can be aligned with the stimulus that drove it.
+
+```
+M 0      BASELINE_START
+M 30000  STIM_START      condition=alpha10 block=3
+30000 10 50 60 0 0 255 15
+M 90000  STIM_END
+```
+
+| field | rules |
+|---|---|
+| `LABEL` | `[A-Z0-9_]`, 1..31 chars. An out-of-charset label is **rejected**, not sanitised — these strings become event names in an analysis script, and a silently renamed event is not recoverable from the data. |
+| `key=value` | up to **4** pairs; key ≤15 chars, value ≤31. A token without `=` is warned about and skipped. |
+| `mod=` | **reserved.** Sets the modality (below) instead of inferring it, and is never stored as a kv pair. |
+
+`SESSION_START` and `SESSION_END` are emitted by the firmware when the file does
+not carry them, so a recording always has its boundaries.
+
+### Three timestamps, and why they are not one
+
+Every marker carries three times. Collapsing them is the mistake this feature
+exists to prevent.
+
+| field | meaning |
+|---|---|
+| `t_sched_us` | when the `.ledc` **intended** the event |
+| `t_disp_us` | when the firmware **processed** it |
+| `t_onset_pred_us` | when the signal is **expected** at the output |
+
+The third is **predicted, not measured**, and is named that way everywhere it
+appears. It is `t_disp_us` plus the pipeline latency for the modality:
+
+- audio — 46.439 ms (the 8 × 256-frame I2S DMA ring)
+- LED — that same anchor plus the strip write, `led_count × 30 µs` (1.25 µs/bit
+  × 24 bits per pixel). The midpoint is used, so on a 74-pixel strip this term
+  carries roughly ±1.1 ms: a zone's pixels are scattered along the chain, so the
+  honest answer is a range.
+
+Measured on hardware, dispatch runs 0.5–0.6 ms behind schedule, and the
+predicted onsets come out at dispatch + 46.439 ms (audio) / + 47.549 ms (LED).
+
+**A marker timestamp is not a verified physical onset.** Timing science with
+this wants the GPIO sink validated against a capture.
+
+### Modality is inferred from the batch
+
+A marker takes its modality from whatever else shares its timestamp: beside an
+LED row it marks an LED event, beside an audio row an audio event, beside both
+it uses the later lag. So an author never has to reason about DMA latency.
+Override with `mod=led`, `mod=audio`, `mod=both` or `mod=none` (`none` means
+bookkeeping only — predicted onset equals dispatch).
+
+Markers are stamped with the **batch's** dispatch time, not the moment the
+executor's third pass reaches them, so a marker and the stimulus it announces
+share one reference.
+
+### Where markers go
+
+To every **enabled sink**, configured on the Settings page — a list, not a fixed
+set, so two recording machines or two marked modalities are both expressible:
+
+| sink | what it does |
+|---|---|
+| `gpio` | a TTL pulse on a pin, scheduled at the **predicted onset** by default so it marks photons/sound rather than the parser. `dispatch` mode fires immediately, for measuring the difference. **The pin must never touch an electrode or an incompatible input.** |
+| `udp` | one JSON object per datagram. `tools/lslbridge/` turns the stream into an LSL marker stream. |
+| `sdjsonl` | appends JSONL under the card root, opening with a provenance header: firmware ELF hash, session-file SHA-256, device config and the pipeline constants the predictions were built from. |
+
+A marker lost to ring overflow is counted, never silent: the count reaches the
+log footer and `/api/state`, because a gap nobody is told about is worse than no
+log at all.
 
 ## Column reference — LED line
 
