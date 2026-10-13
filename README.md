@@ -1,245 +1,100 @@
 # freeesp32_ave
 
-### 📖 [Documentation & project site → ppisljar.github.io/freeesp32_ave](https://ppisljar.github.io/freeesp32_ave/)
+**Audio-Visual Entrainment (AVE) firmware for off-the-shelf ESP32 audio boards.**
+Generates binaural and monaural beats, isochronic tones and synchronised LED
+photic stimulation in real time, driven from one plain-text `.ledc` session
+script. Developed and measured on the **YelloByte YB-ESP32-S3-DAC**; also runs
+on classic ESP32 audio boards (AI-Thinker ESP32-A1S, generic ESP32 + I2S DAC).
 
-| | |
+### 📖 Documentation → [ppisljar.github.io/freeesp32_ave](https://ppisljar.github.io/freeesp32_ave/)
+
+**This README is for people and agents working on the code.** Everything
+user-facing lives on the site, and is not repeated here:
+
+| If you want | Go to |
 |---|---|
-| [**User guide**](https://ppisljar.github.io/freeesp32_ave/user-guide/) | connecting, the web UI, playing sessions, settings, OTA, troubleshooting |
-| [**Session developer**](https://ppisljar.github.io/freeesp32_ave/sessions/) | a page per entrainment modality, the complete `.ledc` reference, authoring guide |
-| [**Hardware**](https://ppisljar.github.io/freeesp32_ave/hardware/) | both builds — parts, wiring, LED topology, flashing, making your own |
+| To **use** the device — connecting, the web UI, playing sessions, OTA, troubleshooting | [User guide](https://ppisljar.github.io/freeesp32_ave/user-guide/) |
+| To **build** one — parts, shopping list, wiring diagrams, LED topology, power, hazards | [Hardware](https://ppisljar.github.io/freeesp32_ave/hardware/) |
+| To **write a session** — every `.ledc` line type, column, default and range | [`.ledc` reference](https://ppisljar.github.io/freeesp32_ave/sessions/reference.html) |
+| The **entrainment techniques** the firmware implements, and what it does *not* | [Techniques](https://ppisljar.github.io/freeesp32_ave/sessions/techniques.html) |
 
-*Site source is in [`docs/`](docs/). GitHub Pages must be pointed at the `docs`
-folder on the default branch; every link in the site is relative, so it also
-works if Pages is served from the repository root.*
+> ⚠️ This device deliberately flashes light in the 3–30 Hz band and ships **no
+> firmware safety interlock**. Read the
+> [safety section](https://ppisljar.github.io/freeesp32_ave/#safety) before
+> running anything that flickers. Not a medical device; no clinical validation.
 
 ---
 
-**Audio-Visual Entrainment (AVE) firmware** for off-the-shelf ESP32 audio
-boards. Developed and measured on the **YelloByte YB-ESP32-S3-DAC**, which
-carries the MCU, codec, headphone jack, speaker amp and microSD slot on one
-board; it also runs on classic ESP32 audio boards (AI-Thinker ESP32-A1S and
-generic ESP32 + I2S DAC).
+## Sources of truth
 
-A **low-cost, open-source alternative** to commercial AVE / mind machines such as:
+Read this before changing or documenting behaviour — most of the traps in this
+project are disagreements between a document and the code.
 
-- **Pandora Star**
-- Mind Alive **David Delight Pro**
-- MindPlace **Kasina**
-- **roXiva lamp**
-- Lumenate **Nova**
-- **Lucia N°03**
+| Subject | Authority | Derived from it |
+|---|---|---|
+| `.ledc` semantics | **`main/config_parser.c`** (device) | `ledc_format.md`, then the site's reference page |
+| `.ledc` in the browser | `web/src/js/gen/parse.js` | — |
+| Measured numbers | the capture files under `reports/` | everything that quotes them |
 
-## What it does
+Two rules that follow:
 
-- Generates **binaural beats**, isochronic tones, frequency sweeps, and other
-  brainwave-entrainment audio in real time on the ESP32 (ESP-DSP based)
-- Drives **LED flicker visuals synchronized to the audio** with
-  sub-millisecond timing precision
-- Plays timeline scripts (`.led` files) that choreograph audio + light into
-  full entrainment sessions
-- Built-in Wi-Fi web UI for uploading sessions and controlling playback
+1. **Where the device parser and the browser parser disagree, the device is
+   right and the browser is a bug.** Never "fix" the device to match the editor.
+2. **`ledc_format.md` is derived from the C, not the other way round.** It is
+   the long-form spec; the site's reference page is derived from *it*. Change
+   the code, then the spec, then the site — in that order, in one change.
 
-## Supported LED backends
+`docs/` is the site's source (hand-written static HTML, no build step). See
+`docs/README.md` before editing it.
 
-Pick one at build time via `idf.py menuconfig`:
+## Repository layout
+
+```
+main/                 firmware (28 .c files — see "Architecture" below)
+web/                  device web UI: vanilla JS, bundled into a SPIFFS partition
+docs/                 the project site (GitHub Pages, served from /docs)
+sessions/
+  library/            86 shipped .ledc sessions
+  test/               15 instrumented .ledc files for hardware measurement
+  SESSION_DESIGN_GUIDELINES.md
+tools/avmeasure/      audio/LED capture + analysis harness (Python)
+plans/                execution plans; plans/list.md is the index
+reports/              measurement + implementation reports; reports/list.md is the index
+ledc_format.md        authoritative long-form .ledc spec (derived from the C)
+legacyesp32.md        every classic-ESP32 / ESP32-S3 divergence + removal checklist
+sdkconfig.<board>     per-board config snapshots (see "Board profiles")
+```
+
+## Architecture
+
+Two paths dispatched from **one clock origin**, which is why audio and light
+stay together. `config_parser.c` parses a `.ledc` into a timeline and executes
+it; each entry drives the audio generator, the LED flicker engine, or both.
+
+| Area | Files |
+|---|---|
+| Timeline parse + execute | `config_parser.c`, `timing_engine.c` |
+| Audio synthesis | `audio_generator.c`, `mod_engine.c`, `audio_manager.c` |
+| Codec drivers | `audio_driver.c`, `audio_driver_{ac101,es8388,tlv320dac3101}.c` |
+| LED flicker | `led_matrix_example.c` (the flicker ISR), `led_strip.c`, `led_rmt_esp32{,s3}.c` |
+| Background audio / speech | `bg_player.c`, `speech_player.c`, `mp3_decoder.c`, `wav_parser.c` |
+| HTTP API + web UI serving | `web_server.c` |
+| Settings / NVS | `settings.c` |
+| Diagnostics | `diagnostics.c`, `isr_profiling.c`, `log_ctrl.c` |
+| Plumbing | `lock_free_comm.c`, `memory_pool.c`, `sdcard.c`, `wifi_manager.c` |
+
+**8 logical flicker channels × 16 audio channels.** LED backend is a build-time
+choice:
 
 | Backend | Driver | Typical use |
 |---|---|---|
-| **NeoPixel** | WS2812 / SK6812 via RMT | RGB LED strips and glasses |
-| **DotStar**  | APA102 via SPI3        | High-refresh-rate RGB |
-| **Direct LEDC** | 8× PWM @ 5 kHz       | Plain LEDs, lamps, high-power drivers |
+| **NeoPixel** | WS2812 / SK6812 via RMT | RGB strips, glasses, the NeoHEX build |
+| **DotStar** | APA102 via SPI3 | High-refresh-rate RGB |
+| **Direct LEDC** | 8× PWM | Plain LEDs and high-power constant-current drivers (the lamp build) |
 
-**8 logical flicker channels** × **16 audio channels**, with per-pixel
-channel mapping configurable from `menuconfig`.
-
-## Hardware
-
-The firmware supports a configurable set of off-the-shelf ESP32 audio
-boards (selected at build time via `idf.py menuconfig` and the per-board
-`sdkconfig.<board>` snapshots in this directory). Two end-product
-configurations cover most use cases:
-
-### Setup A — AVE Glasses (wearable)
-
-Lightweight, battery-powered, LEDs mounted in front of the eyes through
-diffuser fabric. Audio is delivered via headphones plugged into the
-board's headphone jack.
-
-| Component | Recommendation | Notes |
-|---|---|---|
-| ESP32 board | **HiFi-ESP32** or **Sonatino** (recommended) | Smaller form factor, modern audio chain, easy battery integration. Both have onboard headphone amp + ES8388-class codec. |
-| ESP32 board (alt) | AI-Thinker **ESP32-A1S** ([AliExpress](https://www.aliexpress.com/item/4000130915903.html)) | Cheap and widely available, but bulkier; AC101 or ES8388 variants both work (`sdkconfig.ac101` / `sdkconfig.es8388`). |
-| LED visuals | **4×12 NeoPixel RGB matrix** (48 WS2812 LEDs) — [AliExpress](https://www.aliexpress.com/item/1005007218748810.html) | Matches the default `CONFIG_LED_COUNT=48` and `CONFIG_LED_CHANNEL_MAP` frame topology. |
-| Diffuser | White ping-pong-ball halves, opal acrylic, or 200-gsm tracing paper | Critical for uniform light spread — bare LEDs are uncomfortably bright and produce visible "dots" instead of a soft flicker field. |
-| Frames | 3D-printed or modified safety/swim goggles | Must fully block external light. Keep LED-to-eye distance ≥ 25 mm to avoid focal discomfort. |
-| Power | 1 × 18650 Li-ion or 2 × AAA via boost converter | A1S has a JST-PH battery connector and onboard charging; HiFi-ESP32 and Sonatino vary — check vendor datasheets. |
-| Audio out | 3.5 mm TRS headphone jack (onboard) | All three boards above expose it directly. |
-
-LED backend for this setup: **NeoPixel** (`CONFIG_LED_TYPE_NEOPIXEL=y`)
-on a single data pin (default GPIO 12 in `sdkconfig.glasses`).
-
-**Assembly steps:**
-
-1. **Build the frame.** Either 3D-print one (search Thingiverse/Printables
-   for "AVE goggles" or "mind machine glasses" — many free designs) or
-   start from cheap swim goggles / safety goggles and remove the lenses.
-   The frame must completely block external light and hold the LED matrix
-   ~25-35 mm from your closed eyelids.
-2. **Wire the LED matrix to the ESP32 board.** Three wires:
-   - 5 V → matrix 5 V (red wire)
-   - GND → matrix GND (black/white wire)
-   - GPIO 12 (or whichever pin `CONFIG_LED_DATA_PIN` is set to) → matrix
-     DIN (green/data wire). The matrix is shipped with `IN` and `OUT`
-     ends — use the `IN` end. A 470 Ω resistor in series with DIN is
-     optional but helps with signal integrity on long leads (>10 cm).
-3. **Flash the firmware** before final assembly while the board is still
-   accessible: `./switch_board.sh glasses && idf.py flash monitor`.
-   Verify the LED matrix lights up on boot.
-4. **Add the diffuser** between the LED matrix and the eye-side opening.
-   White ping-pong ball halves are a classic hack; thin opal acrylic or
-   2-3 layers of tracing paper give a more uniform field.
-5. **Glue everything in place.** Hot glue is forgiving and removable
-   later. Make sure the USB port on the ESP32 board remains accessible
-   for re-flashing — leave a cutout in the frame.
-6. **Power via USB.** Either from a 5 V USB battery bank (1000+ mAh
-   gets you 6-8 hours) or wall-plug USB charger. For a fully wearable
-   setup with onboard battery, add a 18650 cell + protection board on
-   boards that support it (A1S has a JST-PH battery input + charging
-   IC).
-
-### Setup B — Standalone Lamp + Audio (room device)
-
-High-power continuous LED for room illumination (think "therapy lamp"
-class device — comparable to RoXiva or Lumenate Nova hardware) plus
-speaker output. Mains-powered, fixed location.
-
-| Component | Recommendation | Notes |
-|---|---|---|
-| ESP32 board | **A1S** ([AliExpress](https://www.aliexpress.com/item/4000130915903.html)) or HiFi-ESP32 / Sonatino | A1S has onboard speaker amplifier, no extra amp needed for low-volume room use. |
-| LED light source | **100 W warm-white COB LED** — [AliExpress](https://www.aliexpress.com/item/1005011883784272.html) | Single chip-on-board emitter, ~30 V Vf at full current. Use lower-power emitters (~10-50 W) for desk-class devices to reduce heatsink size and PSU rating. |
-| LED driver | **Mean Well NLDD-1400HW** constant-current driver | 1400 mA output, 2-52 V output range, accepts 12-54 V input. For LEDs running lower current, use NLDD-700H, NLDD-350H, or similar — match driver current to LED rated current. |
-| LED dimming | PWM input on the NLDD driver, wired to one ESP32 GPIO | Use **DIRECT LED backend** (`CONFIG_LED_TYPE_DIRECT=y`) with `CONFIG_LED_DIRECT_PIN_CH1` set to the GPIO going to the driver's PWM/DIM pin. The driver does the high-current switching; the ESP32 only supplies a 0-100% PWM signal at 25 kHz. |
-| AC adapter | **220 V → 12 V DC, 200-400 W** — [AliExpress](https://www.aliexpress.com/item/1005011942752725.html) | Sized to cover the LED + ESP32 + speakers with comfortable headroom. A 200 W supply handles a 100 W COB + everything else; a 400 W supply gives margin for two COBs or higher-power audio amps. Quality matters — a low-noise adapter avoids audible hum in the speakers. |
-| ESP32 supply | **12 V → 5 V buck converter** — [AliExpress](https://www.aliexpress.com/item/1005003141428190.html) (LM2596 / MP1584 / similar) | Step the 12 V LED rail down to 5 V for the ESP32 board's USB/VBAT input. A 1 A buck is more than enough. Avoid 12 V → 3.3 V direct unless your specific board has a 3.3 V-only input (most ESP32 dev boards include onboard 3.3 V regulators expecting 5 V upstream). |
-| Heatsink + fan | **Active heatsink with fan for 100 W COB** — [AliExpress](https://www.aliexpress.com/item/1005007983357418.html) | Required at 100 W; passive cooling is feasible up to ~50 W with a large finned heatsink, but active (fan) cooling buys margin and lets you run the LED hard without thermal throttling or color shift. |
-| Audio | Onboard speakers (A1S) or external 3.5 mm output | A1S's onboard amp drives small ~1-3 W speakers directly. For louder output add a Class-D amp module fed from the headphone-out signal. |
-
-LED backend for this setup: **Direct LEDC PWM**
-(`CONFIG_LED_TYPE_DIRECT=y`) on up to 4 GPIOs going to 4 separate LED
-driver dimming inputs. The COB LEDs above are dual-channel (warm+cold
-white per emitter, two independent PWM inputs each), and the linked
-cooler holds two LEDs — so the full build uses **4 driver-LED channels
-total**, one per `CONFIG_LED_DIRECT_PIN_CH1..CH4`. The constant-current
-drivers handle all the high-current switching; the ESP32 just emits
-0-100% PWM control signals at 25 kHz.
-
-**Assembly steps:**
-
-1. **Solder leads to the COB LEDs.** Each COB has 4 solder pads — two
-   for the warm-white channel (+/-) and two for the cold-white channel
-   (+/-). Use silicone-insulated wire (resists heat) — 22 AWG is
-   adequate for 1.4 A per channel. Tin both pad and wire, then join
-   quickly to avoid heating the LED. **The cooler holds 2 LEDs**, so
-   repeat for the second emitter — total 4 channels (2 warm + 2 cold
-   across both LEDs).
-2. **Wire each LED channel to its own constant-current driver.**
-   Four NLDD-1400HW drivers, one per channel: the driver's `+OUT`/`-OUT`
-   goes to the matching channel pair on the COB. Keep wire runs short
-   (<20 cm) to minimize voltage drop. **Important:** all 4 drivers
-   share the same +12 V input rail, but each has its own dimming line.
-3. **Wire each driver's dimming/PWM input to a separate ESP32 GPIO.**
-   For a default `sdkconfig.glasses` or `sdkconfig.a1s` build with
-   `CONFIG_LED_TYPE_DIRECT=y`:
-   - Driver 1 PWM → GPIO `CONFIG_LED_DIRECT_PIN_CH1` (default 12)
-   - Driver 2 PWM → GPIO `CONFIG_LED_DIRECT_PIN_CH2` (default 13)
-   - Driver 3 PWM → GPIO `CONFIG_LED_DIRECT_PIN_CH3` (default 14)
-   - Driver 4 PWM → GPIO `CONFIG_LED_DIRECT_PIN_CH4` (default 15)
-   Plus a shared GND between the driver dimming line and the ESP32 GND.
-4. **Assemble the optics.** Stack: heatsink (with fan facing out) →
-   thermal paste → COB LED → diffuser lens. The cooler kit linked above
-   typically includes mounting hardware for both LEDs and the diffuser
-   lenses; mount them so the two LEDs are spaced for even light
-   distribution at the intended viewing distance.
-5. **Wire the 12 V → 5 V buck converter** between the 12 V rail (shared
-   with the LED drivers) and the ESP32 board's USB or VBAT input.
-   Trim the buck's output potentiometer to exactly 5.0 V before
-   connecting to the ESP32 — over-voltage will fry the board.
-6. **Connect mains.** 220 V AC adapter → 12 V DC rail → splits to (a)
-   all 4 LED drivers, (b) the 12 V → 5 V buck → ESP32. Add an inline
-   fuse on the 12 V side rated for ~1.5× your expected total current
-   draw (for a 100 W LED load: ~10 A fuse).
-7. **Flash the firmware** before final case assembly:
-   `./switch_board.sh a1s && idf.py flash monitor`. Verify all 4 LED
-   channels respond to a test `.led` file that exercises each channel
-   individually (`mask=1`, `mask=2`, `mask=4`, `mask=8`).
-8. **Power on via the 220 V cord.** No USB cable needed during normal
-   operation — the buck converter feeds the ESP32 from the same 12 V
-   rail as the LEDs.
-
-**Safety notes:**
-- The 220 V AC side is mains voltage — house it in an insulated
-  enclosure with strain relief on the mains cord. Don't expose any
-  uninsulated mains conductors.
-- COB LEDs at 100 W produce intense light — never look directly at the
-  bare emitter without the diffuser in place. Even briefly. Eye damage
-  is real.
-- The heatsink runs hot (60-90 °C in active operation). Keep it away
-  from skin contact, fabric, and other heat-sensitive items.
-
-### Wiring summary (per board family)
-
-The board-specific `sdkconfig.<board>` files in this directory hold the
-exact pin assignments. To switch between boards: `./switch_board.sh
-{glasses|ac101|es8388|yb_s3_dac}` then `idf.py build flash`.
-
-Targets differ in more than pins — the classic ESP32 and the ESP32-S3 need
-genuinely different code in places (RMT channel layout, I2S clocking, flash
-size). Every such divergence is catalogued in **`legacyesp32.md`**, which
-doubles as the removal checklist for the day classic-ESP32 support is dropped.
-
-### YelloByte YB-ESP32-S3-DAC (ESP32-S3)
-
-An off-the-shelf ESP32-S3 board with a **TI TLV320DAC3101** codec, stereo
-class-D speaker outputs, a headphone jack and a microSD slot — the combination
-this project otherwise needs a custom PCB for. Selected with
-`./switch_board.sh yb_s3_dac`; pins live in `sdkconfig.defaults.esp32s3`.
-
-| | |
-|---|---|
-| I2S | BCLK 5, LRCLK 6, DIN 7, MCLK **unused** (`-1`) |
-| I2C (codec control) | SDA 8, SCL 9 @ 100 kHz, address `0x18` |
-| Codec `~RESET` | GPIO 21 |
-| microSD (SPI) | CS 10, MOSI 11, CLK 12, MISO 13 |
-| LEDs | GPIO 18 |
-| Flash | 16 MB, `partitions_16mb.csv` |
-| mDNS | `esp32-ave-mobile.local` (not the default `esp32-ave`) |
-
-Three things about this board are easy to lose an evening to:
-
-- **The codec is held in reset until firmware releases it.** GPIO 21 is wired
-  to `~RESET` through a solder bridge that ships *closed*, so until the driver
-  pulses it the chip does not answer on I2C at all — it presents as "no I2C
-  devices found", not as a codec fault.
-- **MCLK is not connected** (the `JP2` bridge ships open), so the codec derives
-  its clock from BCLK via its internal PLL. The driver's clock tables assume
-  this; do not set an MCLK pin unless you also close that bridge.
-- **It wants Philips/I2S framing**, not the left-justified framing the other
-  supported codecs use. `audio_manager.c` selects this per codec.
-
-Speaker output is deliberately configured at the **minimum** class-D gain
-(6 dB), not the 24 dB the datasheet suggests — these boards are usually driven
-into small speakers right next to someone's head.
-
-### A note on the custom board
-
-An open-hardware board,
-[`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer)
-(XIAO ESP32-S3 + CS4344 DAC + APA2068 speaker amp + microSD + configurable LED
-headers), was drawn up early on as the intended target. **It was never
-fabricated, and the firmware has never run on one.** The YB-ESP32-S3-DAC turned
-out to cover the same ground as an off-the-shelf part, so the custom board is
-unlikely to be built. The KiCad design stays in that repo as a starting point
-for anyone who does want a purpose-made board.
+Per-channel audio `vol` is **absolute, not a share of a mix**: every channel is
+scaled by a fixed 1/16 regardless of how many are running. See
+[the mixing model](https://ppisljar.github.io/freeesp32_ave/sessions/reference.html#mixing).
 
 ## Build & flash
 
@@ -249,379 +104,93 @@ idf.py menuconfig           # pick LED backend, set GPIO mapping
 idf.py build flash monitor
 ```
 
-Helper scripts for the common cases:
-
 | Script | What it does |
 |---|---|
-| `./switch_board.sh <board>` | Swap in that board's `sdkconfig` snapshot (see above). |
-| `./flash_all.sh` | Full USB flash: bootloader + app + both filesystems. Chip and offsets are read from the build, so it follows whichever board is selected. |
-| `./flash_web.sh` | Rebuild the web UI and flash **only** the `storage` partition. The app is left running. |
-| `./ota_flash.sh <ip>` | Push a new app over WiFi via the minimal OTA updater. |
-| `./build_web.sh` | Build the web bundle without flashing anything. |
+| `./switch_board.sh <board>` | Swap in that board's `sdkconfig` snapshot. |
+| `./flash_all.sh` | Full USB flash: bootloader + app + both filesystems. Chip and offsets come from the build, so it follows the selected board. |
+| `./build_web.sh` | Build the web bundle (and firmware) without flashing. |
+| `./flash_web.sh` | Rebuild the web UI and flash **only** the `storage` partition over USB. The app keeps running. |
+| `./ota_flash.sh <ip> [--part app\|storage\|cfgfs]` | Push over WiFi via the minimal OTA updater. |
 
-> **The web UI lives in a SPIFFS partition, not in the app image.** `ota_flash.sh`
-> updates the firmware only — after changing anything under `web/`, you must run
-> `./flash_web.sh` over USB or the device keeps serving the old bundle.
+> **The web UI lives in a SPIFFS partition, not in the app image.** After
+> changing anything under `web/`, flash it explicitly — `./flash_web.sh` over
+> USB, or `./ota_flash.sh <ip> --part storage` over WiFi. An app-only update
+> leaves the device serving the old bundle.
 
-### Working on the web UI
+The build prints `Part 'ota_1' … too small for binary`. **That warning is
+expected**: `ota_1` holds the minimal standalone OTA updater, not a second copy
+of the app. See the header of `partitions_16mb.csv`.
 
-Run `npm test` in `web/` before flashing; the suite is fast and covers the
-parser, the serializer and the device-traffic gate.
+### Board profiles
 
-**All device requests must go through `deviceFetch()`** (`web/src/js/devicefetch.js`),
-and all background polling through `startPolling()` (`web/src/js/poll.js`). A
-bare `fetch('/api/...')` is a bug. The device is a microcontroller with **seven
-HTTP sockets and one task**, and Chrome will happily open six connections per
-host: a handful of unguarded `setInterval` pollers is enough to occupy every
-connection, after which the whole page hangs with no error and no timeout —
-while `curl` from a terminal still answers in 40 ms, because curl isn't inside
-Chrome's exhausted pool. That asymmetry makes it look like a device fault, and
-it is not. `deviceFetch` caps in-flight requests, shares identical GETs and puts
-a deadline on everything; `startPolling` schedules the next run only after the
-previous one finishes.
+`./switch_board.sh {glasses|ac101|es8388|yb_s3_dac}` swaps in that board's
+`sdkconfig`, then `idf.py build flash`. Targets differ in more than pins — the
+classic ESP32 and the ESP32-S3 need genuinely different code in places (RMT
+channel layout, I2S clocking, flash size). Every such divergence is catalogued
+in **`legacyesp32.md`**, which doubles as the removal checklist for the day
+classic-ESP32 support is dropped.
 
-## WiFi & setup mode
+Pin maps and the board-specific gotchas (the TLV320 codec held in reset by a
+solder bridge, the unconnected MCLK, the framing difference) are on the
+[hardware page](https://ppisljar.github.io/freeesp32_ave/hardware/#s3).
 
-On boot the device joins the WiFi network configured in Settings (station mode).
-If it can't — no SSID set, or the join fails — it falls back to a **SoftAP** named
-`ESP32-AVE-Setup` (WPA2 password `entrain123`); connect to it and browse to
-`http://192.168.4.1` to configure WiFi and other settings.
+### Reaching the device while developing
 
-**Finding the device (mDNS):** in station mode the router hands the device a DHCP
-address you can't predict, so it also advertises itself over mDNS. Browse to
-`http://esp32-ave.local` and you reach it regardless of the IP — this works in both
-station and SoftAP mode. The hostname (the part before `.local`) is configurable in
-Settings → WiFi → *mDNS hostname* (letters/digits/hyphens; default `esp32-ave`).
+mDNS: `http://esp32-ave.local`, or **`http://esp32-ave-mobile.local`** for the
+ESP32-S3 profile — the hostname is a per-board setting, and the S3 does not use
+the default. If the configured WiFi fails the device raises a SoftAP named
+`ESP32-AVE-Setup` (password `entrain123`) at `http://192.168.4.1`; holding the
+button during power-on forces that path. Full story:
+[Connecting](https://ppisljar.github.io/freeesp32_ave/user-guide/connecting.html).
 
-> **Tip — phone hotspot in the field:** enable your phone's hotspot (on iPhone 12+
-> turn on *Maximize Compatibility* so it runs 2.4 GHz — the ESP32 is 2.4 GHz only),
-> set that SSID/password in Settings, and the device joins it. You can then reach
-> `http://esp32-ave.local` from the same phone, *and* the device gets internet
-> through the phone (so TTS / community presets / `http://` background audio all work).
+## Working on the web UI
 
-**Force SoftAP setup mode:** hold the **button during startup** (power-on / reset)
-and the device boots straight into SoftAP, skipping the station join — handy when
-the configured network is unreachable or you need to change credentials. The
-button is the one set by `button_gpio` in Settings (the same momentary button used
-for the runtime snapshot / long-press-stop); it's active-low (wired to GND with the
-chip's internal pull-up). Set `button_gpio = -1` to disable it entirely.
+Run `npm test` in `web/` before flashing; the suite is fast (269 tests) and
+covers the parser, the serializer and the device-traffic gate. `web/README.md`
+has the theming rules.
 
-## Timeline format (`.ledc` files)
+**All device requests must go through `deviceFetch()`**
+(`web/src/js/devicefetch.js`), and all background polling through
+`startPolling()` (`web/src/js/poll.js`). A bare `fetch('/api/...')` is a bug.
+The device is a microcontroller with **seven HTTP sockets and one task**, and
+Chrome will happily open six connections per host: a handful of unguarded
+`setInterval` pollers is enough to occupy every connection, after which the
+whole page hangs with no error and no timeout — while `curl` from a terminal
+still answers in 40 ms, because curl isn't inside Chrome's exhausted pool. That
+asymmetry makes it look like a device fault, and it is not. `deviceFetch` caps
+in-flight requests, shares identical GETs and puts a deadline on everything;
+`startPolling` schedules the next run only after the previous one finishes.
 
-Sessions are described in plain-text `.ledc` files (legacy `.led` also
-accepted). Each line is one of: a comment, an LED command, an audio
-command, or a background-audio command. The web UI on the ESP32 and
-the [`freeesp32_ave_generator`](https://github.com/ppisljar/freeesp32_ave_generator)
-graphical editor both produce this format.
+Before adding a poller, check whether the data is already being fetched —
+`livecontrol.js` polls `/api/state` once a second and broadcasts it as a
+`devicestate` event precisely so other panels do not open a second one.
 
-### General syntax rules
+## Testing and measurement
 
-- One command per line. Fields are whitespace-separated (spaces or tabs).
-- Lines starting with `#` are comments. Inline `# ...` after a command
-  is also a comment.
-- Blank lines are ignored.
-- Numeric values are decimal — integer or floating-point as appropriate.
-- Timestamps are absolute milliseconds from session start (t=0).
-- Commands within a file do **not** need to be sorted by time — the
-  parser orders them. Multiple commands sharing the same timestamp fire
-  in the same dispatch cycle.
-
-### LED commands (no prefix)
-
-LED commands change the flicker / brightness / color of one or more LED
-channels at a specific time. Two formats are accepted:
-
-**Canonical 8-token form:**
-
-```
-time  freq  duty  bright  R  G  B  mask
-```
-
-| Field | Range | Meaning |
-|---|---|---|
-| `time` | 0..N ms | Absolute timestamp |
-| `freq` | 0.01..500 Hz | LED flicker frequency. `0` = LED stays at solid `bright` level (no flicker). |
-| `duty` | 0..100 % | Duty cycle within each flicker period. 50 = symmetric on/off. |
-| `bright` | 0..100 % | Peak brightness during the "on" phase of the flicker. |
-| `R` `G` `B` | 0..255 each | LED color, used by NeoPixel / DotStar backends. Ignored by the DIRECT backend (monochrome PWM). |
-| `mask` | 0..255 | Bitmask of which logical channels (CH1..CH8) to update. `bit N = channel N+1`. `mask=1` = CH1 only; `mask=3` = CH1+CH2; `mask=255` = all 8 channels. |
-
-**Legacy 5-token form** (no color, single channel):
-
-```
-time  freq  duty  bright  channel
-```
-
-`channel` is the 1-indexed channel number (1..8). RGB defaults to white
-(255,255,255). The mask is derived as `1 << (channel - 1)`. Useful for
-quick monochrome LED scripts; for richer behavior use the 8-token form.
-
-### Audio commands (`A` prefix)
-
-Audio commands start a tone / noise on a synthesis channel, or update
-parameters of a channel already running. Format is positional with
-optional trailing fields:
-
-```
-A  time  freq  pan  vol  mod  channel  [freq_r]  [wave_type]
-```
-
-| Field | Range | Meaning |
-|---|---|---|
-| `time` | 0..N ms | Absolute timestamp |
-| `freq` | 0..20000 Hz | Carrier frequency (left ear for binaural; ignored for noise types). `0` stops the channel. |
-| `pan` | -100..+100 | Stereo position. -100 = full left, 0 = center, +100 = full right. |
-| `vol` | 0..100 % | Channel volume. |
-| `mod` | 0..N Hz | Amplitude-modulation rate (isochronic tone). `0` = continuous tone. |
-| `channel` | 1..16 | Audio channel index. Each channel is an independent oscillator. |
-| `freq_r` | 0 or 1..20000 Hz | **Optional.** Right-ear carrier frequency for **binaural beats**. `0` = same as `freq` (mono). When `freq_r != 0`, the channel becomes binaural: left ear gets `freq`, right ear gets `freq_r`, and the brain perceives a beat at `|freq - freq_r|` Hz. |
-| `wave_type` | 0..6 | **Optional.** Waveform: `0`=sine (default), `1`=square, `2`=triangle, `3`=sawtooth, `4`=white noise, `5`=pink noise, `6`=brown noise. Noise types ignore `freq` and `freq_r`. |
-
-**Important quirk:** the parser is positional, so to specify `wave_type`
-you must also include `freq_r` (use `0` if not binaural). Example for
-20 % white noise on channel 9:
-
-```
-A  0  0  0  20  0  9  0  4
-```
-
-### BG command (`BG` prefix)
-
-Plays a background audio file continuously for the entire session,
-mixed underneath the synthesized channels. Not time-scheduled — it's
-a global timeline property applied from t=0 to the end. Only one `BG`
-line per file is honored (last one wins, with a warning).
-
-```
-BG  <url>  <pan>  <loudness>
-```
-
-| Field | Range | Meaning |
-|---|---|---|
-| `url` | string | Source location. Four schemes: `http://host:port/path`, `https://...`, `sdcard://path`, or `push://<name>` (browser-pushed, see below). For pull schemes the stream may be **WAV or MP3** — the container is detected from the stream's magic bytes, not the file extension. Both must be **44.1 kHz (or 22.05 kHz) stereo or mono**; other sample rates are rejected with a log message. WAV must be 16-bit PCM. MP3 support requires `CONFIG_BG_SUPPORT_MP3=y` (default on; uses the built-in minimp3 decoder). The generator server can also auto-transcode MP3 → WAV when you request a `.wav` URL whose source is an `.mp3` file (i.e. `wav/river.wav` works even if only `wav/river.mp3` exists on disk). |
-| `pan` | -100..+100 | Stereo position. |
-| `loudness` | 0..100 % | Background mix level. Typical values: 20-40 for ambient sound under binaural tracks. |
-
-Example:
-
-```
-BG  http://10.0.0.213:8000/wav/river.wav  0  30
-```
-
-#### Browser-pushed BG (`push://`) — `CONFIG_BG_SUPPORT_PUSH=y` (default on)
-
-Instead of the device fetching a URL, the **browser** can generate, load, or
-"bounce" audio and stream it *into* the device over `POST /api/bg-stream`. This
-works even in SoftAP-only mode (no internet), and the browser does all decoding
-so the device only ever receives its canonical 44.1 kHz / 16-bit / stereo WAV.
-
-- A `BG push://<name>` line is a **no-op pull** on the device — it just marks the
-  session's BG as a browser clip named `<name>` so the `.ledc` round-trips. The
-  Generator's **Background audio** panel drives the actual audio: pick a clip,
-  **Set as BG**, then **Play** (the panel streams the clip after the timeline
-  starts). Looping re-POSTs the clip client-side.
-- `POST /api/bg-stream?pan=<-100..100>&loudness=<0..100>` with a WAV body streams
-  a clip as the active BG (TCP flow control paces it to playback rate).
-  `POST /api/bg-stream?stop=1` stops just the BG.
-- **WebSocket ingest** — `GET /api/bg-ws` (Upgrade → WebSocket, needs
-  `CONFIG_HTTPD_WS_SUPPORT=y`). The browser sends a JSON handshake frame
-  `{"pan":..,"loudness":..,"rate":44100,"bits":16,"ch":2}` then streams **raw
-  headerless 44.1 kHz / 16-bit / stereo LE PCM** in binary frames — there is **no
-  on-device decode**, so no decode artifacts. The handler runs on the async worker
-  pool (the single server task stays free) and feeds the same ring as the POST
-  path; it sends a periodic `{"consumed":..,"ring_ms":..}` back-channel so the
-  browser can pace and detect stalls. The Generator's speech-bounce Play path uses
-  this by default.
-- **Bounce session → WAV**: an opt-in button renders the session's audio to one
-  WAV in the browser, which can be downloaded, saved to the library, or pushed.
-  A **scope** selector chooses *BG + Speech* (leave A entries for the device to
-  synthesize live) or *All* (BG + Speech + A entrainment mix).
-
-#### Speech command (`S` prefix)
-
-```
-S  <time_ms>  <voice>  <volume>  "text to speak"
-```
-
-Text-to-speech narration/cues. `voice` is a TTS voice / language code
-(e.g. `en-US`, `Joanna`, `sl`); `volume` is 0..100; the text is double-quoted
-(may contain spaces and `#`).
-
-There are **two ways** an `S` line reaches your ears, chosen automatically:
-
-- **From the SD card (offline).** If every phrase the session needs is already
-  on the card, the `S` lines are sent to the device as-is and the firmware
-  narrates by itself — mixed live on top of the `BG` track. Nothing streams
-  from the browser, so you can close the laptop. See
-  [SD card & offline sessions](#sd-card--offline-sessions).
-- **Streamed from the browser (fallback).** Otherwise the browser strips the
-  `S` lines, TTS-synthesizes them, mixes them into the bounced WAV and pushes
-  that as the background track — so they reach the device as audio rather than
-  as commands. The page must stay open for the whole session.
-
-The fallback is taken on *any* doubt — no card, a phrase missing, `/api/sd`
-unreachable — because a session that needs the laptop open is much better than
-one that half-plays without it.
-
-Two TTS engines (both free, no API key), selectable in the Background-audio panel:
-- **Puter.js** (default) — AWS Polly neural voices entirely in the browser
-  (`js.puter.com`); needs internet in the browser; may prompt a Puter sign-in.
-- **Google (via device)** — the ESP32 proxies Google Translate TTS at
-  `GET /api/tts?tl=<lang>&q=<text>` (same-origin, so no CORS; the device makes
-  the outbound HTTPS GET). Needs the device on Wi-Fi with internet.
-
-Example:
-```
-S  30000  en-US  85  "Let your attention settle on the breath"
-```
-
-### Interpolation prefixes — animate-on-start convention
-
-Any numeric field may be prefixed with a special character. **The prefix
-lives on the START entry of a transition, not the target entry** — i.e.
-the prefix tells the engine "starting at this entry, do X going forward".
-There are two families:
-
-**One-shot ramps** — transition smoothly from this entry's value to the
-NEXT entry's value (for the same channel/mask), over the time window
-between the two entries:
-
-| Prefix | Curve | Example |
-|---|---|---|
-| `>` | Linear | `>20` then `30` at +1000ms = linear ramp 20→30 over 1 second |
-| `*` | Quadratic | `*20` then `30` at +1000ms = quadratic ease 20→30 over 1 second |
-| (none) | Step | Instant step to the value at the entry's timestamp. |
-
-**Periodic modulation** — self-contained oscillation that ignores the
-next entry and runs continuously until a new entry preempts it. All
-five share the same `prefix start:end:period_ms` syntax. The wave runs
-its first half-cycle from `start` to `end` over `period_ms/2`, then
-back to `start`, repeating:
-
-| Prefix | Wave | Mnemonic | Example |
-|---|---|---|---|
-| `^` | Triangle (linear up/down) | Caret = triangle peak | `^50:75:1000` = triangle 50↔75 with 1s period |
-| `~` | Sine (smooth) | Tilde = sine wave shape | `~50:75:1000` = smooth oscillation 50↔75 |
-| `/` | Sawtooth (ramp up) | Forward slash = ramp up | `/0:100:2000` = ramp 0→100 over 2s then jump back to 0 |
-| `\` | Reverse sawtooth | Backslash = ramp down | `\100:0:2000` = ramp 100→0 over 2s then jump back to 100 |
-| `_` | Square | Underscore = flat | `_50:75:1000` = half period at 50, half at 75 |
-
-Example — fade brightness from 100 to 0 over 60 seconds, then oscillate
-LED brightness 50↔75 with sine wave at 500 ms period:
-
-```
-0       1.0  50  >100  255 50 0  255       # ramp starts here, target = 0
-60000   1.0  50  0     255 50 0  255       # ramp ends here at brightness 0
-60500   1.0  50  ~50:75:500  255 50 0  255 # sine modulation begins here
-```
-
-**Runtime support status:** every modulation-capable field supports all
-5 wave shapes. The engine updates values at 100 Hz via per-field setters
-on the LED matrix and audio_generator layers.
-
-| Field | Backed by |
+| What | Where |
 |---|---|
-| LED brightness | `led_matrix_update_brightness_masked` |
-| LED frequency  | `led_matrix_update_frequency_masked` |
-| LED duty       | `led_matrix_update_duty_masked` |
-| LED R / G / B  | `led_matrix_update_color_{r,g,b}_masked` |
-| Audio frequency | `audio_generator_set_param(ch, AUDIO_PARAM_FREQUENCY, val)` |
-| Audio pan       | `audio_generator_set_param(ch, AUDIO_PARAM_PAN, val/100)` |
-| Audio volume    | `audio_generator_set_param(ch, AUDIO_PARAM_AMPLITUDE, val/100)` |
-| Audio mod freq  | `audio_generator_set_param(ch, AUDIO_PARAM_MOD_FREQ, val)` |
+| Web UI unit tests | `cd web && npm test` |
+| Session linting | `sessions/validate_session.mjs` |
+| Instrumented sessions for hardware capture | `sessions/test/` (see its `README.md`) |
+| Capture + analysis harness | `tools/avmeasure/` (see its `README.md`) |
 
-**Implementation note**: 100 Hz update rate gives ~10ms timing jitter on
-modulation transitions. For modulation periods under ~200ms this becomes
-visible — the rising/falling edges of a square wave or the cusps of a
-triangle look "stepped" rather than smooth. Periods ≥ 500ms produce
-smooth-looking modulation. For audio modulation specifically, the 100 Hz
-update rate is fine for sub-Hz oscillations of any carrier; modulating
-a carrier at audio-rate frequencies isn't the intended use.
-
-### A complete, runnable example
-
-A 10-minute session with a binaural pair drifting from 12 Hz beat to
-7.83 Hz, amber LED flicker locked to the beat frequency on all
-channels, white noise underlay through channel 9, river-sound
-background:
-
-```
-# Background ambience
-BG http://10.0.0.213:8000/wav/river.wav  0  30
-
-# t = 0: start at 12 Hz beat, LED amber at 70 % duty / 60 % bright
-0        12     70  60  255 50 0  255
-A 0      105   -100  60  0  1            # left ear, binaural
-A 0      117    100  60  0  2            # right ear, beat = 12 Hz
-A 0        0      0  20  0  9  0  4      # white noise underlay
-
-# t = 10 min: ramp to 7.83 Hz (Schumann resonance)
-600000   >7.83  70  60  255 50 0  255
-A 600000  >107.085  -100  60  0  1
-A 600000  >114.915   100  60  0  2
-A 600000        0      0  20  0  9  0  4
-```
-
-Real-world session files (45-minute deep-meditation, etc.) live in
-`freeesp32_ave_generator/ledc/` — read those for richer examples.
-
-## SD card & offline sessions
-
-With a microSD card fitted, a session can run with **no browser attached** —
-the device narrates and plays its own background audio, so you can start a
-session and close the laptop.
-
-Format the card as a single **FAT32** partition. The firmware mounts it over
-SPI (pins per board, above) and uses two directories:
-
-```
-/speech/sp_<hash>.wav     one file per unique phrase
-/bg/<name>.wav            background tracks
-```
-
-It is a **library, not per-session mixes**: phrases are shared across sessions,
-so adding a session is nearly free and syncing only uploads what is missing.
-
-**Filling the card.** Settings → *Sync speech to SD card* walks every session in
-the library, synthesizes any phrase the card lacks (served from the browser's
-TTS cache when possible) and uploads it. Re-running it is cheap — present files
-are skipped. You can also drop files on the card directly from a computer, or
-use the HTTP API:
-
-```
-GET    /api/sd            list files + free space
-GET    /api/sd/<name>     download
-PUT    /api/sd/<name>     upload
-DELETE /api/sd/<name>     remove
-```
-
-**How a phrase is found.** The device resolves an `S` line to a filename by
-hashing the phrase itself (FNV-1a over `voice|text`) — so there is no manifest
-to keep in sync and no change to the `.ledc` format. That hash is implemented
-twice, in `main/speech_player.c` and `web/src/js/gen/sdsync.js`, and a
-divergence would be **silent**: the device would look for files the browser
-never uploaded and you would simply get no speech. `web/test/sdsync.test.js`
-pins the JavaScript to values generated from the C, so they cannot drift apart
-unnoticed.
-
-Background audio plays from the card with a `sdcard://` URL:
-
-```
-BG  sdcard://bg/river.wav  0  30
-```
+Claims about timing, harmonics or levels belong in `reports/` with the capture
+that produced them. Numbers quoted on the site and in `ledc_format.md` are
+traceable back to those files — keep it that way rather than citing a figure
+from memory.
 
 ## Related projects
 
 | Repo | Role |
 |---|---|
-| [`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer) | Open-hardware ESP32 board (KiCad) — **designed, never fabricated**; not a supported target |
 | [`freeesp32_ave`](https://github.com/ppisljar/freeesp32_ave) | **This repo** — firmware |
 | [`freeesp32_ave_generator`](https://github.com/ppisljar/freeesp32_ave_generator) | Web session editor / timeline generator |
+| [`freeesp32_audioplayer`](https://github.com/ppisljar/freeesp32_audioplayer) | Open-hardware ESP32 board (KiCad) — **designed, never fabricated**; not a supported target |
 
 ## Status
 
-Active development. See `plans/` for the implementation roadmap and
-`INTEGRATION_STATUS.md` for the current state.
+Active development. `plans/list.md` is the roadmap index, `reports/list.md` the
+report index, and `INTEGRATION_STATUS.md` the current state.
 
 ## License
 

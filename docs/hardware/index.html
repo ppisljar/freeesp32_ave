@@ -803,6 +803,14 @@
       <tr><td><strong>microSD card</strong>, FAT32</td><td>1</td>
           <td>Optional. Any small card; capacity is irrelevant next to the few MB a speech
               library needs.</td></tr>
+      <tr><td colspan="3"><strong>Other boards that work.</strong> The firmware also runs on
+          the AI-Thinker <strong>ESP32-A1S</strong> (cheap, bulkier, onboard headphone and
+          speaker amp, AC101 or ES8388 variant) and on a generic ESP32 with a passive I2S
+          DAC — see <a href="#classic">Build B</a>. <strong>HiFi-ESP32</strong> and
+          <strong>Sonatino</strong> are smaller modern alternatives with an ES8388-class
+          codec and easier battery integration, if you can find one. A plain
+          <strong>4×12 WS2812 matrix</strong> (48 pixels) is a cheaper substitute for the two
+          NeoHEX boards.</td></tr>
     </tbody>
   </table>
   </div>
@@ -833,6 +841,97 @@
       only ever sends them a PWM dimming signal.</figcaption>
     </figure>
   </div>
+
+
+  <h3 id="lamp-shopping">Shopping list for the lamp build</h3>
+
+  <p>A room device rather than a wearable — a therapy-lamp class build, mains
+  powered and fixed in place. Same convention as above: a durable source where
+  one exists, a <strong>search term</strong> where the listing will rot.</p>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Item</th><th>Qty</th><th>What to get, and why</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>ESP32 audio board</strong></td><td>1</td>
+        <td>AI-Thinker <strong>ESP32-A1S</strong> is the cheap default and has an
+            onboard speaker amp, so a room device needs no separate amplifier.
+            Search <code>ESP32-A1S audio kit</code>. The YB-ESP32-S3-DAC works
+            too and sounds better.</td>
+      </tr>
+      <tr>
+        <td><strong>COB LED emitter</strong></td><td>2</td>
+        <td><strong>100 W warm/cold white COB</strong>, ~30 V forward at full
+            current — search <code>100W COB LED dual colour warm cold</code>.
+            Each emitter is <em>dual channel</em> (warm + cold, independent), so
+            two emitters give the four channels the firmware drives. Drop to
+            10–50 W for a desk-class device and the heatsink and PSU shrink with
+            it.</td>
+      </tr>
+      <tr>
+        <td><strong>Constant-current driver</strong></td><td>4</td>
+        <td><strong>Mean Well NLDD-1400HW</strong> — 1400 mA out, 2–52 V out,
+            12–54 V in, with a PWM dimming input. One per channel. Match the
+            driver current to the emitter's rating: NLDD-700H or NLDD-350H for
+            lower-current LEDs.</td>
+      </tr>
+      <tr>
+        <td><strong>AC adapter</strong></td><td>1</td>
+        <td><strong>220 V → 12 V DC, 200–400 W.</strong> 200 W covers a 100 W COB
+            plus everything else; 400 W leaves margin for two. Buy a quiet one —
+            a noisy supply is audible as hum in the speakers.</td>
+      </tr>
+      <tr>
+        <td><strong>Buck converter</strong></td><td>1</td>
+        <td><strong>12 V → 5 V</strong>, 1 A is plenty (LM2596 / MP1584). Feeds
+            the ESP32 from the same rail as the LEDs. <strong>Trim it to exactly
+            5.0 V before connecting the board</strong> — overvoltage kills it.
+            Do not go 12 V → 3.3 V directly; dev boards expect 5 V upstream.</td>
+      </tr>
+      <tr>
+        <td><strong>Active heatsink + fan</strong></td><td>1</td>
+        <td>Sized for a 100 W COB; the usual kits hold two emitters and include
+            diffuser-lens mounting. Required at 100 W. Passive is feasible to
+            roughly 50 W with a large finned sink.</td>
+      </tr>
+      <tr>
+        <td><strong>Inline fuse</strong></td><td>1</td>
+        <td>On the 12 V side, ~1.5× expected draw — about 10 A for a 100 W LED
+            load.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h4>Assembly order</h4>
+
+  <ol>
+    <li><strong>Solder leads to the emitters.</strong> Four pads each: warm +/−
+    and cold +/−. Silicone-insulated 22 AWG handles 1.4 A per channel and
+    survives the iron. Tin pad and wire separately, then join quickly — COBs do
+    not enjoy being heated.</li>
+    <li><strong>One driver per channel.</strong> Driver <code>+OUT</code>/<code>−OUT</code>
+    to the matching channel pair. Keep runs under 20 cm. All four drivers share
+    the +12 V input rail; each keeps its own dimming line.</li>
+    <li><strong>Dimming lines to four GPIOs</strong>, defaults
+    <code>LED_DIRECT_PIN_CH1..CH4</code> = 12, 13, 14, 15, plus a
+    <strong>shared ground</strong> between the drivers' dimming lines and the
+    ESP32. Build with the Direct LEDC backend.</li>
+    <li><strong>Stack the optics:</strong> heatsink (fan facing out) → thermal
+    paste → COB → diffuser lens. Space the two emitters for an even field at the
+    distance someone will actually sit.</li>
+    <li><strong>Wire the buck</strong> from the 12 V rail to the board's 5 V
+    input — after trimming it to 5.0 V.</li>
+    <li><strong>Mains last:</strong> 220 V adapter → 12 V rail → splits to the
+    four drivers and the buck. Fuse the 12 V side.</li>
+    <li><strong>Flash and test before closing the case.</strong> Exercise each
+    channel on its own with a <code>.ledc</code> using <code>mask</code> 1, 2, 4
+    and 8 in turn, and confirm all four respond.</li>
+  </ol>
+
+  <p>No USB cable is needed in normal operation — the buck feeds the board from
+  the same rail as the LEDs. The three hazards this build adds are below.</p>
 
   <div class="warn">
     <strong>The lamp build adds three hazards the glasses build does not have</strong>
