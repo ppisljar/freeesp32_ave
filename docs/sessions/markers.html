@@ -146,6 +146,18 @@ event, beside an audio row an audio event, beside both it uses the later lag. Ov
 executor's third pass reaches them, so a marker and the stimulus it announces share one
 reference.</p>
 
+<h3 id="checking">Checking a marker without the hardware</h3>
+
+<p>The <a href="../generator/index.html">browser simulator</a> resolves <code>M</code> lines the way
+the device does and shows them in its timeline inspector: the modality it inferred (and that it was
+inferred rather than stated), and the predicted onset for that modality. It draws them on the scope
+too — a solid tick at the scheduled time and a dashed one at the predicted onset, so the gap between
+the two is visible rather than arithmetic.</p>
+
+<p>Markers also occupy a slot in the device's 100-entry timeline, which is easy to forget because
+they produce nothing you can see or hear. Both the browser's entry counter and
+<code>sessions/validate_session.mjs</code> count them.</p>
+
 <h2 id="sinks">Sinks: a list, not a fixed set</h2>
 
 <p>Configured on the Settings page. Every enabled sink receives every marker, and several of the

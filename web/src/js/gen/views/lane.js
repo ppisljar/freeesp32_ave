@@ -18,6 +18,7 @@ import {
     shapeToInterp, interpToShape, isPeriodicShape, keyframe,
 } from './lane_serialize.js';
 import { createLaneCanvas } from './lane_canvas.js';
+import { syncPassthrough } from './passthrough.js';
 import { createUndoStack } from '../undo.js';
 import { buildCellEditor, openPopover, closeOpenPopover } from './cell.js';
 import {
@@ -75,6 +76,12 @@ export function initLaneView(ctx) {
 
     // Re-project lanes -> doc and commit (without rebuilding our own canvas).
     function commitFromLanes() {
+        // Re-sync the carried rows from the live doc on EVERY commit, not just
+        // at import. The undo stack snapshots the whole lane model including
+        // `passthrough`, so an undo would otherwise restore a stale carried set
+        // -- resurrecting a comment or marker the user deleted in the Text view,
+        // or dropping one they added. Idempotent during a drag.
+        syncPassthrough(lanes, ctx.getDoc());
         const { doc, warnings, conflicts } = lanesToDoc(lanes, { withMeta: true });
         lastConflicts = conflicts;
         renderWarnings(warnings, conflicts);

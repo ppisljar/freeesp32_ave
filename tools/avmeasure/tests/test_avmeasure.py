@@ -1485,6 +1485,53 @@ class TestFirmwareSemantics(unittest.TestCase):
         self.assertTrue(cap)
         self.assertIn("1 entry", cap[0].message)
 
+    def test_59f_markers_count_toward_the_entry_cap(self):
+        """An `M` row CONSUMES A SLOT. config_parser.c:1549-1550 sets
+        type = CONFIG_ENTRY_MARKER and returns parse_marker_line's ESP_OK, and
+        config_parser.c:540-542 stores every ESP_OK line with
+        `timeline->entries[timeline->count++] = entry` -- so a marker counts
+        against CONFIG_PARSER_MAX_ENTRIES = 100 (config_parser.h:19) exactly
+        like an LED row. Modelling a marker as "no entry at all" let a 95-row +
+        10-marker session report as fitting while the device silently drops the
+        last 5 rows.
+        """
+        body = [f"{i * 100} 10 50 60 255 255 255 1" for i in range(95)]
+        body += [f"M {i * 100 + 50} MARK_{i}" for i in range(10)]
+        pr = le.parse_ledc(self._parse_one("\n".join(body) + "\n"))
+        self.assertEqual(len(pr.entries), dm.MAX_ENTRIES)
+        self.assertEqual(pr.dropped_over_cap, 5)
+        cap = [f for f in pr.lints if f.code == "LEDC_ENTRY_CAP"]
+        self.assertTrue(cap)
+        self.assertIn("5 entries", cap[0].message)
+
+    def test_59f2_markers_never_enter_the_graded_schedule(self):
+        """...but a marker drives NO light and NO sound: dispatch returns right
+        after marker_emit (config_parser.c:2579-2593). So it must stay out of
+        the schedule the optical/audio comparison is graded against -- every
+        ScheduledEntry consumer (_exec_led, _exec_audio, _next_audio,
+        _next_led_for_bit) reads `.raw` as an LED or audio entry.
+        """
+        p = self._parse_one(
+            "M 0 BASELINE_START mod=led\n"
+            "0 10 50 60 255 255 255 1\n"
+            "A 0 240 0 50 0 1\n"
+            "M 4000 BASELINE_END\n"
+            "4000 10 50 0 0 0 255 1\n")
+        pr = le.parse_ledc(p)
+        self.assertEqual(len(pr.entries), 5, pr.entries)
+        exp = le.build_expectation(p, duration_s=6.0)
+        # Three passes per batch (audio, LED, other): t=0 yields audio+LED and
+        # t=4000 yields LED. The two markers appear nowhere.
+        self.assertEqual([s.kind for s in exp.schedule], ["audio", "led", "led"])
+        self.assertEqual(
+            [s.line_no for s in exp.schedule if isinstance(s.raw, le.MarkerEntry)],
+            [])
+        # And the LED beside them is still graded normally.
+        L = exp.light[1]
+        i = int(np.searchsorted(L.t, 1.0))
+        self.assertTrue(bool(L.active[i]))
+        self.assertAlmostEqual(float(L.demanded_hz[i]), 10.0, delta=1e-6)
+
     def test_59g_ramp_target_comes_from_a_batch_capped_entry(self):
         """find_next_audio_for_bit (config_parser.c:2187-2196) scans the RAW
         sorted array, so it takes a ramp TARGET from an entry the 50-per-batch

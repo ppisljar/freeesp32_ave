@@ -334,6 +334,30 @@ class SpeechEntry:
 
 
 @dataclass
+class MarkerEntry:
+    """`M` row -- a stimulus marker. It OCCUPIES A TIMELINE SLOT.
+
+    parse_line sets type = CONFIG_ENTRY_MARKER and returns parse_marker_line's
+    ESP_OK (config_parser.c:1549-1550), and the caller stores every ESP_OK line
+    with `timeline->entries[timeline->count++] = entry`
+    (config_parser.c:540-542). So a marker consumes one of the
+    CONFIG_PARSER_MAX_ENTRIES = 100 slots (config_parser.h:19) and one of the
+    MAX_BATCH_SIZE per-timestamp slots exactly like an LED or audio row.
+    Modelling it as "no entry at all" made a 95-row + 10-marker session look
+    like it fit when the device silently drops the last 5 rows.
+
+    It still drives NO light and NO sound: execute_timeline_entry_ctx returns
+    immediately after marker_emit (config_parser.c:2579-2593). That is why it is
+    counted but never emitted into the graded schedule -- see build_schedule.
+    """
+
+    time_ms: int = 0
+    line_no: int = 0
+    label: str = ""
+    raw: str = ""
+
+
+@dataclass
 class BgEntry:
     url: str = ""
     pan: float = 0.0
@@ -343,7 +367,8 @@ class BgEntry:
 
 @dataclass
 class ParseResult:
-    entries: list                  # LedEntry | AudioEntry | SpeechEntry, file order
+    entries: list                  # LedEntry | AudioEntry | SpeechEntry
+                                   # | MarkerEntry, file order
     bg: BgEntry | None
     lints: list[Finding]
     dropped_over_cap: int
@@ -527,9 +552,11 @@ def _parse_marker(toks: list[str], raw: str, line_no: int):
     """`M <time_ms> <LABEL> [key=value ...]` -- a stimulus marker.
 
     Produces no light and no sound, so it contributes NOTHING to the optical or
-    audio expectation; it is modelled only so the linter can check the syntax
-    and so a marker line is not mistaken for an LED line. That last part is the
-    reason this exists at all: the device dispatches on the first character, and
+    audio expectation and never enters the graded schedule. It IS modelled as a
+    timeline entry, though: the firmware stores every line parse_line accepts
+    (config_parser.c:540-542), so a marker consumes a MAX_ENTRIES slot and a
+    per-batch slot exactly like any other row -- see MarkerEntry. The syntax
+    check matters too: the device dispatches on the first character, and
     anything unrecognised falls through to the LED parser -- an unlinted `M` row
     would otherwise be silently modelled as a light command.
     """
@@ -589,9 +616,15 @@ def _parse_marker(toks: list[str], raw: str, line_no: int):
                         f"pairs; '{t}' is dropped",
                 detail="config_parser.c parse_marker_line"))
 
-    # No entry: a marker drives no output, so it must not appear in the
-    # expectation the optical/audio comparison is graded against.
-    return None, (lints[0] if len(lints) == 1 else (lints or None))
+    # A marker IS an entry: it consumes a slot (config_parser.c:540-542, via
+    # the ESP_OK from parse_marker_line at :1550). It is kept out of the graded
+    # optical/audio expectation in build_schedule instead, where it can still be
+    # counted against the batch cap the way the device counts it.
+    # Time is `(uint32_t)atol(tokens[0])` (config_parser.c:135) -- the same
+    # wrap as every other row, so reuse the same model.
+    ent = MarkerEntry(time_ms=c_u32_time(c_atol(toks[1])), line_no=line_no,
+                      label=label, raw=raw.strip())
+    return ent, (lints[0] if len(lints) == 1 else (lints or None))
 
 
 def _parse_led(toks: list[str], raw: str, line_no: int):
@@ -810,7 +843,9 @@ def _parse_speech(raw: str, line_no: int):
 # Scheduling -- stable sort, batch caps, three-pass dispatch, first-batch hoist
 # ---------------------------------------------------------------------------
 
-_KIND_PASS = {"audio": 0, "led": 1, "speech": 2}
+# config_parser.c:2245-2301 -- pass 1 AUDIO, pass 2 LED, pass 3 "anything
+# else", which is where both speech and markers are dispatched.
+_KIND_PASS = {"audio": 0, "led": 1, "speech": 2, "marker": 2}
 
 
 def build_schedule(pr: ParseResult) -> tuple[list[ScheduledEntry], list[Finding]]:
@@ -822,6 +857,8 @@ def build_schedule(pr: ParseResult) -> tuple[list[ScheduledEntry], list[Finding]
             return "led"
         if isinstance(e, AudioEntry):
             return "audio"
+        if isinstance(e, MarkerEntry):
+            return "marker"
         return "speech"
 
     # config_parser.c:443-455 -- STABLE sort by time_ms. File order is preserved
@@ -873,12 +910,25 @@ def build_schedule(pr: ParseResult) -> tuple[list[ScheduledEntry], list[Finding]
         ordered = sorted(executed, key=lambda k: _KIND_PASS[kind_of(pr.entries[k])])
         for k in ordered:
             e = pr.entries[k]
+            if isinstance(e, MarkerEntry):
+                # A marker is INSIDE the batch above -- it is in entries[], so it
+                # took a slot and pushed later same-timestamp rows toward the
+                # 50-per-batch cap, and it kept `first_batch` on the batch the
+                # device really dispatched first. But it drives no light and no
+                # sound (config_parser.c:2579-2593 returns right after
+                # marker_emit), so it must not enter the schedule the optical and
+                # audio comparison is graded against: a ScheduledEntry here would
+                # reach _exec_* and the `raw` consumers (_next_audio,
+                # _next_led_for_bit), all of which assume an LED or audio shape.
+                continue
             sched.append(ScheduledEntry(
                 index=len(sched), line_no=e.line_no, kind=kind_of(e),
                 t_demanded_ms=e.time_ms, t_dispatch_ms=dispatch_ms,
                 executed=True, drop_reason=None, raw=e))
         for k in dropped:
             e = pr.entries[k]
+            if isinstance(e, MarkerEntry):
+                continue          # see above: counted, never graded
             sched.append(ScheduledEntry(
                 index=len(sched), line_no=e.line_no, kind=kind_of(e),
                 t_demanded_ms=e.time_ms, t_dispatch_ms=dispatch_ms,

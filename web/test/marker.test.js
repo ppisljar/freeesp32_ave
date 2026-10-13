@@ -199,3 +199,37 @@ test('a session with no markers resolves to nothing', () => {
     assert.deepEqual(resolve('0 10 50 80 255 0 0 1\n'), []);
     assert.deepEqual(resolveMarkers(null, markerPipelineLagUs), []);
 });
+
+// ---- validate.js counts markers against the firmware limits ----------------
+
+import { validate } from '../src/js/gen/validate.js';
+
+test('markers count toward MAX_ENTRIES, speech rows do not', () => {
+    // A marker is CONFIG_ENTRY_MARKER in the same timeline array as LED and
+    // audio rows, so it consumes a slot. Speech is stripped before the POST.
+    const mk = (n, kind) => {
+        const out = [];
+        for (let i = 0; i < n; i++) {
+            out.push(kind === 'marker' ? ('M ' + i + ' M' + i)
+                   : kind === 'speech' ? ('S ' + i + ' default 80 "x"')
+                   : (i + ' 10 50 80 255 0 0 1'));
+        }
+        return out.join('\n') + '\n';
+    };
+    const over = (text) => validate(parse(text).doc)
+        .some(d => /exceeds MAX_ENTRIES/.test(d.msg));
+
+    assert.equal(over(mk(101, 'led')), true, '101 LED rows should warn');
+    assert.equal(over(mk(99, 'led')), false);
+    assert.equal(over(mk(101, 'marker')), true, '101 markers should warn too');
+    assert.equal(over(mk(101, 'speech')), false, 'speech rows are stripped first');
+    // And a mix that only goes over once markers are counted.
+    assert.equal(over(mk(60, 'led') + mk(50, 'marker')), true);
+});
+
+test('markers join the same-timestamp batch count', () => {
+    const rows = [];
+    for (let i = 0; i < 51; i++) rows.push('M 1000 M' + i);
+    const d = validate(parse(rows.join('\n') + '\n').doc);
+    assert.ok(d.some(x => /share t=1000/.test(x.msg)), 'batch cap should trip');
+});

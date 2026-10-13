@@ -120,17 +120,33 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
         const z = zeroBuffers(totalMs); left = z.left; right = z.right;
     }
 
-    // 5. Mix BG clip (looped, equal-power panned).
+    // 5. Mix BG clip (looped) with the device's LINEAR pan law — see
+    //    bgPanGains below for why this is not the equal-power law it was.
     if (bgBuf) {
         const bl = bgBuf.getChannelData(0);
         const br = bgBuf.numberOfChannels > 1 ? bgBuf.getChannelData(1) : bl;
-        const ang = (bgPan + 1) * (Math.PI / 4);
-        const gl = bgGain * Math.cos(ang), gr = bgGain * Math.sin(ang);
+        const pg = bgPanGains(bgPan);
+        // bg_player.c:1903-1908 — loudness first, then the pan law, then
+        // accumulate. No 1/16 headroom divisor: BG is mixed in the output task
+        // AFTER audio_generator_fill_buffer (audio_test.c:176-184), so unlike
+        // every synth channel it never sees audio_generator.c:875's divisor.
+        const gl = bgGain * pg.l, gr = bgGain * pg.r;
+        // Bake the device's 5 ms fade-in ONLY for an audition bounce. In scope
+        // 'bgspeech' this WAV becomes the WS push payload, and
+        // bg_player_start_push arms its OWN 220-sample ramp over whatever we
+        // send (bg_player.c:1700-1705) — baking it here as well would square
+        // the fade. Pan and loudness, by contrast, MUST be baked in BOTH
+        // scopes: play.js pushes with pan 0 / loudness 100, which the device
+        // turns into pan_l = pan_r = 1.0 and gain 1.0, so its own pan law and
+        // loudness contribute nothing to a pushed clip and there is no
+        // double-apply to avoid.
+        const bakeRamp = (scope === 'all');
         const S = bl.length;
         for (let i = 0; i < left.length && S; i++) {
             const s = i % S;
-            left[i] += bl[s] * gl;
-            right[i] += br[s] * gr;
+            const rs = (bakeRamp && i < BG_AMP_RAMP_SAMPLES) ? bgRampScale(i) : 1;
+            left[i] += bl[s] * gl * rs;
+            right[i] += br[s] * gr * rs;
         }
     }
 
@@ -158,6 +174,61 @@ export function pushSessionBg(doc) {
         if (!rec) throw new Error('BG clip "' + name + '" not in this browser’s library');
         return pushBg(rec.wavBlob, { pan: desc.pan, loudness: desc.loudness });
     });
+}
+
+// ---- BG pan law + de-click ramp, ported from bg_player.c -------------------
+//
+// The device does NOT pan the background bed equal-power. It uses a LINEAR law
+// that holds the NEAR side at unity and attenuates only the FAR side —
+// bg_player.c:1879-1881:
+//
+//     const float pan      = s_bg.pan;
+//     const float pan_l    = (pan <= 0.0f) ? 1.0f : (1.0f - pan);
+//     const float pan_r    = (pan >= 0.0f) ? 1.0f : (1.0f + pan);
+//
+// This bounce used to use the equal-power law (cos/sin of (pan+1)·π/4), which
+// is 3.01 dB down on BOTH channels at pan 0 — 0.7071 where the device gives
+// 1.0. That used to hide inside a generally-wrong output level; it does not any
+// more, because sim/audio.js renders the synth tones at true device level (the
+// fixed 1/16 divisor, audio_generator.c:875), so the 3 dB landed squarely on
+// the BG-to-tone balance: the bed played too quiet under the entrainment tones.
+//
+// FIRMWARE COMMENTS ARE WRONG HERE, THE CODE IS RIGHT. bg_player.c:110, :1826
+// and :1874 all claim this law "matches audio_generator.c's apply_panning".
+// It does not: apply_panning (audio_generator.c:2304-2315) is equal-power
+// cos/sin, read out of the sine LUT, and the synth channels use it both there
+// and inline at audio_generator.c:1230-1234. So the device genuinely pans the
+// BG bed linearly and the synth channels equal-power — two different laws in
+// one mix — and the bounce must mirror both, not pick one. The C wins over the
+// C comment.
+//
+// Pure so test/bg_pan.test.js can pin it without touching an AudioBuffer.
+export function bgPanGains(pan) {
+    const p = clampPan(pan);
+    return {
+        l: (p <= 0) ? 1 : (1 - p),
+        r: (p >= 0) ? 1 : (1 + p),
+    };
+}
+
+// The 5 ms de-click fade-in the device arms on every BG session start.
+// bg_player.c:159 `#define BG_AMP_RAMP_SAMPLES 220u` (220 samples = 4.99 ms at
+// 44.1 kHz), armed at bg_player.c:1388-1392 for URL/SD sessions and :1702-1705
+// for pushed ones. The literal is duplicated here for the same reason
+// bg_player.c duplicates audio_generator.c's AUDIO_AMP_RAMP_SAMPLES rather than
+// including the header: it is one number, and the coupling is not worth it.
+export const BG_AMP_RAMP_SAMPLES = 220;
+
+// Ramp scale applied to BG sample `i`, counted from the start of the session.
+//
+// bg_player.c:1885-1905 adds one step BEFORE reading the gain for the sample:
+// current_loudness starts at 0, the loop does `current_loudness +=
+// loudness_step` and only then `const float gain = s_bg.current_loudness`. So
+// sample 0 already sits at 1/220 of target (NOT at 0), and sample 219 is the
+// first at full target — where the firmware also snaps to target_loudness to
+// shed float-accumulation drift. Hence (i + 1) / 220, not i / 220.
+export function bgRampScale(i) {
+    return i >= BG_AMP_RAMP_SAMPLES ? 1 : (i + 1) / BG_AMP_RAMP_SAMPLES;
 }
 
 function clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }

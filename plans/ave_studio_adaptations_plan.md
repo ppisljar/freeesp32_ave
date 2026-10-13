@@ -269,25 +269,77 @@ simulated signal from a second renderer instead, which works in all three.
 
 ---
 
-## Found while doing this, NOT fixed
+## Found while doing this — FIXED
 
-**The Lanes and Wizard views drop every row kind they do not model.** Both
+**The Lanes and Wizard views dropped every row kind they do not model.** Both
 project the doc into their own structure and rebuild it, so committing an edit
-in either view deletes `S` speech rows, `M` marker rows and any unparsable
-`raw` row that was being preserved verbatim.
+in either view deleted `S` speech rows, `M` marker rows, whole-line comments
+and any unparsable `raw` row that was being preserved verbatim.
 
-This is PRE-EXISTING, not a regression from the marker work — verified by
-round-tripping an unknown `ZZ` line and an `S` line through
-`lanesToDoc(docToLanes(doc))` before and after. Markers simply joined a club
-that already had members.
+PRE-EXISTING, not a regression from the marker work — verified by round-tripping
+an unknown `ZZ` line and an `S` line through `lanesToDoc(docToLanes(doc))`
+before and after. Markers simply joined a club that already had members. It was
+the most valuable thing left: silent data loss in an editor, on a documented
+shipped feature (narration), reachable by opening a session in Lanes and moving
+one point. Text, Table, Simulate and Community were always safe — Table because
+it mutates the live doc in place and commits the same object.
 
-It is the most valuable thing left: silent data loss in an editor, on a
-documented shipped feature (narration), reachable by opening a session in
-Lanes and moving one point. The Text, Table, Simulate and Community paths are
-all safe — Table because it mutates the live doc in place and commits the same
-object rather than rebuilding it.
+**Fixed** by `web/src/js/gen/views/passthrough.js`: the unmodellable rows are
+lifted out before the projection, carried in the view's metadata comment, and
+spliced back by time when the doc is rebuilt. One rule, `syncPassthrough`, used
+by both views at import and at every commit.
 
-Fix shape: have `docToLanes` stash the rows it cannot model (with their source
-index) in the lane model's metadata, and have `lanesToDoc` splice them back at
-their original positions. The same for the Wizard. Then a test per view that
-round-trips a doc containing every row kind and asserts equality.
+### The fix's own first cut had two critical bugs
+
+Worth recording because both were invisible to a per-view test and only appeared
+when the two views were used *in sequence*. Each view excluded only its **own**
+`# @ave-*` metadata prefix from the carry, so:
+
+1. **Unbounded file growth.** Lanes carried the whole `# @ave-wizard {...}`
+   comment nested inside its own `# @ave-lane` JSON, and the Wizard then nested
+   that larger comment inside its own. Measured: 1012 → 27503 bytes over six
+   view switches, ~1.8× each, with no bound. This is a device failure, not an
+   aesthetic one — the firmware mallocs the entire file into ESP32 heap
+   (`config_parser.c:401`) and truncates any line over the 256-char
+   `CONFIG_PARSER_MAX_LINE_LENGTH` (`config_parser.c:422`).
+2. **A new silent data loss, replacing the old one.** The surviving stale
+   sibling snapshot made `sessionFromDoc` report `imported: false` and restore
+   that snapshot — which predates the edits the other view just made — instead
+   of reconstructing from the rows carrying them. An edit in Lanes was silently
+   reverted by switching to the Wizard. Pre-change the rebuild deleted the
+   sibling metadata, which is exactly why structural reconstruction worked.
+
+Both have one root cause and one fix: `passthrough.js` now owns
+`VIEW_META_PREFIXES` for **every** structured view, and no view's metadata is
+ever carried. Dropping a sibling's stale snapshot is the correct behaviour, not
+a lesser evil — it forces structural reconstruction from the rows, which hold
+the edits. A new structured view must add its prefix there.
+
+A third, pre-existing silent deletion surfaced in the same pass: a `BG` row
+added in the Text view *after* the metadata snapshot was written was skipped as
+"modelled" and then never emitted, because the snapshot had no `bg` key.
+`syncPassthrough` now adopts it from the live doc.
+
+All three are pinned by tests that were confirmed to fail on the pre-fix code.
+
+### Still not fixed
+
+- **An inline comment on an `led`/`audio` row is still dropped** (`0 10 50 ...
+  # why`). Those rows are rebuilt from a model with no field for it, so the fix
+  is a slot in the lane/segment model, not a carry. This is the project's house
+  style for annotation (`docs/sessions/authoring.html`), so it remains a real
+  gap — just a different one.
+- **Carried-row position is anchored, not byte-exact.** A row returns at its
+  anchor time; within one timestamp untimed rows sort above timed above emitted.
+  An untimed row between two rows at the *same* timestamp cannot be
+  distinguished from one before the block.
+- **A doc with carried rows is a fixed point only from the second save.** The
+  persisted source-row index renumbers once when the rebuild moves rows, so the
+  metadata comment changes by a byte and then settles. Row-kind counts are
+  preserved at every step. The no-passthrough case is byte-identical to
+  pre-mechanism output.
+- **The metadata comment itself exceeds the firmware's 256-char line limit**
+  (~660–970 chars). Pre-existing and harmless in practice: the parser truncates
+  its in-memory copy of a line it then discards as a comment, and the device
+  serves session files back byte-for-byte rather than re-serializing them. It
+  would only bite if the device ever rewrote a session file.

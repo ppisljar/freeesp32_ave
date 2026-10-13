@@ -25,9 +25,16 @@ import {
     NUM_LED_CHANNELS,
 } from '../model.js';
 import { lerp, quad } from '../interp.js';
+// Rows the lane model has no slot for (speech, marker, comments, blanks, raw)
+// ride through the projection in `lanes.passthrough` instead of being deleted.
+// See views/passthrough.js for the ordering contract.
+import { mergePassthrough, syncPassthrough, LANE_META_PREFIX } from './passthrough.js';
 
 // ---- Metadata marker -------------------------------------------------------
-export const LANE_META_PREFIX = '@ave-lane v1 ';
+// Canonical definition lives in passthrough.js, which owns the full set of
+// view metadata prefixes so no view can carry another's snapshot. Re-exported
+// here because this is where callers expect to find it.
+export { LANE_META_PREFIX };
 export const LANE_VERSION = 1;
 
 // Cell-valued fields per lane kind (each maps to a model Cell on the row).
@@ -155,17 +162,22 @@ export function lanesToDoc(lanes, opts) {
     const withMeta = opts.withMeta !== false;
     const warnings = [];
     const conflicts = [];
-    const rows = [];
+    // Rows pinned to the very top of the file: the round-trip metadata comment
+    // and the BG clip row. BG is file-scoped, not a timeline entry — the parser
+    // sniffs it per line before parse_line (config_parser.c:454) and the last
+    // one wins, so it belongs above the timeline, not merged into it. Everything
+    // else is merged by time so carried rows land next to their own block.
+    const header = [];
 
     if (withMeta) {
-        rows.push(commentRow('# ' + LANE_META_PREFIX + JSON.stringify(lanes)));
+        header.push(commentRow('# ' + LANE_META_PREFIX + JSON.stringify(lanes)));
     }
     if (lanes && lanes.bg) {
-        rows.push(bgRow({ url: lanes.bg.url, pan: lanes.bg.pan, loudness: lanes.bg.loudness }));
+        header.push(bgRow({ url: lanes.bg.url, pan: lanes.bg.pan, loudness: lanes.bg.loudness }));
     }
 
     const laneList = (lanes && lanes.lanes) ? lanes.lanes : [];
-    const emitted = []; // { time, li, row }
+    const emitted = []; // { time, order, row } — `order` is the lane index
 
     laneList.forEach((lane, li) => {
         const times = laneUnionTimes(lane);
@@ -185,7 +197,7 @@ export function lanesToDoc(lanes, opts) {
                 const waveType = (sub.wave && sub.wave.keys && sub.wave.keys.length)
                     ? steppedAt(sub.wave.keys, t, null) : null;
                 const pulse = (lane.pulse && lane.pulse[t]) || null;
-                emitted.push({ time: t, li, row: audioRow(Object.assign({
+                emitted.push({ time: t, order: li, row: audioRow(Object.assign({
                     time: t, freq: fields.freq, pan: fields.pan, vol: fields.vol,
                     mod: fields.mod, channel: lane.key, freqR: freqR, waveType: waveType,
                 }, pulse)) });
@@ -200,7 +212,7 @@ export function lanesToDoc(lanes, opts) {
                     }
                 }
                 const pulse = (lane.pulse && lane.pulse[t]) || null;
-                emitted.push({ time: t, li, row: ledRow(Object.assign({
+                emitted.push({ time: t, order: li, row: ledRow(Object.assign({
                     time: t, freq: fields.freq, duty: fields.duty, bright: fields.bright,
                     r: fields.r, g: fields.g, b: fields.b, mask: lane.key,
                 }, pulse)) });
@@ -209,8 +221,12 @@ export function lanesToDoc(lanes, opts) {
     });
 
     // Stable global ordering: by time, then by lane order (same-time = batch).
-    emitted.sort((a, b) => (a.time - b.time) || (a.li - b.li));
-    for (const e of emitted) rows.push(e.row);
+    emitted.sort((a, b) => (a.time - b.time) || (a.order - b.order));
+    // Splice the carried rows back in. They are deliberately NOT counted in the
+    // limit warnings below: CONFIG_PARSER_MAX_ENTRIES caps the timeline array
+    // the parser grows per accepted entry (config_parser.c:540-542), and a
+    // comment / blank / `S` / `M` row never reaches that array.
+    const rows = mergePassthrough(header, emitted, lanes && lanes.passthrough);
 
     // Limit warnings (MAX_ENTRIES / batch size).
     const entryCount = emitted.length;
@@ -391,11 +407,27 @@ function maskName(mask) {
 // docToLanes: prefer metadata (exact restore), else structural reconstruction.
 export function docToLanes(doc) {
     const meta = findLaneMeta(doc);
+    let lanes;
     if (meta) {
         if (meta.version === undefined) meta.version = LANE_VERSION;
-        return meta;
+        lanes = meta;
+    } else {
+        lanes = reconstructLanes(doc);
     }
-    return reconstructLanes(doc);
+
+    // Passthrough is ALWAYS recomputed from the live doc, never read back from
+    // the metadata comment. The metadata is a snapshot from whenever the lane
+    // view last committed; the Text view may have added, edited or deleted
+    // speech/marker/comment rows since. Trusting the snapshot would resurrect
+    // rows the user deleted and drop rows they added.
+    //
+    // No view's metadata comment is carried — not our own (lanesToDoc
+    // regenerates it) and not the wizard's (a stale snapshot would nest and
+    // grow without bound, and would revert this view's edits on a switch).
+    // One rule for both: adopt a BG row the snapshot missed, then recompute
+    // the carried set from the live doc.
+    syncPassthrough(lanes, doc);
+    return lanes;
 }
 
 // ---- Interior-LFO snap (the guided fix offered on conflict) ----------------

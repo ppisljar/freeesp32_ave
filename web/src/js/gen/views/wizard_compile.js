@@ -36,8 +36,15 @@ import {
     RAMP_SHAPE_TO_INTERP, MOD_WAVE_TO_INTERP, partialWindowMs,
     fieldHasRamp, fieldHasMod,
 } from '../field.js';
+// Rows the segment model has no slot for (speech, marker, comments, blanks,
+// raw) ride through the compile in `session.passthrough` instead of being
+// deleted. See views/passthrough.js for the ordering contract.
+import { mergePassthrough, syncPassthrough, WIZARD_META_PREFIX } from './passthrough.js';
 
-export const WIZARD_META_PREFIX = '@ave-wizard v1 ';
+// Canonical definition lives in passthrough.js, which owns the full set of
+// view metadata prefixes so no view can carry another's snapshot. Re-exported
+// here because this is where callers expect to find it.
+export { WIZARD_META_PREFIX };
 export const WIZARD_VERSION = 1;
 
 // LED region -> mask bit (bug #11 — addresses all 8 channels).
@@ -392,14 +399,23 @@ export function compileSession(session, opts) {
     // ramp/mod on either side) to respect MAX_ENTRIES.
     const kept = coalesce(emitted);
 
-    const rows = [];
-    if (withMeta) rows.push(commentRow('# ' + WIZARD_META_PREFIX + JSON.stringify(session)));
+    // Rows pinned to the very top of the file: the round-trip metadata comment
+    // and the BG clip row. BG is file-scoped, not a timeline entry — the parser
+    // sniffs it per line before parse_line (config_parser.c:454) and the last
+    // one wins, so it belongs above the timeline rather than merged into it.
+    const header = [];
+    if (withMeta) header.push(commentRow('# ' + WIZARD_META_PREFIX + JSON.stringify(session)));
     if (session && session.bg) {
-        rows.push(bgRow({ url: session.bg.url, pan: session.bg.pan, loudness: session.bg.loudness }));
+        header.push(bgRow({ url: session.bg.url, pan: session.bg.pan, loudness: session.bg.loudness }));
     }
-    for (const e of kept) rows.push(e.row);
+    // `kept` is already [{ time, order, row }] — exactly the `emitted` shape the
+    // merge wants, so carried rows interleave with compiled rows by time.
+    const rows = mergePassthrough(header, kept, session && session.passthrough);
 
     // ---- limit warnings ----
+    // Carried rows are deliberately excluded: CONFIG_PARSER_MAX_ENTRIES caps the
+    // timeline array the parser grows per accepted entry (config_parser.c:540-542),
+    // and a comment / blank / `S` / `M` row never reaches that array.
     const entryCount = kept.length;
     if (entryCount > MAX_ENTRIES) {
         warnings.push(entryCount + ' timeline entries exceeds MAX_ENTRIES (' +
@@ -518,11 +534,29 @@ export function findWizardMeta(doc) {
 // best-effort structural import (names/structure are guesses).
 export function sessionFromDoc(doc) {
     const meta = findWizardMeta(doc);
+    const imported = !meta;
+    let session;
     if (meta) {
         if (meta.version === undefined) meta.version = WIZARD_VERSION;
-        return { session: meta, imported: false };
+        session = meta;
+    } else {
+        session = reconstructSession(doc);
     }
-    return { session: reconstructSession(doc), imported: true };
+
+    // Passthrough is ALWAYS recomputed from the live doc, never read back from
+    // the metadata comment. The metadata is a snapshot from whenever the wizard
+    // last compiled; the Text view may have added, edited or deleted
+    // speech/marker/comment rows since. Trusting the snapshot would resurrect
+    // rows the user deleted and drop rows they added.
+    //
+    // No view's metadata comment is carried — not our own (compileSession
+    // regenerates it) and not the lane view's (a stale snapshot would nest and
+    // grow without bound, and would revert this view's edits on a switch).
+    // One rule for both: adopt a BG row the snapshot missed, then recompute
+    // the carried set from the live doc.
+    syncPassthrough(session, doc);
+
+    return { session, imported };
 }
 
 // Best-effort: infer segments from the distinct timestamps (each full

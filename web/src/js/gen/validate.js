@@ -25,10 +25,17 @@ export function validate(doc) {
     const add = (row, severity, msg) => diags.push({ row, severity, msg });
 
     // ---- Entry-count + same-timestamp batch checks --------------------------
+    //
+    // `M` markers count. They are CONFIG_ENTRY_MARKER in the same timeline
+    // array as LED and audio rows (config_parser.c), so they consume a slot
+    // against CONFIG_PARSER_MAX_ENTRIES and sit in the same dispatch batch.
+    // `S` speech rows do NOT: serializeForDevice strips them before the POST
+    // unless the caller opts in, so counting them would warn about a limit the
+    // device never sees.
     let entryCount = 0;
-    const timeCounts = {}; // time_ms -> number of LED/audio rows
+    const timeCounts = {}; // time_ms -> number of timeline rows at that instant
     for (const r of rows) {
-        if (r.kind === 'led' || r.kind === 'audio') {
+        if (r.kind === 'led' || r.kind === 'audio' || r.kind === 'marker') {
             entryCount++;
             timeCounts[r.time] = (timeCounts[r.time] || 0) + 1;
         }
