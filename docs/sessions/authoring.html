@@ -154,6 +154,58 @@ with exactly that. Write it as a periodic modulation: <code>~15:35:10000</code>.
 segment; an asymmetric inhale/exhale shape would need a new LFO shape in firmware and does not exist
 yet.</p>
 
+<h2 id="speech">Narration (<code>S</code> lines)</h2>
+
+<p>A spoken line is <code>S &lt;time&gt; &lt;voice&gt; &lt;volume&gt; "&lt;text&gt;"</code>.
+The <a href="../sessions/reference.html#speech">reference</a> has the exact
+parsing rules; what matters when authoring is the part that is not in the
+syntax: <strong>the device has no speech synthesiser.</strong></p>
+
+<p>An <code>S</code> line is a request for a phrase, not audio. Something has to
+turn it into a WAV before the session can say it, and that something is the
+browser — either live while it drives playback, or ahead of time into files on
+the SD card. A session full of perfectly good <code>S</code> lines played from a
+card that was never synced is a session that says nothing, with no error to tell
+you why. The operator-side procedure is
+<a href="../user-guide/speech.html">Speech and narration</a>; the authoring-side
+consequences are these:</p>
+
+<ul>
+  <li><strong>Every unique phrase becomes one file.</strong> Reuse pays —
+  “Breathe in” written identically in six places is one file synthesised once,
+  while six near-identical variants are six. Dedup is exact-match on the text,
+  so a stray trailing space makes a new phrase.</li>
+
+  <li><strong>Editing text invalidates the card copy.</strong> Filenames are
+  hashed from voice + text, so changing a word produces a new filename and the
+  session goes quiet on that line until it is re-synced. Finish the wording
+  before you fill a card for a trip.</li>
+
+  <li><strong>The voice is part of the identity too.</strong> Leave
+  <code>voice</code> as <code>default</code> unless you have a reason; pinning a
+  specific voice ties the session to an engine, and the two engines do not share
+  voice names.</li>
+
+  <li><strong>Write for the gaps, not over the stimulus.</strong> Narration is
+  mixed on top of whatever else is running — it does not duck the entrainment
+  audio. Put lines where the bed is quiet, and keep <code>volume</code> (default
+  80) below the point where it competes.</li>
+
+  <li><strong>Speech is stripped before the file reaches the device.</strong> The
+  browser removes <code>S</code> rows when it POSTs a session, so what the device
+  parses is not quite what you wrote. The linter models this: pass
+  <code>--keep-speech</code> if you want to lint the file as written rather than
+  as sent.</li>
+</ul>
+
+<div class="warn">
+  <p><strong>A device built without SD support will never speak, however well you
+  author.</strong> The firmware parses <code>S</code> rows always, but only plays
+  them when built with <code>CONFIG_BG_SDCARD_ENABLED</code> — set in
+  <code>sdkconfig.defaults.esp32s3</code>. Without it the entry parses, occupies
+  one of the 100 entry slots, and does nothing.</p>
+</div>
+
 <h2 id="test">How to test a session</h2>
 
 <p>In order, cheapest first.</p>

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speech and narration — ESP32 AVE</title>
+<meta name="description" content="How spoken narration works: the device never synthesises speech, your browser does. Choosing an engine, the Puter sign-in, preloading, and syncing phrases to the SD card.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html" aria-current="page">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+</nav>
+
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
+<main class="page">
+
+<div class="hero">
+  <span class="eyebrow">User guide</span>
+  <h1>Speech and narration</h1>
+  <p class="lead">Some sessions talk to you — a line at the start, a cue at a
+  transition, a word at the end. The thing to understand before any of the
+  buttons make sense is that <strong>the device cannot speak</strong>. It has no
+  speech synthesiser. It plays audio files. Everything below is about getting
+  those files made and onto the card.</p>
+</div>
+
+<h2 id="model">Who actually does the talking</h2>
+
+<p>A session asks for narration with an <code>S</code> line — a timestamp and
+some text. Nothing in that line is audio; it is a request for a phrase.</p>
+
+<p><strong>Your browser synthesises it, not the device.</strong> When you press
+play with the web UI open, the browser turns each phrase into audio and mixes it
+in. That works, but it means the laptop has to stay open and online — which is
+exactly what you do not want when the point is to lie down with the glasses
+on.</p>
+
+<p>So there is a second path: synthesise every phrase <em>once</em>, upload the
+resulting files to the device's SD card, and from then on the device plays them
+itself with nothing attached. That is what the two buttons in Settings do, and
+the rest of this page is about them.</p>
+
+<div class="note">
+  <p><strong>The short version.</strong> Settings → <em>Browser preferences</em>:
+  pick a <strong>Speech (TTS) engine</strong>, press <span class="kbd">⤓ Preload
+  all speech</span>, then press <span class="kbd">⇪ Sync speech to SD card</span>.
+  Do it once, redo it when you add or edit a talking session.</p>
+</div>
+
+<h2 id="engines">Choosing an engine</h2>
+
+<p>Settings → <em>Browser preferences</em> → <strong>Speech (TTS) engine</strong>.
+There are two, both free, neither needing an API key you have to find and paste
+somewhere.</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Engine</th><th>Where it runs</th><th>Needs internet…</th><th>Notes</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Puter.js</strong><br><span class="small">browser, neural</span></td>
+  <td>In your browser, loaded from Puter's CDN</td>
+  <td><strong>in the browser</strong></td>
+  <td>Neural voices (AWS Polly under the hood). The better-sounding option, and
+      the default. May ask you to sign in — see below.</td>
+</tr>
+<tr>
+  <td><strong>Google</strong><br><span class="small">proxied via the device</span></td>
+  <td>The device makes the request and passes the audio back</td>
+  <td><strong>on the device</strong></td>
+  <td>Plainer voice. Useful when the browser is offline but the device is on a
+      network with internet. Long phrases are split into chunks.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="warn">
+<p><strong>The engine choice lives in your browser, not on the device</strong> —
+and it changes the voice. Two consequences people trip over: a different laptop
+means a different setting and a different narrator, and <strong>switching engine
+invalidates everything you already generated</strong>, because the files are
+named after the voice as well as the words. Decide first, then preload.</p>
+</div>
+
+<h2 id="puter">The Puter sign-in, and why you are being asked</h2>
+
+<p>The first time Puter synthesises something it may open a sign-in window.
+This surprises people, so: Puter is a cloud platform whose AI services run on a
+<strong>user-pays</strong> model. Instead of this project shipping an API key and
+paying for everyone's speech, the usage is attributed to <em>your</em> Puter
+account. That is the trade: no key to configure, but an account to create.</p>
+
+<p>Creating one is free and takes a moment — the popup walks you through it, or
+you can sign up at <a href="https://puter.com">puter.com</a> first and simply log
+in when asked. Once you have signed in, the browser remembers it; you will not be
+asked again on that browser.</p>
+
+<div class="note">
+  <p><strong>If no popup appears and nothing happens</strong>, your browser
+  blocked it. The sign-in has to open from a real click, which is why it fires
+  the moment you press the button rather than later in the process — allow
+  popups for the device's address and press the button again.</p>
+  <p>If you would rather not create an account at all, switch to the
+  <strong>Google</strong> engine. It needs no sign-in; it just needs the device
+  to have internet.</p>
+</div>
+
+<h2 id="preload">Step 1 — Preload all speech</h2>
+
+<p><span class="kbd">⤓ Preload all speech</span> walks the <code>S</code> lines
+of <em>every</em> session it can see — the ones on the device and the ones saved
+in this browser — collects every <strong>unique</strong> phrase, synthesises the
+ones it does not already have, and stores them in this browser.</p>
+
+<p>The status line counts as it goes and tells you at the end how many were
+generated versus already cached. Phrases already in the cache cost nothing and
+make no network request, so running it again after adding one session is quick.</p>
+
+<p>After this, the browser can play and bounce speech <strong>with no
+internet</strong> — which is the useful state to be in before you leave the
+house. It does not yet mean the device can speak on its own; that is the next
+step.</p>
+
+<h2 id="sync">Step 2 — Sync speech to SD card</h2>
+
+<p><span class="kbd">⇪ Sync speech to SD card</span> uploads the phrases to the
+device, so a session can run with the browser closed and the laptop shut.</p>
+
+<p>It checks the card is there, reports how much space is free, then uploads
+only what is missing — phrases already on the card are skipped, and phrases
+already in the browser cache upload without being synthesised again. A full
+re-run after a small change moves very little.</p>
+
+<p>Each unique phrase becomes one file under <code>/sdcard/speech/</code>, named
+from a hash of the voice and the text rather than from the words themselves. You
+do not need to care what they are called, but it explains two behaviours:</p>
+
+<ul>
+  <li><strong>Editing a phrase creates a new file</strong> rather than replacing
+  one. Change a comma and you have a new name; the old file stays on the card
+  until you delete it. Harmless, but the card accumulates.</li>
+  <li><strong>Changing the engine renames everything</strong>, because the voice
+  is part of the name. Re-sync after switching.</li>
+</ul>
+
+<div class="note">
+  <p>If a phrase is missing from the card, the session does not fail — it simply
+  falls back to the browser for that line, as long as a browser is driving
+  playback. Offline, on the device alone, a missing phrase is silence where the
+  narration should have been.</p>
+</div>
+
+<h2 id="checks">When it does not talk</h2>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Symptom</th><th>Usually</th></tr></thead>
+<tbody>
+<tr><td>Silent where narration should be, playing from the card</td>
+    <td>The phrase was never synced — or was edited after the last sync. Run
+        <span class="kbd">⇪ Sync speech to SD card</span> again.</td></tr>
+<tr><td>Silent after changing the voice or engine</td>
+    <td>Different engine, different filenames. Preload and sync again.</td></tr>
+<tr><td>Synthesis fails with the browser open</td>
+    <td>Puter needs internet <em>in the browser</em> and may need its sign-in
+        popup allowed; Google needs the <em>device</em> online.</td></tr>
+<tr><td>Nothing works while on the device's own access point</td>
+    <td>Expected. <code>ESP32-AVE-Setup</code> has no internet, so neither engine
+        can reach anything — preload before you go off-network.</td></tr>
+<tr><td>No sync button effect, "no SD card detected"</td>
+    <td>The card is not mounted. See
+        <a href="../user-guide/offline-sd.html">offline playback</a>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>More failure modes, including the ones that are not about speech, are on the
+<a href="../user-guide/troubleshooting.html">troubleshooting page</a>.</p>
+
+<h2 id="next">Next</h2>
+
+<p><a href="../user-guide/offline-sd.html">Offline playback from the SD card</a>
+covers the rest of what the card carries — background music as well as speech.
+If you are writing sessions rather than playing them, the
+<a href="../sessions/authoring.html#speech">authoring guide</a> has the
+<code>S</code>-line conventions and the
+<a href="../sessions/reference.html#speech">reference</a> has the exact
+syntax.</p>
+
+</main>
+
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>
