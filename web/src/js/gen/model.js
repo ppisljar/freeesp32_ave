@@ -161,6 +161,12 @@ export function audioRow(opts) {
         // rewrote a ramped binaural line to mono on save, destroying the glide.
         // undefined => no prefix seen; plain `freqR` is authoritative.
         freqRCell: opts.freqRCell,
+        // Whether the freq_r TOKEN was present on the line. Only the parser
+        // sets this (false for an absent token or a `-`); rows built by the
+        // editors leave it undefined, which reads as "present" so their
+        // explicit freqR keeps meaning what it says. Needed because absent and
+        // `0` both store 0 but mean opposite things — see parse.js.
+        freqRPresent: opts.freqRPresent,
         waveType: (opts.waveType === undefined) ? null : opts.waveType, // 0..7; null => omit token
         // NEW pulse fields (format v2) — same conventions as ledRow. audio env default 4.
         duty:   opts.duty,     // compound cell, %

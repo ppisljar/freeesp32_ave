@@ -1,37 +1,120 @@
-// Web UI build: bundle + minify the vanilla-JS modules and CSS with esbuild,
-// then gzip every asset (level 9) into ./data, which the firmware's CMake
-// packs into the SPIFFS "storage" partition. Only the .gz files are shipped;
-// the C file server serves them with Content-Encoding: gzip and falls back
-// between plain/.gz names. ./dist holds the uncompressed, human-readable
-// output for inspection.
+// Web UI build — TWO targets from one source tree.
+//
+//   DEVICE      bundle + minify the vanilla-JS modules and CSS with esbuild,
+//               then gzip every asset (level 9) into ./data, which the
+//               firmware's CMake packs into the SPIFFS "storage" partition.
+//               Only the .gz files ship; the C file server serves them with
+//               Content-Encoding: gzip. ./dist holds the uncompressed output
+//               for inspection.
+//
+//   STANDALONE  the same Generator — Text, Table, Lanes, Wizard, Simulate and
+//               Community — published to ../docs/generator/ for the project
+//               site, with every device call compiled out. Two differences
+//               matter and both come from the docs site's own rules:
+//
+//                 * IIFE, NOT ESM. docs/README.md keeps the property that every
+//                   page opens correctly from a local checkout with the network
+//                   unplugged, and `<script type="module">` is blocked under
+//                   file:// by the opaque origin. A classic script is not.
+//                 * NOT gzipped and not minified away to nothing — GitHub Pages
+//                   serves it directly, and a .gz there would download as a file.
+//
+//               The markup is LIFTED OUT OF src/index.html between the
+//               GEN-PAGE markers rather than copied, so there is exactly one
+//               copy of the generator's HTML in the repository. The device UI
+//               renames a selector often enough that a second copy would drift.
 import { build } from 'esbuild';
 import { gzipSync } from 'node:zlib';
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+const REPO = dirname(ROOT);
 const SRC = join(ROOT, 'src');
 const DIST = join(ROOT, 'dist');
 const DATA = join(ROOT, 'data');
+const DOCS_OUT = join(REPO, 'docs', 'generator');
 
 function reset(dir) { rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true }); }
+
+// ---------------------------------------------------------------------------
+// 0. Bundled example sessions.
+//
+// Written as a module rather than fetched at runtime, because the docs page has
+// to work over file:// where fetching a sibling file is blocked. They go into
+// BOTH builds: on the device they are useful starting points too, and the whole
+// set costs about 4 KB gzipped.
+// ---------------------------------------------------------------------------
+const DEMO_FILES = [
+    { file: 'docs/sessions/examples/binaural_alpha_theta.ledc',
+      title: 'Binaural — alpha to theta',
+      blurb: 'A pinned right carrier with the left one gliding, so the beat itself '
+           + 'slides 10 Hz down to 6 Hz. Breathing brightness LFO on the light.' },
+    { file: 'docs/sessions/examples/isochronic_alpha_pulse.ledc',
+      title: 'Isochronic — alpha pulse',
+      blurb: 'A gated tone rather than two carriers: the beat is in the envelope, '
+           + 'so it survives loudspeakers as well as headphones.' },
+    { file: 'docs/sessions/examples/monaural_theta_drum.ledc',
+      title: 'Monaural — theta drum',
+      blurb: 'Two detuned mono channels summing in the mixer, not in the head.' },
+    { file: 'docs/sessions/examples/photic_antiphase_40hz.ledc',
+      title: 'Photic — 40 Hz antiphase',
+      blurb: 'The amber/cyan pair 180 degrees apart. With the sine carrier the two '
+           + 'raised sines sum to flat luminance — the "invisible" flicker.' },
+    { file: 'sessions/library/05_focus_smr.ledc',
+      title: 'Focus / SMR — steady light',
+      blurb: 'The light is held at freq 0 for the whole session (DC, never pulses) '
+           + 'and the 14 Hz beat is carried entirely by the audio.' },
+    { file: 'sessions/library/27_genus_40hz_dim.ledc',
+      title: 'GENUS — 40 Hz gamma, dim',
+      blurb: 'The 40 Hz gamma protocol at low brightness.' },
+];
+
+function buildDemos() {
+    const entries = [];
+    for (const d of DEMO_FILES) {
+        const path = join(REPO, d.file);
+        if (!existsSync(path)) {
+            console.warn('  ! demo missing, skipped: ' + d.file);
+            continue;
+        }
+        entries.push({
+            name: d.file.split('/').pop(),
+            title: d.title,
+            blurb: d.blurb,
+            text: readFileSync(path, 'utf8'),
+        });
+    }
+    const body =
+        '// GENERATED by web/build.mjs — do not edit. Source files are listed in\n'
+      + '// DEMO_FILES there. Bundled as text rather than fetched because the docs\n'
+      + '// page must work over file://, where fetching a sibling file is blocked.\n'
+      + 'export const DEMOS = ' + JSON.stringify(entries, null, 1) + ';\n';
+    writeFileSync(join(SRC, 'js', 'gen', 'sim', 'demos.js'), body);
+    return entries.length;
+}
+
+const demoCount = buildDemos();
+
+// ---------------------------------------------------------------------------
+// 1. Device bundle (ESM) + CSS + HTML -> dist/, gzipped into data/.
+// ---------------------------------------------------------------------------
 reset(DIST);
 reset(DATA);
 
-// 1. Bundle + minify JS (single output, ES module).
 const js = await build({
     entryPoints: [join(SRC, 'js', 'main.js')],
     bundle: true,
     minify: true,
     format: 'esm',
     target: 'es2020',
+    define: { __AVE_STANDALONE__: 'false' },
     write: false,
 });
 const jsOut = js.outputFiles[0].text;
 writeFileSync(join(DIST, 'app.js'), jsOut);
 
-// 2. Minify CSS (single output).
 const css = await build({
     entryPoints: [join(SRC, 'css', 'style.css')],
     bundle: true,
@@ -42,11 +125,9 @@ const css = await build({
 const cssOut = css.outputFiles[0].text;
 writeFileSync(join(DIST, 'style.css'), cssOut);
 
-// 3. HTML — copy as-is (gzip flattens the whitespace anyway).
 const html = readFileSync(join(SRC, 'index.html'), 'utf8');
 writeFileSync(join(DIST, 'index.html'), html);
 
-// 4. gzip each asset into ./data as <name>.gz (level 9).
 function gz(name, text) {
     const raw = Buffer.from(text);
     const buf = gzipSync(raw, { level: 9 });
@@ -59,10 +140,211 @@ const assets = {
     'style.css': gz('style.css', cssOut),
 };
 
-console.log('Web UI built -> data/ (gzipped, packed into SPIFFS):');
+console.log('Device UI -> data/ (gzipped, packed into SPIFFS):');
 let totalRaw = 0, totalGz = 0;
 for (const [name, s] of Object.entries(assets)) {
     totalRaw += s.raw; totalGz += s.gz;
     console.log('  ' + name.padEnd(12) + s.raw.toString().padStart(7) + ' B  ->  ' + s.gz.toString().padStart(6) + ' B .gz');
 }
 console.log('  ' + 'TOTAL'.padEnd(12) + totalRaw.toString().padStart(7) + ' B  ->  ' + totalGz.toString().padStart(6) + ' B .gz');
+
+// ---------------------------------------------------------------------------
+// 2. Standalone bundle -> ../docs/generator/
+// ---------------------------------------------------------------------------
+
+// Lift the generator markup out of index.html. Failing loudly here is the point:
+// a silently-empty page would look like a JavaScript bug for a long time.
+function extractGeneratorMarkup(src) {
+    const a = src.indexOf('<!-- GEN-PAGE:START');
+    const b = src.indexOf('<!-- GEN-PAGE:END -->');
+    if (a < 0 || b < 0 || b < a) {
+        throw new Error('src/index.html: GEN-PAGE:START/END markers not found — '
+            + 'the standalone page is built by lifting the markup between them.');
+    }
+    const open = src.indexOf('-->', a);
+    let block = src.slice(open + 3, b).trim();
+
+    // BOTH stylesheets define `.page`, and they mean different things: the
+    // site's is a prose column, the app's is a TAB that is `display:none`
+    // unless it also carries `.active`. The device UI's nav adds that class at
+    // runtime; there is no nav here, so add it at build time or the whole
+    // generator renders invisibly.
+    const tagged = block.replace('class="page" id="page-generator"',
+                                 'class="page active" id="page-generator"');
+    if (tagged === block) {
+        throw new Error('src/index.html: could not find the page-generator div to '
+            + 'mark active — the standalone page would render blank.');
+    }
+    return tagged;
+}
+
+const genMarkup = extractGeneratorMarkup(html);
+
+const standaloneJs = await build({
+    entryPoints: [join(SRC, 'js', 'main-standalone.js')],
+    bundle: true,
+    minify: true,
+    // IIFE, not ESM: see the header. A module script will not run from file://.
+    format: 'iife',
+    target: 'es2020',
+    define: { __AVE_STANDALONE__: 'true' },
+    write: false,
+});
+const standaloneOut = standaloneJs.outputFiles[0].text;
+
+/*
+ * Reconcile the two stylesheets.
+ *
+ * This page loads BOTH: the app's, for the generator, and the site's, for the
+ * nav and the surrounding prose. They were written independently, so they
+ * collide in two small ways and the ORDER decides each one.
+ *
+ * Bare-element selectors overlap on exactly `body` and `h1` (the app also
+ * styles button/select/textarea, which the site does not touch at all). For
+ * those two the SITE should win — this is a docs page with a docs heading — so
+ * site.css is loaded second. The app's component rules are all class selectors
+ * and outrank any bare-element rule regardless of order, so the generator
+ * itself is untouched.
+ *
+ * That leaves the custom properties. Twelve names appear in both; six are
+ * byte-identical and two differ only in whitespace, but four genuinely differ
+ * and the app needs its own values for them. Rather than hand-copy four colours
+ * into this file — which would drift the first time the app is rethemed, and
+ * would break the project's no-colour-literals rule — lift them straight out of
+ * the app's compiled :root and re-declare them scoped to the app's container.
+ */
+function conflictingTokenBlock(appCss, siteCss) {
+    const rootOf = (css) => {
+        const vars = {};
+        const re = /:root\s*\{([^}]*)\}/g;
+        let m;
+        while ((m = re.exec(css))) {
+            for (const [, k, v] of m[1].matchAll(/(--[\w-]+)\s*:\s*([^;]+)/g)) {
+                vars[k] = v.trim();
+            }
+        }
+        return vars;
+    };
+    const norm = (v) => v.replace(/\s+/g, ' ').trim();
+    const app = rootOf(appCss);
+    const site = rootOf(siteCss);
+    const keep = [];
+    for (const k of Object.keys(app)) {
+        if (site[k] !== undefined && norm(site[k]) !== norm(app[k])) {
+            keep.push('  ' + k + ': ' + app[k] + ';');
+        }
+    }
+    if (!keep.length) return '';
+    return '/* Tokens the site redefines differently, restored for the app.\n'
+         + '   Lifted from the app stylesheet at build time — do not edit here. */\n'
+         + '.gen-standalone .container {\n' + keep.join('\n') + '\n}\n';
+}
+
+const tokenRescue = conflictingTokenBlock(cssOut, readFileSync(join(REPO, 'docs', 'assets', 'site.css'), 'utf8'));
+
+/*
+ * The page shell.
+ */
+const docsPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session generator and simulator — ESP32 AVE</title>
+<meta name="description" content="Write a .ledc entrainment session in your browser and hear it, watch the LED zones, read the spectrum and inspect the timeline — no hardware required.">
+<!-- Order matters: the app's stylesheet first, the site's second. They collide
+     on exactly two bare-element selectors (body, h1) and the site should win
+     both; every app rule is a class selector and outranks them anyway. -->
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="../assets/site.css">
+<style>
+${tokenRescue}/* The app centres bare h1 for the device UI's page title; this page's heading
+   is prose and wants the site's left-aligned measure. Layout only. */
+.gen-standalone h1, .gen-standalone h2 { text-align: left; }
+.gen-standalone > .container { margin-top: 0; }
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+  <a href="index.html" aria-current="page">Try it online</a>
+</nav>
+
+<main class="page active wide gen-standalone">
+
+  <div class="band-inner">
+  <header class="hero">
+    <h1>Write a session. Hear it. Watch it.</h1>
+    <p class="lead">
+      This is the same editor that runs on the device, with every control that
+      needs hardware removed and a simulator put in its place. Pick an example
+      below, open the <strong>Simulate</strong> tab, and press Play: the audio is
+      synthesised by a port of the firmware's own engine, the light is the exact
+      byte sequence the LED strip would receive, and the timeline inspector shows
+      what every channel is doing at the playhead.
+    </p>
+    <p class="lead">
+      Nothing is uploaded anywhere. Sessions you save stay in this browser, and
+      <strong>Download</strong> gives you a .ledc file you can put on a real device.
+    </p>
+  </header>
+  </div>
+
+  <div id="status" class="status" style="display:none;"></div>
+
+  <div class="container is-wide">
+${genMarkup}
+  </div>
+
+  <section class="band band-tint">
+    <div class="band-inner">
+      <h2>How faithful is it?</h2>
+      <p>
+        Faithful enough to author against, and honest about where it is not. The
+        audio path reproduces the firmware's fixed 1/16 mix divisor, its five
+        isochronic envelopes and their envelope-dependent depth defaults, the
+        absolute right-ear carrier, and the de-click ramps — a single centre
+        tone at full volume peaks at the same &minus;27.1&nbsp;dBFS it measures
+        on the bench. The light path reproduces the integer pixel chain exactly,
+        including the deliberate absence of gamma correction that lets a
+        180&deg; antiphase pair sum to flat luminance.
+      </p>
+      <p>
+        What it does not reproduce is anything that depends on the hardware's own
+        timing: the flicker timer quantises edges to a few hundred microseconds,
+        the LED strip cannot refresh faster than about 415&nbsp;times a second,
+        and the carrier's absolute starting phase is not reproducible even
+        between two runs on the device. The simulator draws the ideal waveform
+        and tells you, in the Light panel and in the warnings above the
+        transport, where the hardware will differ.
+      </p>
+      <p>
+        <a href="../sessions/reference.html">The format reference</a> documents
+        every column, and <a href="../sessions/authoring.html">the authoring
+        guide</a> covers how to put a session together.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
+`;
+
+reset(DOCS_OUT);
+writeFileSync(join(DOCS_OUT, 'app.js'), standaloneOut);
+writeFileSync(join(DOCS_OUT, 'style.css'), cssOut);
+writeFileSync(join(DOCS_OUT, 'index.html'), docsPage);
+
+console.log('\nStandalone generator -> docs/generator/ (served as-is by Pages):');
+for (const [name, text] of [['index.html', docsPage], ['app.js', standaloneOut], ['style.css', cssOut]]) {
+    console.log('  ' + name.padEnd(12) + Buffer.byteLength(text).toString().padStart(7) + ' B');
+}
+console.log('  ' + demoCount + ' example sessions bundled');

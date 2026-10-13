@@ -15,6 +15,7 @@
   <a href="../user-guide/index.html">User guide</a>
   <a href="../sessions/index.html" aria-current="page">Session developer</a>
   <a href="../hardware/index.html">Hardware</a>
+  <a href="../generator/index.html">Try it online</a>
 </nav>
 
 <div class="layout">
@@ -223,21 +224,39 @@ actually receives. <code>--json</code> gives machine-readable output.</p>
 each channel's live state, and reports things that will behave differently from how the file reads.
 That is why it can catch a ramp pointing at a <code>-</code>.</p>
 
-<h3>2. Read it back as prose.</h3>
+<h3>2. Simulate it. Still no hardware needed.</h3>
+
+<p>Open the <a href="../generator/index.html">browser simulator</a>, load the file, and press
+Play on the Simulate tab. It runs a port of the firmware's own synthesis and flicker engines, so
+you hear the beat, the gate depth and the noise bed at their real relative levels, and you watch
+the LED zones on the actual 74-pixel geometry. The scope trace under the zones draws each
+channel's level at two-millisecond resolution, which is where a duty cycle or a phase offset
+stops being a number and becomes something you can see.</p>
+
+<p>Two things it surfaces that the linter cannot, because they need the resolved timeline rather
+than the file: the exact carrier pair and beat frequency at any instant, and a running warning
+list that links back to the source line and seeks the playhead to the moment it goes wrong.</p>
+
+<p>It is deliberately not a hardware emulator. The flicker timer quantises edges, the LED strip
+cannot refresh faster than about 415 times a second, and absolute carrier phase is not
+reproducible even between two runs on the device — the simulator draws the ideal waveform and
+says so where it matters.</p>
+
+<h3>3. Read it back as prose.</h3>
 
 <p>Every row of a good session carries an inline comment saying what changes and why. If you cannot
 write that comment, the row is probably wrong. Look especially for rows whose literal disagrees with
 the live state — the device will start a ramp from the live value and your file will have lied to the
 next reader.</p>
 
-<h3>3. Play it, with the serial monitor attached.</h3>
+<h3>4. Play it, with the serial monitor attached.</h3>
 
 <p>The device logs a one-line summary of every dispatched entry, including the resolved sweep
 (<code>start → target over duration</code>), plus a warning for every clamp and rejection. That log
 is the fastest way to confirm an entry executed as you intended, and the only way to see the clamps
 the linter does not model.</p>
 
-<h3>4. Measure it.</h3>
+<h3>5. Measure it.</h3>
 
 <p>There is a complete measurement harness in <code>tools/avmeasure/</code> and a
 feature-verification suite of fourteen short sessions in <code>sessions/test/</code> (12&nbsp;min
@@ -275,7 +294,7 @@ there.</p>
   h2/h1 = 0.547 with a faulty sensor wire and 0.044 after it was repaired.</li>
 </ul>
 
-<h3>5. Validate against the library rules.</h3>
+<h3>6. Validate against the library rules.</h3>
 
 <p>Sessions destined for <code>sessions/library/</code> must also pass
 <code>node validate_session.mjs library/&lt;file&gt;.ledc</code> with zero errors, and must follow

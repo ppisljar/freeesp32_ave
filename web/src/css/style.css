@@ -1125,3 +1125,98 @@ textarea {
 .diag-llrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .diag-llname { font-family: var(--font-mono); font-size: 13px; color: var(--fg-mut); }
 .diag-llrow select { padding: 4px 6px; font-size: 12px; }
+
+/* ===================================================================
+   Simulate view (gen/views/sim.js)
+   ===================================================================
+   Stacked panels under a single transport bar. Canvases are sized in JS
+   (devicePixelRatio) and only need a width here; every colour comes from a
+   token, and the canvases' own palette lives in the one exported PAL mirror
+   in gen/views/lane_canvas.js. */
+.gen-simview { padding: 8px 0; }
+.sim-wrap { display: flex; flex-direction: column; gap: 14px; }
+
+/* Findings: grammar errors from validate.js and resolved-timeline findings
+   from sim/lint.js, most severe first. */
+.sim-notice { display: flex; flex-direction: column; gap: 6px; }
+.sim-finding {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    font-size: 12.5px; line-height: 1.45; padding: 7px 11px;
+    border: 1px solid var(--edge); border-left-width: 3px;
+    border-radius: var(--r-sm); background: var(--panel);
+}
+.sim-finding.sim-error { border-left-color: var(--err);  background: var(--err-bg);  color: var(--err); }
+.sim-finding.sim-warn  { border-left-color: var(--warn); background: var(--warn-bg); color: var(--warn); }
+.sim-finding.sim-info  { border-left-color: var(--info); background: var(--info-bg); color: var(--fg-mut); }
+.sim-finding-msg { flex: 1 1 20rem; min-width: 0; }
+.sim-finding-line {
+    flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px;
+    padding: 1px 7px; border-radius: 999px;
+    background: var(--panel-3); color: var(--fg-mut);
+}
+.sim-jump {
+    flex: 0 0 auto; margin: 0; padding: 2px 9px; min-height: 0;
+    font-size: 11px; font-family: var(--font-mono);
+}
+
+/* Transport */
+.sim-transport {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px; border: 1px solid var(--edge);
+    border-radius: var(--r); background: var(--panel);
+}
+.sim-transport button { margin: 0; min-width: 5.5rem; }
+.sim-play.on { background: var(--warn-bg); border-color: var(--warn-edge); color: var(--warn); }
+.sim-seek { flex: 1 1 14rem; min-width: 8rem; }
+.sim-clock { font-family: var(--font-mono); font-size: 14px; color: var(--fg); }
+.sim-total { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
+.sim-trimwrap { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.sim-trim { width: 7rem; }
+.sim-trim-lbl { font-family: var(--font-mono); font-size: 12px; color: var(--fg-mut); min-width: 3.6rem; }
+
+/* Panels */
+.sim-panel {
+    border: 1px solid var(--edge); border-radius: var(--r);
+    background: var(--panel); padding: 10px 12px 12px;
+}
+.sim-panel-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.sim-panel-head h3 { margin: 0; font-size: 13px; font-weight: 650; color: var(--fg); letter-spacing: .02em; }
+.sim-dim { font-size: 11.5px; color: var(--fg-dim); }
+.sim-mode { margin-left: auto; }
+.sim-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-mut); cursor: pointer; }
+.sim-sg-btn { margin: 0; padding: 4px 11px; font-size: 12px; min-height: 30px; }
+
+.sim-canvas { display: block; width: 100%; border-radius: var(--r-sm); }
+.sim-led { margin-bottom: 8px; }
+.sim-scope { margin-bottom: 6px; }
+
+.sim-cap { font-size: 11.5px; line-height: 1.5; color: var(--fg-dim); margin-top: 6px; }
+
+/* Inspector tables */
+.sim-inspect { overflow-x: auto; }
+.sim-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+.sim-table th {
+    text-align: left; font-weight: 600; font-size: 11px; letter-spacing: .03em;
+    text-transform: uppercase; color: var(--fg-dim);
+    padding: 4px 9px 4px 0; border-bottom: 1px solid var(--edge); white-space: nowrap;
+}
+.sim-table td {
+    padding: 4px 9px 4px 0; font-family: var(--font-mono);
+    color: var(--fg-mut); white-space: nowrap;
+    border-bottom: 1px solid var(--edge);
+}
+.sim-table tr.sim-silent td { color: var(--fg-dim); opacity: .62; }
+.sim-swatch {
+    display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+    border: 1px solid var(--edge-2); vertical-align: -1px;
+}
+
+@media (max-width: 640px) {
+    .sim-transport { gap: 8px; }
+    .sim-transport button { min-width: 0; flex: 1 1 auto; }
+    .sim-seek { flex: 1 1 100%; order: 10; }
+    .sim-trimwrap { flex: 1 1 100%; order: 11; }
+    .sim-trim { flex: 1 1 auto; width: auto; }
+    .sim-mode { margin-left: 0; flex: 1 1 100%; }
+}
+.sim-audionote { flex: 1 1 100%; font-size: 11.5px; color: var(--warn); }

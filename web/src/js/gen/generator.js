@@ -22,7 +22,10 @@ import { initTextView } from './views/text.js';
 import { initTableView } from './views/table.js';
 import { initLaneView } from './views/lane.js';
 import { initWizardView } from './views/wizard.js';
+import { initSimView } from './views/sim.js';
 import { communityShow } from './community.js';
+import { STANDALONE, isFileProtocol } from '../env.js';
+import { DEMOS } from './sim/demos.js';
 
 // ---- Shared model + event bus ---------------------------------------------
 let doc = emptyDoc();
@@ -35,6 +38,7 @@ let textView = null;
 let tableView = null;
 let laneView = null;
 let wizardView = null;
+let simView = null;
 
 export function getDoc() { return doc; }
 
@@ -107,6 +111,7 @@ function switchView(view) {
     const tableRoot = document.getElementById('genTableView');
     const laneRoot = document.getElementById('genLaneView');
     const wizardRoot = document.getElementById('genWizardView');
+    const simRoot = document.getElementById('genSimView');
     const commRoot = document.getElementById('genCommunityView');
     const placeholder = document.getElementById('genOtherView');
 
@@ -115,6 +120,7 @@ function switchView(view) {
     if (tableView) tableView.hide(); else if (tableRoot) tableRoot.style.display = 'none';
     if (laneView) laneView.hide(); else if (laneRoot) laneRoot.style.display = 'none';
     if (wizardView) wizardView.hide(); else if (wizardRoot) wizardRoot.style.display = 'none';
+    if (simView) simView.hide(); else if (simRoot) simRoot.style.display = 'none';
     if (commRoot) commRoot.style.display = 'none';
     if (placeholder) placeholder.style.display = 'none';
 
@@ -130,6 +136,9 @@ function switchView(view) {
     } else if (view === 'wizard') {
         if (wizardView) wizardView.show();
         else if (wizardRoot) wizardRoot.style.display = '';
+    } else if (view === 'simulate') {
+        if (simView) simView.show();
+        else if (simRoot) simRoot.style.display = '';
     } else if (view === 'community') {
         if (commRoot) commRoot.style.display = '';
         communityShow();   // lazy-fetches the GitHub index on first show
@@ -204,7 +213,9 @@ function saveAs() {
         '<h3 style="margin:0 0 12px 0;">Save Config As</h3>'
       + '<div style="margin-bottom:10px;"><label>Filename<br><input id="genSaveName" type="text" style="width:100%;padding:6px;" value="' + (currentName || 'untitled.ledc') + '"></label></div>'
       + '<div style="margin-bottom:14px;"><label>Destination<br><select id="genSaveDest" style="width:100%;padding:6px;">'
-      + '<option value="spiffs">Device (SPIFFS)</option><option value="local">Browser (local)</option><option value="generator">Generator (server)</option>'
+      + (STANDALONE
+            ? '<option value="local">Browser (local)</option>'
+            : '<option value="spiffs">Device (SPIFFS)</option><option value="local">Browser (local)</option>')
       + '</select></label></div>'
       + '<div style="text-align:right;"><button id="genSaveCancel">Cancel</button> <button id="genSaveOk" style="background:var(--ok);color:#06240f;border-color:transparent;">Save</button></div>';
     back.appendChild(box);
@@ -274,6 +285,107 @@ function bind(id, fn) {
     if (el) el.addEventListener('click', fn);
 }
 
+/*
+ * Reshape the toolbar for a host with no device.
+ *
+ * Three of the five transport buttons only mean anything with hardware
+ * attached — Play posts the timeline to /api/play-config, Apply live patches a
+ * running session, Bounce renders a WAV to push over the BG WebSocket — so on
+ * the docs site they are removed rather than left to fail. Two that do make
+ * sense in a browser take their place: open a .ledc from disk, and download the
+ * one you have been editing.
+ *
+ * Removing the device Play also closes a real trap: it sits a few pixels above
+ * the Simulate view's own Play, and pressing it renders the whole session to a
+ * WAV synchronously, which locks the tab solid on a long session.
+ */
+function applyStandaloneChrome() {
+    for (const id of ['btnGenPlay', 'btnGenApply', 'btnGenBounce']) {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+    }
+    const bar = document.querySelector('#page-generator .gen-transport');
+    if (!bar) return;
+
+    // Example picker. The sessions are bundled as TEXT rather than fetched,
+    // because the docs site deliberately opens from a local checkout over
+    // file://, where fetching a sibling file is blocked by the opaque origin.
+    if (DEMOS.length) {
+        const lbl = document.createElement('label');
+        lbl.className = 'gen-demo';
+        lbl.appendChild(document.createTextNode('Example: '));
+        const sel = document.createElement('select');
+        sel.id = 'genDemoPicker';
+        for (const d of DEMOS) {
+            const o = document.createElement('option');
+            o.value = d.name;
+            o.textContent = d.title;
+            if (d.blurb) o.title = d.blurb;
+            sel.appendChild(o);
+        }
+        sel.addEventListener('change', () => loadDemo(sel.value));
+        lbl.appendChild(sel);
+        bar.insertBefore(lbl, bar.firstChild);
+    }
+
+    const open = document.createElement('button');
+    open.id = 'btnGenOpen';
+    open.textContent = '\u{1F4C2} Open';
+    const file = document.createElement('input');
+    file.type = 'file';
+    file.accept = '.ledc,.led,text/plain';
+    file.style.display = 'none';
+    file.addEventListener('change', () => {
+        const f = file.files && file.files[0];
+        if (!f) { return; }
+        f.text().then(t => {
+            currentSrc = null; currentName = f.name;
+            setText(t);
+            setLoadedLabel('opened: ' + f.name);
+            showMessage('Opened ' + f.name, 'success');
+        }).catch(err => showMessage('Could not read that file: ' + err, 'error'));
+        file.value = '';
+    });
+    open.addEventListener('click', () => file.click());
+    bar.appendChild(open);
+    bar.appendChild(file);
+
+    const dl = document.createElement('button');
+    dl.id = 'btnGenDownload';
+    dl.textContent = '\u2B07 Download';
+    dl.addEventListener('click', () => {
+        if (!doc.rows.length) { showMessage('Nothing to download', 'error'); return; }
+        const blob = new Blob([serialize(doc)], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = currentName || 'session.ledc';
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    });
+    bar.appendChild(dl);
+
+    if (isFileProtocol()) {
+        const note = document.createElement('span');
+        note.className = 'gen-meter';
+        note.textContent = 'Opened from a file \u2014 the Community browser needs a web server.';
+        bar.appendChild(note);
+    }
+}
+
+function setLoadedLabel(text) {
+    const lbl = document.getElementById('genLoadedName');
+    if (lbl) lbl.textContent = text ? '(' + text + ')' : '';
+}
+
+function loadDemo(name) {
+    const d = DEMOS.find(x => x.name === name);
+    if (!d) return;
+    currentSrc = null;
+    currentName = d.name;
+    setText(d.text);
+    setLoadedLabel('example: ' + d.title);
+}
+
 export function generatorInit() {
     document.querySelectorAll('.gen-subtab').forEach(b =>
         b.addEventListener('click', () => switchView(b.dataset.view)));
@@ -308,7 +420,28 @@ export function generatorInit() {
     wizardView = initWizardView({ getDoc, setDoc });
     onModelChanged(d => { if (wizardView) wizardView.refresh(d); });
 
-    switchView('text');
-    setDoc(emptyDoc());     // initial empty preview/meter + text view
+    // Simulate view: play the session in the browser with no device attached.
+    // Read-only with respect to the model (it never calls setDoc), so it needs
+    // no re-entrancy guard -- but it DOES hold an AudioContext and a rAF loop,
+    // which show()/hide() start and stop.
+    simView = initSimView({ getDoc, setDoc });
+    onModelChanged(d => { if (simView) simView.refresh(d); });
+
+    if (STANDALONE) {
+        applyStandaloneChrome();
+        // Land on Simulate with an example already loaded: someone arriving
+        // from "try it online" should see the thing working rather than an
+        // empty text box. Nothing makes a sound until they press Play.
+        if (DEMOS.length) {
+            loadDemo(DEMOS[0].name);
+            switchView('simulate');
+        } else {
+            switchView('text');
+            setDoc(emptyDoc());
+        }
+    } else {
+        switchView('text');
+        setDoc(emptyDoc());     // initial empty preview/meter + text view
+    }
     refreshGenList();       // populate the config dropdown
 }

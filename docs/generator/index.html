@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session generator and simulator — ESP32 AVE</title>
+<meta name="description" content="Write a .ledc entrainment session in your browser and hear it, watch the LED zones, read the spectrum and inspect the timeline — no hardware required.">
+<!-- Order matters: the app's stylesheet first, the site's second. They collide
+     on exactly two bare-element selectors (body, h1) and the site should win
+     both; every app rule is a class selector and outranks them anyway. -->
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="../assets/site.css">
+<style>
+/* Tokens the site redefines differently, restored for the app.
+   Lifted from the app stylesheet at build time — do not edit here. */
+.gen-standalone .container {
+  --warn-bg: rgba(251,191,36,.12);
+  --warn-edge: rgba(251,191,36,.35);
+  --code-bg: #06070d;
+  --code-fg: #d9d6e4;
+  --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 30px rgba(0,0,0,.38);
+}
+/* The app centres bare h1 for the device UI's page title; this page's heading
+   is prose and wants the site's left-aligned measure. Layout only. */
+.gen-standalone h1, .gen-standalone h2 { text-align: left; }
+.gen-standalone > .container { margin-top: 0; }
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html">Hardware</a>
+  <a href="index.html" aria-current="page">Try it online</a>
+</nav>
+
+<main class="page active wide gen-standalone">
+
+  <div class="band-inner">
+  <header class="hero">
+    <h1>Write a session. Hear it. Watch it.</h1>
+    <p class="lead">
+      This is the same editor that runs on the device, with every control that
+      needs hardware removed and a simulator put in its place. Pick an example
+      below, open the <strong>Simulate</strong> tab, and press Play: the audio is
+      synthesised by a port of the firmware's own engine, the light is the exact
+      byte sequence the LED strip would receive, and the timeline inspector shows
+      what every channel is doing at the playhead.
+    </p>
+    <p class="lead">
+      Nothing is uploaded anywhere. Sessions you save stay in this browser, and
+      <strong>Download</strong> gives you a .ledc file you can put on a real device.
+    </p>
+  </header>
+  </div>
+
+  <div id="status" class="status" style="display:none;"></div>
+
+  <div class="container is-wide">
+<div class="page active" id="page-generator">
+            <div class="section">
+                <h2>Generator</h2>
+                <div style="font-size:12px;color:var(--fg-dim);margin-bottom:8px;">Visual <code>.led</code> timeline editor over one shared model: raw Text, a Table grid, DAW Lanes, and a guided Wizard — all edit the same model.</div>
+
+                <!-- View sub-tabs -->
+                <div class="gen-subtabs">
+                    <button class="gen-subtab active" data-view="text">Text</button>
+                    <button class="gen-subtab" data-view="table">Table</button>
+                    <button class="gen-subtab" data-view="lanes">Lanes</button>
+                    <button class="gen-subtab" data-view="wizard">Wizard</button>
+                    <button class="gen-subtab" data-view="simulate">Simulate</button>
+                    <button class="gen-subtab" data-view="community">Community</button>
+                </div>
+
+                <!-- Config load/save + transport, one toolbar panel. They used to
+                     be two free-standing bars stacked with the badge below them,
+                     which cost ~180px of height before the editor began. -->
+                <div class="gen-toolbar">
+                <div class="gen-store">
+                    <strong style="font-size:13px;">Configs:</strong>
+                    <select id="genLedcDropdown" style="min-width:220px;padding:4px;"></select>
+                    <button id="btnGenRefresh" title="Reload list from all sources">⟳</button>
+                    <button id="btnGenLoad">Load</button>
+                    <button id="btnGenSave">Save</button>
+                    <button id="btnGenSaveAs">Save As…</button>
+                    <span id="genLoadedName" style="color:var(--fg-mut);font-style:italic;font-size:13px;margin-left:8px;"></span>
+                </div>
+
+                <!-- Transport bar -->
+                <div class="gen-transport">
+                    <button id="btnGenPlay" style="background:var(--ok);color:#06240f;border-color:transparent;">▶ Play</button>
+                    <button id="btnGenApply">⚡ Apply live</button>
+                    <button id="btnGenBounce" title="Render the whole session (BG + Speech + A) to one WAV">⭯ Bounce</button>
+                    <span id="genRowMeter" class="gen-meter">0 / 100 entries</span>
+                </div>
+                </div>
+
+                <!-- Active view area -->
+                <div id="genViewArea">
+                    <!-- Text view (Phase 2): raw .led editor synced to the model -->
+                    <div id="genTextView" class="gen-textview">
+                        <div class="gen-text-head">
+                            <span id="genTextBadge" class="gen-badge gen-badge-ok">✓ synced</span>
+                        </div>
+                        <div class="gen-text-editor">
+                            <div id="genTextGutter" class="gen-gutter" aria-hidden="true"></div>
+                            <textarea id="genTextArea" class="gen-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" wrap="off" placeholder="Enter .led timeline here…"></textarea>
+                        </div>
+                        <div id="genProblems" class="gen-problems"></div>
+                    </div>
+                    <!-- Table view (Phase 3): spreadsheet grid synced to the model.
+                         Chrome (filters / grid / cards / add-row bar) is built in JS. -->
+                    <div id="genTableView" class="gen-tableview" style="display:none;"></div>
+                    <!-- Lane view (Phase 4): DAW canvas lanes + ramp/LFO regions.
+                         Chrome (toolbar / warnings / canvas) is built in JS. -->
+                    <div id="genLaneView" class="gen-laneview" style="display:none;"></div>
+                    <!-- Wizard view (Phase 5): segment forms + Field/Transition/Pulse.
+                         Chrome (minimap / segment cards / layer sheets) is built in JS. -->
+                    <div id="genWizardView" class="gen-wizardview" style="display:none;"></div>
+                    <!-- Simulate view: play the session in the browser with no
+                         device attached - LED field, spectrum, timeline inspector.
+                         Chrome (transport / canvases / tables) is built in JS. -->
+                    <div id="genSimView" class="gen-simview" style="display:none;"></div>
+                    <!-- Community view: browse .ledc sessions from the GitHub repo
+                         (browser-only fetch; content built in gen/community.js). -->
+                    <div id="genCommunityView" class="gen-communityview" style="display:none;"></div>
+                    <!-- Placeholder for not-yet-built views -->
+                    <div id="genOtherView" class="gen-viewarea" style="display:none;"></div>
+                </div>
+
+                <!-- Read-only serialized preview -->
+                <h3 style="margin:14px 0 4px 0;font-size:14px;color:var(--fg);">Serialized preview (read-only)</h3>
+                <pre id="genPreview" class="gen-preview"></pre>
+            </div>
+        </div>
+  </div>
+
+  <section class="band band-tint">
+    <div class="band-inner">
+      <h2>How faithful is it?</h2>
+      <p>
+        Faithful enough to author against, and honest about where it is not. The
+        audio path reproduces the firmware's fixed 1/16 mix divisor, its five
+        isochronic envelopes and their envelope-dependent depth defaults, the
+        absolute right-ear carrier, and the de-click ramps — a single centre
+        tone at full volume peaks at the same &minus;27.1&nbsp;dBFS it measures
+        on the bench. The light path reproduces the integer pixel chain exactly,
+        including the deliberate absence of gamma correction that lets a
+        180&deg; antiphase pair sum to flat luminance.
+      </p>
+      <p>
+        What it does not reproduce is anything that depends on the hardware's own
+        timing: the flicker timer quantises edges to a few hundred microseconds,
+        the LED strip cannot refresh faster than about 415&nbsp;times a second,
+        and the carrier's absolute starting phase is not reproducible even
+        between two runs on the device. The simulator draws the ideal waveform
+        and tells you, in the Light panel and in the warnings above the
+        transport, where the hardware will differ.
+      </p>
+      <p>
+        <a href="../sessions/reference.html">The format reference</a> documents
+        every column, and <a href="../sessions/authoring.html">the authoring
+        guide</a> covers how to put a session together.
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

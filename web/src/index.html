@@ -76,6 +76,10 @@
         </div>
 
         <!-- ===================== GENERATOR ===================== -->
+        <!-- GEN-PAGE:START — web/build.mjs lifts everything between these two
+             markers verbatim into docs/generator/index.html, so the standalone
+             page and the device page share ONE copy of this markup. Moving or
+             removing a marker breaks the docs build (it fails loudly). -->
         <div class="page" id="page-generator">
             <div class="section">
                 <h2>Generator</h2>
@@ -87,6 +91,7 @@
                     <button class="gen-subtab" data-view="table">Table</button>
                     <button class="gen-subtab" data-view="lanes">Lanes</button>
                     <button class="gen-subtab" data-view="wizard">Wizard</button>
+                    <button class="gen-subtab" data-view="simulate">Simulate</button>
                     <button class="gen-subtab" data-view="community">Community</button>
                 </div>
 
@@ -135,6 +140,10 @@
                     <!-- Wizard view (Phase 5): segment forms + Field/Transition/Pulse.
                          Chrome (minimap / segment cards / layer sheets) is built in JS. -->
                     <div id="genWizardView" class="gen-wizardview" style="display:none;"></div>
+                    <!-- Simulate view: play the session in the browser with no
+                         device attached - LED field, spectrum, timeline inspector.
+                         Chrome (transport / canvases / tables) is built in JS. -->
+                    <div id="genSimView" class="gen-simview" style="display:none;"></div>
                     <!-- Community view: browse .ledc sessions from the GitHub repo
                          (browser-only fetch; content built in gen/community.js). -->
                     <div id="genCommunityView" class="gen-communityview" style="display:none;"></div>
@@ -147,6 +156,7 @@
                 <pre id="genPreview" class="gen-preview"></pre>
             </div>
         </div>
+        <!-- GEN-PAGE:END -->
 
         <!-- ================== LIVE CONTROL ================== -->
         <div class="page" id="page-live">

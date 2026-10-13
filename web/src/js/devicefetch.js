@@ -41,6 +41,8 @@
 // push and the OTA upload, which are long-lived by nature, user-initiated, and
 // never concurrent with themselves.
 
+import { STANDALONE } from './env.js';
+
 // Two, not one: a single slot would make a slow poll block user-initiated
 // actions entirely, and two still leaves Chrome four idle connections as
 // headroom so the page can never be the thing that exhausts the pool.
@@ -82,6 +84,14 @@ function withTimeout(url, options, timeoutMs) {
 // NOTE on shared responses: a Response body can only be read once, so shared
 // callers each get r.clone(). Do not rely on identity of the Response object.
 export function deviceFetch(url, options = {}) {
+    // STANDALONE: there is no device. Reject at once rather than letting the
+    // request go out and time out eight seconds later — every call site already
+    // handles a rejection, and on the docs site a real fetch would also put a
+    // pointless 404 in the console of a page that is working perfectly.
+    if (STANDALONE) {
+        return Promise.reject(new Error('no device (standalone build): ' + url));
+    }
+
     const {
         timeoutMs = DEFAULT_TIMEOUT_MS,
         share,

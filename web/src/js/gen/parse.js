@@ -150,8 +150,20 @@ function parseAudio(tokens, comment) {
     // freq_r (token 7): a COMPOUND CELL in format v3, so a prefix survives a
     // round-trip. Previously parseFloat, which turned '>410' into 0 and rewrote a
     // ramped binaural line to mono on save. `-` → null (leave unchanged).
+    // Whether the token was THERE at all. `freqR` itself cannot carry that: an
+    // absent token and an explicit `0` both land on 0, but they mean opposite
+    // things to the engine — absent/`-` keeps the live right carrier
+    // (AUD_SET_FREQR clear, audio_generator.c:1003) while a literal 0 makes the
+    // channel mono. Without this flag a row that moves `freq` and omits `freqR`
+    // reads as "go mono" and silently kills a binaural beat.
+    //
+    // Carried as a separate boolean rather than by making `freqR` undefined,
+    // because every structured editor and the serializer treat it as a plain
+    // number. Absent here (undefined) therefore means "present", which is what
+    // an editor-built row wants.
     let freqR = 0, freqRCell;
-    if (tokens.length >= 7 && tokens[6] !== '-') {
+    const freqRPresent = tokens.length >= 7 && tokens[6] !== '-';
+    if (freqRPresent) {
         const c = parseCell(tokens[6]);
         freqR = (c.value > 0 && c.value <= NYQUIST) ? c.value : 0;
         // Keep the cell only when it actually carries a prefix, so an ordinary
@@ -177,6 +189,7 @@ function parseAudio(tokens, comment) {
     const depth  = optCell(tokens, 13);
 
     return { row: audioRow({ time, freq, pan, vol, mod, channel, freqR, freqRCell,
+                             freqRPresent,
                              waveType, duty, env, phase, attack, jitter, depth,
                              inlineComment: comment }) };
 }

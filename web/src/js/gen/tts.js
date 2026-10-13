@@ -19,6 +19,7 @@
 // quick local audition (its audio can't be captured, so it's preview-only).
 
 import { decodeFile, audioBufferToWav16, wavBlob, DEVICE_SAMPLE_RATE, DEVICE_CHANNELS } from './bgaudio.js';
+import { STANDALONE } from '../env.js';
 import { cacheGet, cachePut } from './bgstore.js';
 import { timeStretch } from './timestretch.js';
 
@@ -141,7 +142,13 @@ function ensurePuter() {
 // `window.puter.ai` check, no await-across-a-task) by the time a click comes
 // in, so the only thing left to do synchronously-ish in the handler is the
 // actual auth call. Errors are ignored here; a real synth attempt will retry.
-if (typeof window !== 'undefined') ensurePuter().catch(() => {});
+//
+// SKIPPED IN THE STANDALONE BUILD. The docs site's whole premise is that every
+// page opens from a local checkout with the network unplugged, and a public
+// page has no business contacting a third party on load. Nothing there can
+// reach speech anyway: Bounce is the only caller and the standalone chrome
+// removes it. The device build is unchanged.
+if (typeof window !== 'undefined' && !STANDALONE) ensurePuter().catch(() => {});
 
 // Call this as the FIRST line of a click handler (before any other await) —
 // see the comment on the preload above for why. No-op once already signed in,

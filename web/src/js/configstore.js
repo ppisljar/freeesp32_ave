@@ -8,6 +8,7 @@
 import { showMessage } from './util.js';
 
 import { deviceFetch } from './devicefetch.js';
+import { STANDALONE } from './env.js';
 const LOCAL_PREFIX = 'ledc:';
 const NAME_RE = /^[A-Za-z0-9._-]+\.ledc$/;
 
@@ -211,11 +212,17 @@ export function byConfigName(a, b) {
 
 // Returns a Promise of [{ src, label, names[] }] across all available sources.
 // A source that fails to list resolves to names:[] (with an `error` flag).
+// Which sources exist on this host. The device's SPIFFS is simply not a place
+// on the standalone build, so it is left out of the picker entirely rather than
+// listed as "(unavailable)" — an empty slot the visitor cannot act on is worse
+// than no slot.
+export function configSources() {
+    return STANDALONE ? ['local'] : ['spiffs', 'local'];
+}
+
 export function fetchConfigGroups() {
-    const sources = [
-        ['spiffs', listSpiffs()],
-        ['local', listLocal()],
-    ];
+    const listers = { spiffs: listSpiffs, local: listLocal };
+    const sources = configSources().map(src => [src, listers[src]()]);
     return Promise.allSettled(sources.map(s => s[1])).then(results => {
         const groups = [];
         results.forEach((res, i) => {

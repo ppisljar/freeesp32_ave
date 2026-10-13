@@ -45,7 +45,13 @@ const FIELD_LABELS = {
 // canvas composites onto its own transparency rather than onto the panel behind
 // it, and translucent fills would wash out unpredictably. If you retheme the
 // stylesheet, retheme this with it.
-const PAL = {
+//
+// EXPORTED (along with niceStep and fmtMs below) so the Simulate view's canvases
+// share one mirror of the tokens rather than carrying a second copy that would
+// drift out of step at the next retheme. This is the ONE sanctioned exception to
+// the no-colour-literals rule (web/README.md), so there should be exactly one of
+// these objects in the codebase.
+export const PAL = {
     laneHead:   '#161a26',   // lane header band
     laneText:   '#eeecf6',   // --fg
     rulerBg:    '#0e121c',
@@ -644,13 +650,13 @@ export function createLaneCanvas(canvas, cb) {
 }
 
 // ---- small format helpers --------------------------------------------------
-function niceStep(ms) {
+export function niceStep(ms) {
     const steps = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000,
                    20000, 30000, 60000, 120000, 300000, 600000];
     for (const s of steps) if (s >= ms) return s;
     return steps[steps.length - 1];
 }
-function fmtMs(ms) {
+export function fmtMs(ms) {
     if (ms >= 60000) {
         const m = Math.floor(ms / 60000), s = Math.round((ms % 60000) / 1000);
         return m + ':' + String(s).padStart(2, '0');

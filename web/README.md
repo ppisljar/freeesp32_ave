@@ -17,7 +17,17 @@ web/
       generator.js       talks to the external generator server
       config.js          config editor / parser / playback / report
       livecontrol.js     live-control panel + channel locking
-  build.mjs              esbuild bundle+minify + gzip
+      env.js             STANDALONE flag (build-time define)
+      main-standalone.js entry point for the docs-site build
+      gen/sim/           the browser simulator (no DOM, no device)
+        resolve.js         timeline -> per-channel resolved entries
+        audio.js           streaming synth, ported from audio_generator.c
+        led.js             flicker engine, ported from led_matrix_example.c
+        spectrum.js        FFT + reductions
+        lint.js            findings that need a resolved timeline
+        player.js          AudioContext transport
+      gen/views/sim.js   the Simulate subtab
+  build.mjs              esbuild: device bundle + standalone docs bundle
   package.json
   dist/                  (generated) uncompressed minified output, for inspection
   data/                  (generated) gzipped assets packed into SPIFFS
@@ -45,6 +55,9 @@ Three rules, each of which has already been broken once:
 2. **`gen/views/lane_canvas.js` is the one exception**, because a `<canvas>`
    cannot read CSS custom properties. It carries a `PAL` object of opaque
    values that mirrors the tokens by hand; retheme it alongside the stylesheet.
+   `PAL` (and the `niceStep` / `fmtMs` ruler helpers) are **exported** so the
+   Simulate view's canvases share that one mirror — there should be exactly one
+   such object in the codebase, not one per canvas.
 
 3. **Never rename a selector without grepping `src/js` first.** The JS toggles
    classes on these elements (`.active`, `.on`, `.inactive`, `.locked`,
@@ -63,8 +76,35 @@ media queries respond to an **iframe's** width — point one at the dev server a
 ```bash
 cd web
 npm install      # once
-npm run build    # -> dist/ (minified) and data/*.gz (shipped to SPIFFS)
+npm run build    # -> dist/, data/*.gz (SPIFFS), and ../docs/generator/ (the site)
 ```
+
+`npm run build` emits **two** targets from the same source tree:
+
+| Target | Output | Format | Who serves it |
+|---|---|---|---|
+| Device | `dist/` + `data/*.gz` | ESM, gzipped | the ESP32's SPIFFS `storage` partition |
+| Standalone | `../docs/generator/` | **IIFE**, plain | GitHub Pages, and `file://` |
+
+The standalone target is the same Generator — Text, Table, Lanes, Wizard,
+Simulate and Community — with every device call compiled out, so people can
+write and hear a session with no hardware. Three things about it are
+load-bearing:
+
+- **It is an IIFE, not an ES module.** `docs/README.md` keeps the property that
+  every page opens correctly from a local checkout with the network unplugged,
+  and `<script type="module">` is blocked under `file://` by the opaque origin.
+- **Its markup is lifted out of `src/index.html`**, between the `GEN-PAGE:START`
+  / `GEN-PAGE:END` markers, rather than copied. One copy of the generator's HTML
+  in the repo; the build fails loudly if the markers go missing.
+- **`../docs/generator/` is generated but COMMITTED**, because Pages serves
+  `docs/` straight from the repository. Rebuild and commit it whenever you
+  change `web/src`, or the published page silently lags the device UI.
+
+`src/js/env.js` carries the `STANDALONE` flag, set by esbuild `define` at build
+time rather than sniffed at runtime, so the standalone bundle contains no device
+code paths at all. `src/js/gen/sim/demos.js` is generated from the `.ledc` files
+listed in `DEMO_FILES` in `build.mjs` and is git-ignored.
 
 Then build/flash the firmware (it packs `web/data` into the `storage`
 partition via `spiffs_create_partition_image` in `main/CMakeLists.txt`):
