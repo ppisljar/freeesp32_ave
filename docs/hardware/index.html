@@ -1296,6 +1296,43 @@ idf.py build
   has actually produced is on
   <a href="../hardware/measurements.html">measured results</a>.</p>
 
+  <h2 id="marker-trigger">Wiring a marker trigger to an EEG</h2>
+
+  <p>The <a href="../sessions/markers.html">GPIO marker sink</a> drives a short TTL
+  pulse on a pin you choose, so an EEG with a digital trigger input can record exactly
+  when each stimulus event happened. Configure it under
+  <strong>Settings &rarr; Stimulus markers</strong>: pin, pulse width, active level,
+  and whether it fires at the predicted onset (default) or at dispatch.</p>
+
+  <div class="warn">
+    <p><strong>Do not connect this pin to an electrode, and do not connect it to an
+    input that is not specified for a digital trigger.</strong> An EEG amplifier's
+    electrode inputs expect microvolts referenced to the subject; a 3.3&nbsp;V logic
+    pulse into one is, at best, a destroyed channel. The subject is attached to that
+    amplifier.</p>
+    <p><strong>Opto-isolate unless you are certain the recorder's trigger input is
+    already isolated.</strong> A direct wire ties the device's ground to the
+    recorder's, which puts the device's USB/mains ground in the subject's measurement
+    loop. A cheap opto-coupler on the trigger line removes that path entirely and
+    costs nothing in timing at these pulse widths.</p>
+  </div>
+
+  <p>Pick a pin nothing else claims. The firmware refuses any pad wired to the SPI
+  flash or PSRAM outright, and logs an error at boot if a marker pin collides with
+  I2S, the codec I2C, the SD card, the LED data line or the button — a collision does
+  not fail loudly on its own, it degrades the other peripheral in ways that look like
+  an unrelated bug.</p>
+
+  <p>Default pulse width is 5&nbsp;ms, comfortably wider than the sampling interval of
+  any common EEG, so the trigger cannot fall between samples. Narrow it only if your
+  recorder documents a shorter minimum.</p>
+
+  <p>One honest caveat: the pulse fires at the <em>predicted</em> physical onset —
+  dispatch plus a modelled pipeline latency. It is a very good estimate, not a
+  measurement. If your experiment depends on the difference, record the pulse on a
+  spare input of the capture rig alongside the optical and audio channels and measure
+  it; that is the only way to turn the prediction into a verified number.</p>
+
   <h2 id="variant">Making your own variant</h2>
 
   <p>
