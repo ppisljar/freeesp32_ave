@@ -20,6 +20,9 @@
 //   STRIP_COARSE      a flicker rate the LED strip cannot resolve: one WS2812
 //                     frame takes 2.41 ms, so a fast smooth carrier gets only a
 //                     handful of distinct levels per cycle on hardware
+//   DIM_NONLINEAR     a brightness LFO living entirely in the region where the
+//                     LED's output is non-linear, so the breath is distorted in
+//                     SHAPE and not merely shallow
 //   SILENT_CHANNEL    a channel that is configured but can never be heard
 //
 // Each finding carries `row` (index into doc.rows, so the UI can name the source
@@ -30,7 +33,7 @@
 import { MAX_LED_FLICKER_HZ } from '../model.js';
 import { resolveAudioChannels, resolveLedChannels } from './resolve.js';
 import { ledEntryRejection, tickHzFor, stripFrameUs, DEFAULT_CHANNEL_MAP,
-         LED_FLICKER_TICK_MAX } from './led.js';
+         LED_FLICKER_TICK_MAX, lightFraction } from './led.js';
 import { annotateIso, ISO_ENV_SINE, ISO_ENV_TRIANGLE, ISO_ENV_TREMOLO } from './audio.js';
 
 // Below this many strip frames per flicker cycle, a smooth carrier visibly
@@ -192,6 +195,61 @@ export function lintSession(doc) {
                       + 'only matters if you switch to a smooth carrier (env 1-3).')
                 + ' The flicker timer itself is running at ' + tickHzFor(f) + ' Hz'
                 + (tickHzFor(f) >= LED_FLICKER_TICK_MAX ? ', its ceiling' : '') + '.',
+                doc, e.row, e.time));
+        }
+    }
+
+    /*
+     * Brightness LFOs that breathe entirely in the non-linear region.
+     *
+     * Light output is proportional to effective drive (`bright x RGB/255`) only
+     * above about drive 100; below that it rolls off to 68 % of linear at drive
+     * 12 (docs/sessions/photic.html#bright). The trap is not the lost output —
+     * it is that the roll-off is UNEVEN, so an LFO down there loses more at its
+     * dim end than its bright end and stops being the shape it was written as.
+     *
+     * The documented fix is a change of VARIABLE, not of range: raise RGB and
+     * lower `bright` to reach the same light at a higher drive, which leaves
+     * headroom to modulate linearly.
+     *
+     * Only a simulator can see this, because it needs the resolved colour and
+     * the resolved brightness extremes multiplied together.
+     */
+    for (const [bit, entries] of ledCh) {
+        const seen = new Set();
+        for (const e of entries) {
+            const b = e.cells.bright;
+            if (!b || b.modEnd === null || b.modEnd === undefined) continue;
+            const lo = Math.min(b.value, b.modEnd);
+            const hi = Math.max(b.value, b.modEnd);
+            if (!(hi > 0)) continue;
+            // Effective drive uses the brightest colour component.
+            const rgb = Math.max(e.cells.r ? e.cells.r.value : 0,
+                                 e.cells.g ? e.cells.g.value : 0,
+                                 e.cells.b ? e.cells.b.value : 0);
+            if (!(rgb > 0)) continue;
+            const driveLo = (lo * rgb) / 100;
+            const driveHi = (hi * rgb) / 100;
+            if (driveHi > 102) continue;              // breathes up into linear
+            const fLo = lightFraction(driveLo);
+            const fHi = lightFraction(driveHi);
+            // A few per cent of difference across the swing is not worth a note;
+            // 17_nondual_awareness breathes drive 16..44, which is ~13 points.
+            if ((fHi - fLo) < 0.05) continue;
+            const key = Math.round(driveLo) + ':' + Math.round(driveHi);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(finding('DIM_NONLINEAR', 'warn',
+                'LED ' + (bit + 1) + ': this brightness LFO breathes between '
+                + 'effective drive ' + driveLo.toFixed(0) + ' and ' + driveHi.toFixed(0)
+                + ', entirely below the ~100 where the LED is linear. Output is '
+                + (fLo * 100).toFixed(0) + ' % of linear at the dim end and '
+                + (fHi * 100).toFixed(0) + ' % at the bright end, so the breath '
+                + 'is distorted in SHAPE, not just shallower — it is no longer '
+                + 'the curve you wrote. The fix is a change of variable rather '
+                + 'than of range: raise R/G/B and lower brightness to reach the '
+                + 'same light at a higher drive, which leaves room to modulate '
+                + 'linearly.',
                 doc, e.row, e.time));
         }
     }

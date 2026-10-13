@@ -89,7 +89,10 @@ export function formatTimeMs(ms) {
 // untimed rows stay with the last block. Returns an array of group ids
 // parallel to `rows`, starting at 1.
 export function computeTimeGroups(rows) {
-    const isTimed = r => r.kind === 'led' || r.kind === 'audio' || r.kind === 'speech';
+    // Markers carry a timestamp like any other timeline row, so they group at
+    // their own instant rather than drifting into the block that follows.
+    const isTimed = r => r.kind === 'led' || r.kind === 'audio' ||
+                         r.kind === 'speech' || r.kind === 'marker';
     const times = [...new Set(rows.filter(isTimed).map(r => r.time))].sort((a, b) => a - b);
     const idOf = new Map(times.map((t, i) => [t, i + 1]));
 
@@ -159,7 +162,8 @@ export function orderRowsForDisplay(rows, mode) {
     if (mode === 'channel') {
         const groups = computeChannelGroups(rows);
         // Within a channel, chronological — a lane reads as its own timeline.
-        const at = r => (r.kind === 'led' || r.kind === 'audio' || r.kind === 'speech') ? r.time : 0;
+        const at = r => (r.kind === 'led' || r.kind === 'audio' ||
+                         r.kind === 'speech' || r.kind === 'marker') ? r.time : 0;
         return rows.map((_, i) => i).sort((a, b) => {
             if (groups[a] !== groups[b]) return groups[a] - groups[b];
             const ta = at(rows[a]), tb = at(rows[b]);
@@ -322,7 +326,8 @@ export function initTableView(ctx) {
         }
         sel.addEventListener('change', () => {
             const d = ctx.getDoc();
-            const t = (row.kind === 'led' || row.kind === 'audio' || row.kind === 'speech') ? row.time : 0;
+            const t = (row.kind === 'led' || row.kind === 'audio' ||
+                       row.kind === 'speech' || row.kind === 'marker') ? row.time : 0;
             d.rows[idx] = newRowOfKind(sel.value, t);
             recomputeBg();
             commitStructure();

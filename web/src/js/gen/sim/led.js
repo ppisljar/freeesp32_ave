@@ -125,6 +125,74 @@ export function markerPipelineLagUs(modality, ledCount = DEFAULT_CHANNEL_MAP.len
 }
 
 /*
+ * MEASURED light output per unit drive — the LED's own behaviour, not a
+ * firmware stage.
+ *
+ * Light is proportional to the EFFECTIVE DRIVE (`bright x RGB/255`, which is
+ * exactly the pixel byte this module computes) only in the upper part of the
+ * range. Below about drive 100 it rolls off, reaching 68 % of linear at drive
+ * 12. Measured optically and validated as a property of the LED rather than a
+ * sensor artifact: two sweeps at RGB 255 and RGB 60 overlap at drives 48/51/60
+ * and land on the same curve there (docs/sessions/photic.html#bright,
+ * reproduced by sessions/test t03).
+ *
+ * This matters more than it sounds, because safe therapeutic sessions live
+ * EXACTLY in that region — a dim amber at `bright 20` on RGB 255 is drive 51.
+ * And the roll-off is UNEVEN, so a brightness LFO down there is distorted in
+ * SHAPE, not merely shallow.
+ *
+ * `fraction of linear` from the measured table; the midpoint is used for the
+ * 48-60 band. Below drive 12 is unmeasured, so the fraction is held flat
+ * rather than invented — light still goes to zero at drive 0 because the drive
+ * term does, which keeps the curve monotonic and anchored.
+ */
+export const MEASURED_LIGHT_CURVE = [
+    { drive: 12,  fraction: 0.68 },
+    { drive: 24,  fraction: 0.77 },
+    { drive: 36,  fraction: 0.88 },
+    { drive: 54,  fraction: 0.935 },   // the 48-60 band, 92-95 %
+    { drive: 102, fraction: 1.00 },
+    { drive: 255, fraction: 1.00 },
+];
+
+// Fraction of linear output at a given effective drive, linearly interpolated
+// between the measured points.
+export function lightFraction(drive) {
+    const t = MEASURED_LIGHT_CURVE;
+    if (drive <= t[0].drive) return t[0].fraction;
+    for (let i = 1; i < t.length; i++) {
+        if (drive <= t[i].drive) {
+            const a = t[i - 1], b = t[i];
+            const u = (drive - a.drive) / (b.drive - a.drive);
+            return a.fraction + (b.fraction - a.fraction) * u;
+        }
+    }
+    return t[t.length - 1].fraction;
+}
+
+/*
+ * Map a computed pixel byte to the byte that would LOOK like the light the
+ * device actually emits: drive x its fraction of linear.
+ *
+ * DISPLAY ONLY. The pixel bytes this module computes are the device's and must
+ * never be touched by this — they are what the firmware puts on the wire, what
+ * the inspector reports and what the CSV export carries. A test asserts they
+ * are unaffected by whatever curve the view chooses to draw with.
+ */
+export function measuredLightByte(drive) {
+    const d = Math.max(0, Math.min(255, drive));
+    return Math.round(d * lightFraction(d));
+}
+
+export function measuredLightPixel(px) {
+    return {
+        r: measuredLightByte(px.r),
+        g: measuredLightByte(px.g),
+        b: measuredLightByte(px.b),
+    };
+}
+
+/*
  * The raised-sine table, (1 - cos(2*pi*x))/2 in Q16, 257 entries so that
  * `index = phase_q16 >> 8` needs no clamp.
  *

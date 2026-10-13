@@ -1,7 +1,7 @@
 # AVE Studio adaptations — follow-ups to the browser simulator
 
-**Status: DONE** — all seven adopted items (A1-A7) and B1 built, 408 web tests
-green, verified in Chrome on the published page. B2 remains deferred.
+**Status: DONE** — everything adopted (A1-A7, B1, B2) is built, 421 web tests
+green, verified in Chrome on the published page.
 
 Source: `ave_studio_browser_simulator.zip` (an "AVE Studio" design proposal,
 2026-10-13), read against the simulator as built. This plan records what is
@@ -156,6 +156,20 @@ duplicated synthesis from `gen/synth.js`, and decide separately whether the
 *downloaded* WAV gets a documented makeup gain.
 
 ### B2. Display-curve option for the LED preview
+**DONE.** `sim/led.js` carries the measured light/drive table from
+docs/sessions/photic.html#bright and a "Measured light" toggle draws through
+it. Applied in exactly one place — what is painted on the canvas — and a test
+asserts the device pixel bytes are unchanged by it, since those are what the
+inspector reports and the CSV export carries.
+
+It also enabled a new lint, `DIM_NONLINEAR`, which is the better half of this
+item: a brightness LFO living entirely below drive ~100 is distorted in SHAPE,
+not merely shallow, and only a simulator can see that because it needs the
+resolved colour and the resolved brightness extremes multiplied together. It
+fires on the shipped `17_nondual_awareness` with exactly the drive range the
+docs predict (16 to 44, 71 % of linear at the dim end against 90 % at the
+bright end).
+
 
 Measured on hardware, light output is not linear in drive below ~40 %: 0.135 at
 drive 12 rising to 0.200 at 102+. Therapeutic sessions live in exactly that
@@ -252,3 +266,28 @@ phase is not reproducible on hardware anyway.
 
 Cannot show anything while muted, paused or scrubbing. The FFT runs on the
 simulated signal from a second renderer instead, which works in all three.
+
+---
+
+## Found while doing this, NOT fixed
+
+**The Lanes and Wizard views drop every row kind they do not model.** Both
+project the doc into their own structure and rebuild it, so committing an edit
+in either view deletes `S` speech rows, `M` marker rows and any unparsable
+`raw` row that was being preserved verbatim.
+
+This is PRE-EXISTING, not a regression from the marker work — verified by
+round-tripping an unknown `ZZ` line and an `S` line through
+`lanesToDoc(docToLanes(doc))` before and after. Markers simply joined a club
+that already had members.
+
+It is the most valuable thing left: silent data loss in an editor, on a
+documented shipped feature (narration), reachable by opening a session in
+Lanes and moving one point. The Text, Table, Simulate and Community paths are
+all safe — Table because it mutates the live doc in place and commits the same
+object rather than rebuilding it.
+
+Fix shape: have `docToLanes` stash the rows it cannot model (with their source
+index) in the lane model's metadata, and have `lanesToDoc` splice them back at
+their original positions. The same for the Wizard. Then a test per view that
+round-trips a doc containing every row kind and asserts equality.

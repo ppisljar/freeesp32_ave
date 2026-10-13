@@ -37,6 +37,7 @@ import { createRenderer, sessionBeatJitter, MIX_GAIN } from '../sim/audio.js';
 import {
     ledStateAt, neohexLayout, channelPixelCounts, DEFAULT_CHANNEL_MAP,
     LED_BRIGHTNESS_Q8_MAX, AUDIO_DMA_PIPELINE_LAG_US, markerPipelineLagUs,
+    measuredLightPixel,
 } from '../sim/led.js';
 import {
     createAnalyser, createEnvelopeAnalyser, logBands, buildSpectrogram,
@@ -137,6 +138,7 @@ export function initSimView(viewCtx) {
     let durationMs = 0;
     let dirty = true;                  // the model changed; rebuild on next show
     let liveFlicker = false;
+    let measuredLight = false;     // draw emitted light, not computed drive
     let reducedMotion = false;
     let analyser = null;
     let analysisRenderer = null;       // separate from playback, so analysing
@@ -228,6 +230,23 @@ export function initSimView(viewCtx) {
     flickLabel.appendChild(flickBox);
     flickLabel.appendChild(el('span', null, 'Animate the flicker'));
     lightHead.appendChild(flickLabel);
+    const lightLabel = el('label', 'sim-toggle');
+    const lightBox = document.createElement('input');
+    lightBox.type = 'checkbox';
+    lightLabel.appendChild(lightBox);
+    lightLabel.appendChild(el('span', null, 'Measured light'));
+    lightLabel.title = 'Draw the light the LED actually emits rather than the '
+        + 'drive the firmware computes. Display only — the pixel bytes in the '
+        + 'inspector and the CSV export are unchanged.';
+    lightHead.appendChild(lightLabel);
+    lightBox.addEventListener('change', () => {
+        measuredLight = lightBox.checked;
+        renderLightMode();
+        // Repaint now rather than waiting for the next frame: when the session
+        // is paused there may not BE a next frame, and a toggle whose effect
+        // only appears once you press Play reads as a broken toggle.
+        if (visible) drawAll(player.positionMs());
+    });
     const lightMode = el('span', 'sim-dim sim-mode');
     lightHead.appendChild(lightMode);
     lightPanel.appendChild(lightHead);
@@ -554,18 +573,22 @@ export function initSimView(viewCtx) {
         }
         liveFlicker = flickBox.checked;
         renderLightMode();
+        if (visible) drawAll(player.positionMs());
     });
 
     function renderLightMode() {
+        const curve = measuredLight
+            ? ' · measured light (non-linear below ~40 % drive)'
+            : ' · linear drive, not measured light';
         if (reducedMotion) {
             lightMode.textContent = 'reduce-motion is on — showing steady '
-                + 'cycle-average luminance';
+                + 'cycle-average luminance' + curve;
             flickBox.disabled = true;
             return;
         }
-        lightMode.textContent = liveFlicker
+        lightMode.textContent = (liveFlicker
             ? 'showing instantaneous level'
-            : 'showing cycle-average luminance (steady on screen)';
+            : 'showing cycle-average luminance (steady on screen)') + curve;
     }
 
     // ---- the light field ---------------------------------------------------
@@ -661,7 +684,9 @@ export function initSimView(viewCtx) {
                 //
                 // Purely presentational — the pixel BYTES are the device's, and
                 // no gamma or display curve is applied to them anywhere.
-                const px = st.px;
+                // The one place the measured-light curve may be applied: what
+                // is DRAWN. st.px stays the device's bytes everywhere else.
+                const px = measuredLight ? measuredLightPixel(st.px) : st.px;
                 c.fillStyle = 'rgba(' + px.r + ',' + px.g + ',' + px.b + ',0.17)';
                 c.beginPath();
                 c.arc(cx, cy, r * 2.1, 0, Math.PI * 2);
@@ -729,9 +754,10 @@ export function initSimView(viewCtx) {
             let x = 150;
             for (const bit of extra) {
                 const st = states[bit];
-                c.fillStyle = st && st.active
-                    ? 'rgb(' + st.px.r + ',' + st.px.g + ',' + st.px.b + ')'
-                    : PAL.handleFill;
+                const p = (st && st.active)
+                    ? (measuredLight ? measuredLightPixel(st.px) : st.px) : null;
+                c.fillStyle = p ? 'rgb(' + p.r + ',' + p.g + ',' + p.b + ')'
+                               : PAL.handleFill;
                 c.fillRect(x, 6, 26, 10);
                 c.fillStyle = PAL.dim;
                 c.fillText(String(bit + 1), x + 29, 15);
@@ -1030,6 +1056,11 @@ export function initSimView(viewCtx) {
                 }
                 parts.push(s);
             }
+        }
+        if (measuredLight) {
+            parts.push('drawn as MEASURED LIGHT: the LED is only linear above '
+                + 'about 40 % drive, so the dim end is compressed. The pixel '
+                + 'bytes in the table below and in the CSV export are unchanged.');
         }
         if (!parts.length) {
             cap.textContent = 'Pixel colours are the exact bytes the strip would receive: '
