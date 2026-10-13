@@ -818,6 +818,12 @@ figcaption strong, .figcap strong { color: var(--fg); }
   border-top: 1px solid var(--border);
   font-size: .865rem;
 }
+/* A figure that documents a detail rather than carrying the page. Capped on
+   desktop so a photograph does not swamp the prose around it; full width on a
+   phone, where anything narrower is just small. */
+.photo-sm { max-width: 34rem; }
+@media (max-width: 48rem) { .photo-sm { max-width: none; } }
+
 .photos {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));

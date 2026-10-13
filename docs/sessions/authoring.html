@@ -245,6 +245,18 @@ feature-verification suite of fourteen short sessions in <code>sessions/test/</c
 instrument produces it. If you are changing firmware rather than authoring a session, start
 there.</p>
 
+<figure class="photo photo-sm">
+  <img src="../assets/hw/measure-rig.jpg" loading="lazy" decoding="async"
+       alt="The capture rig photographed from above. On the left, a white Arturia audio interface with two illuminated input jacks. On the right, the wearable sleep mask opened flat, with a green 80 by 60 millimetre photovoltaic panel taped over each eye cup. Each panel's red and black leads run to its own jack — one on a coiled yellow cable, one on a black cable — plugged into the interface's two inputs.">
+  <figcaption><strong>The two optical sensors.</strong> A photovoltaic panel over
+  each eye cup, each feeding its own input on the audio interface, so the light
+  an eye actually receives is recorded as an audio channel beside the device's
+  own audio. One file, one clock — which is what makes the audio-versus-light
+  offset a sample count rather than an estimate, and what the
+  <code>--map</code> roles <code>audioL</code>, <code>audioR</code> and
+  <code>light1..light8</code> refer to.</figcaption>
+</figure>
+
 <p>Three things from that suite that matter even if you never run it:</p>
 
 <ul>
