@@ -19,6 +19,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_app_desc.h"
+#include "esp_heap_caps.h"   /* MALLOC_CAP_SPIRAM */
 #include "driver/gpio.h"
 #include <sys/stat.h>
 
@@ -60,16 +61,29 @@ static const char *fw_elf_sha_str(void)
 
 /* Ring. Single producer (the timeline dispatcher) and single consumer (the
  * flusher), so head/tail need no lock — only the mutex around the SINK list,
- * which a settings POST can rewrite underneath us. */
-static marker_record_t s_ring[MARKER_RING_SLOTS];
+ * which a settings POST can rewrite underneath us.
+ *
+ * IN PSRAM, NOT INTERNAL DRAM, and this is not an optimisation. A
+ * marker_record_t is 272 bytes, so 64 ring slots plus 24 recent slots is
+ * ~23 KB of static .bss — and as statics they cost that whether or not anyone
+ * ever configures a marker sink. Declared that way, this build reached
+ * `E web_server: Failed to start HTTP server: ESP_ERR_HTTPD_TASK`: httpd could
+ * no longer create its task, so the device booted, joined WiFi, got an IP, and
+ * served nothing. The same failure mode the speech player caused when it
+ * fragmented DRAM out from under bg_player's streamer task.
+ *
+ * Safe here because nothing touches these from an ISR: marker_emit() runs in
+ * the timeline task and the flusher in its own, so the cache is always
+ * available. The GPIO sink's state (s_pulses / s_fire_arg), which IS reached
+ * from a timer callback, deliberately stays in internal DRAM below. */
+#define MARKER_RECENT_SLOTS 24
+static marker_record_t *s_ring;       /* [MARKER_RING_SLOTS]   */
+static marker_record_t *s_recent;     /* [MARKER_RECENT_SLOTS] */
+static uint32_t s_ring_slots;         /* actual, after any fallback */
+static uint32_t s_recent_slots;
 static volatile uint32_t s_head;      /* producer writes */
 static volatile uint32_t s_tail;      /* consumer reads  */
-
-/* A copy of the last N records for the UI's live tail, independent of the ring
- * (which the flusher drains immediately). */
-#define MARKER_RECENT_SLOTS 24
-static marker_record_t s_recent[MARKER_RECENT_SLOTS];
-static uint32_t s_recent_count;       /* total ever, index with % SLOTS */
+static uint32_t s_recent_count;       /* total ever, index with % slots */
 
 static marker_stats_t s_stats;
 static uint32_t s_seq;
@@ -275,7 +289,7 @@ static void marker_flusher(void *arg)
     while (s_run) {
         bool did = false;
         while (s_tail != s_head) {
-            marker_record_t r = s_ring[s_tail % MARKER_RING_SLOTS];
+            marker_record_t r = s_ring[s_tail % s_ring_slots];
             s_tail++;
             int len = marker_to_json(&r, json, sizeof(json));
             if (len < 0) { s_stats.sink_errors++; continue; }
@@ -400,6 +414,42 @@ static void sink_arm(int slot, sink_state_t *s)
     }
 }
 
+/* Does any sink actually need the flusher? GPIO fires inline from the dispatch
+ * path, so a GPIO-only configuration needs neither the task nor the ring. */
+static bool needs_flusher(void)
+{
+    for (int i = 0; i < SETTINGS_MAX_MARKER_SINKS; i++) {
+        if (s_sinks[i].cfg.type == MARKER_SINK_UDP ||
+            s_sinks[i].cfg.type == MARKER_SINK_SDJSONL) return true;
+    }
+    return false;
+}
+
+/* Start the flusher on demand, NOT at init.
+ *
+ * Every sink ships disabled, so on a device nobody has configured for markers
+ * this keeps the feature's cost at zero. That is not tidiness: a FreeRTOS task
+ * stack comes out of internal DRAM, and this build has so little spare that the
+ * first version of this module — which created the task unconditionally and
+ * held its buffers in .bss — left lwip unable to allocate for a large response.
+ * /api/version answered fine while /api/state and /api/logs returned HTTP 200
+ * with an EMPTY BODY, because the header went out and the body send failed. */
+static esp_err_t ensure_flusher(void)
+{
+    if (s_flusher) return ESP_OK;
+    s_run = true;
+    /* Priority 3: above idle, well below the audio/LED real-time work. Markers
+     * are sparse and latency-insensitive on this path — the GPIO sink, which
+     * is not latency-insensitive, never uses it. */
+    if (xTaskCreate(marker_flusher, "mk_flush", 3072, NULL, 3, &s_flusher) != pdPASS) {
+        ESP_LOGE(TAG, "flusher task create failed — record sinks will not write");
+        s_run = false;
+        s_flusher = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
 esp_err_t marker_reconfigure(void)
 {
     if (!s_lock) return ESP_ERR_INVALID_STATE;
@@ -412,7 +462,13 @@ esp_err_t marker_reconfigure(void)
         s_sinks[i].cfg = st->marker_sinks[i];
         sink_arm(i, &s_sinks[i]);
     }
+    bool want = needs_flusher();
     xSemaphoreGive(s_lock);
+
+    if (want) ensure_flusher();
+    /* The task is deliberately NOT torn down when the last record sink goes
+     * away: stopping it safely mid-drain is more risk than the 3 KB is worth,
+     * and a device that has had a sink configured once will have one again. */
     return ESP_OK;
 }
 
@@ -423,23 +479,40 @@ esp_err_t marker_init(void)
     s_lock = xSemaphoreCreateMutex();
     if (!s_lock) return ESP_ERR_NO_MEM;
 
+    /* PSRAM first (see the declaration comment: these buffers in .bss cost
+     * httpd its task). Fall back to internal DRAM with a much smaller ring on a
+     * board without PSRAM, rather than refusing to run. */
+    s_ring_slots   = MARKER_RING_SLOTS;
+    s_recent_slots = MARKER_RECENT_SLOTS;
+    s_ring   = heap_caps_calloc(s_ring_slots, sizeof(marker_record_t),
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_recent = heap_caps_calloc(s_recent_slots, sizeof(marker_record_t),
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_ring || !s_recent) {
+        free(s_ring); free(s_recent);
+        s_ring_slots   = 8;
+        s_recent_slots = 6;
+        s_ring   = calloc(s_ring_slots, sizeof(marker_record_t));
+        s_recent = calloc(s_recent_slots, sizeof(marker_record_t));
+        if (!s_ring || !s_recent) {
+            free(s_ring); free(s_recent);
+            s_ring = s_recent = NULL;
+            ESP_LOGE(TAG, "no memory for the marker ring");
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGW(TAG, "marker ring in internal DRAM (%u slots) — no PSRAM; "
+                 "a dense marker burst is likelier to overflow",
+                 (unsigned)s_ring_slots);
+    }
+
     for (int i = 0; i < SETTINGS_MAX_MARKER_SINKS; i++) {
         s_sinks[i].sock = -1;
         s_pulses[i].pin = -1;
     }
     memset(&s_stats, 0, sizeof(s_stats));
 
-    marker_reconfigure();
+    marker_reconfigure();      /* also starts the flusher iff one is needed */
 
-    s_run = true;
-    /* Priority 3: above idle, well below the audio/LED real-time work. Markers
-     * are sparse and latency-insensitive on this path — the GPIO sink, which
-     * is not latency-insensitive, never uses it. */
-    if (xTaskCreate(marker_flusher, "mk_flush", 4096, NULL, 3, &s_flusher) != pdPASS) {
-        ESP_LOGE(TAG, "flusher task create failed");
-        s_run = false;
-        return ESP_ERR_NO_MEM;
-    }
     ESP_LOGI(TAG, "marker bus up (audio lag %lld us, led lag %lld us)",
              (long long)marker_pipeline_lag_us(MARKER_MODALITY_AUDIO),
              (long long)marker_pipeline_lag_us(MARKER_MODALITY_LED));
@@ -582,19 +655,21 @@ esp_err_t marker_emit(const char *label,
 {
     if (!s_lock || !label) return ESP_ERR_INVALID_STATE;
 
+    if (!s_ring || !s_recent) return ESP_ERR_INVALID_STATE;
+
     const int64_t mono = t_disp_mono_us ? t_disp_mono_us : esp_timer_get_time();
 
     /* Ring full? Count it and return. Dropping the NEWEST keeps the existing
      * records intact and the gap at a known place; either way the footer and
      * /api/state report it, because a marker that silently never existed is the
      * one failure that quietly invalidates an experiment. */
-    if ((uint32_t)(s_head - s_tail) >= MARKER_RING_SLOTS) {
+    if ((uint32_t)(s_head - s_tail) >= s_ring_slots) {
         s_stats.dropped++;
         ESP_LOGE(TAG, "marker ring full — DROPPED '%s'", label);
         return ESP_ERR_NO_MEM;
     }
 
-    marker_record_t *r = &s_ring[s_head % MARKER_RING_SLOTS];
+    marker_record_t *r = &s_ring[s_head % s_ring_slots];
     memset(r, 0, sizeof(*r));
     strlcpy(r->label, label, sizeof(r->label));
     r->kv_count = (kv && kv_count) ? (kv_count > MARKER_KV_MAX ? MARKER_KV_MAX : kv_count) : 0;
@@ -612,7 +687,7 @@ esp_err_t marker_emit(const char *label,
         s_stats.max_sched_disp_delta_us = delta;
     }
 
-    s_recent[s_recent_count % MARKER_RECENT_SLOTS] = *r;
+    s_recent[s_recent_count % s_recent_slots] = *r;
     s_recent_count++;
 
     /* GPIO fires from HERE, not from the flusher: its whole purpose is timing
@@ -623,6 +698,14 @@ esp_err_t marker_emit(const char *label,
 
     s_head++;                 /* publish AFTER the record is fully written */
     s_stats.emitted++;
+
+    /* With no record sink there is no flusher, so nothing would ever advance
+     * the tail: the ring would fill after s_ring_slots markers and start
+     * counting DROPS that mean nothing. Discard immediately instead, and keep
+     * `dropped` meaning what it says — a record a sink should have had and
+     * didn't. s_recent (the UI tail) is written above and is unaffected. */
+    if (!s_flusher) s_tail = s_head;
+
     return ESP_OK;
 }
 
@@ -636,12 +719,12 @@ void marker_get_stats(marker_stats_t *out)
 size_t marker_get_recent(marker_record_t *out, size_t max)
 {
     if (!out || !max) return 0;
-    uint32_t have = s_recent_count < MARKER_RECENT_SLOTS
-                        ? s_recent_count : MARKER_RECENT_SLOTS;
+    uint32_t have = s_recent_count < s_recent_slots
+                        ? s_recent_count : s_recent_slots;
     if (have > max) have = (uint32_t)max;
     uint32_t first = s_recent_count - have;
     for (uint32_t i = 0; i < have; i++) {
-        out[i] = s_recent[(first + i) % MARKER_RECENT_SLOTS];
+        out[i] = s_recent[(first + i) % s_recent_slots];
     }
     return have;
 }
