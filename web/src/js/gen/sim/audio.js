@@ -1,37 +1,39 @@
 // Audio synthesis engine, ported for simulation — a STREAMING renderer.
 //
-// WHY A NEW RENDERER RATHER THAN gen/synth.js
+// THE one audio engine in the browser: the Simulate view plays it live and the
+// bounce renders with it offline, so a preview and a WAV cannot disagree.
 //
-// gen/synth.js renders a whole session into one pair of Float32Arrays, which is
-// right for a bounce and impossible for a simulator: 30 minutes of stereo
-// floats is 635 MB. This module keeps per-channel state between calls so the
-// transport can render half a second at a time, forever, and seek.
+// It renders a BLOCK at a time with seek, rather than a whole session into one
+// pair of Float32Arrays — 30 minutes of stereo floats is 635 MB — by keeping
+// per-channel state between calls.
 //
-// It also closes fifteen documented divergences between gen/synth.js and
-// main/audio_generator.c. The three that change what you HEAR:
+// It replaced an earlier bounce-only engine (`gen/synth.js`, now reduced to the
+// mixing helpers in `gen/mix.js`) that had drifted from
+// main/audio_generator.c in fifteen documented ways. The three that changed
+// what you HEARD:
 //
 //   1. MIX NORMALISATION IS A FIXED 1/16, NOT 1/nActive.
 //      audio_generator.c:875 `float new_target = 1.0f / NUM_AUDIO_CHANNELS` —
 //      constant, deliberately, so that sixteen same-panned channels at full
 //      amplitude sum to exactly ±1 "regardless of how many channels are active".
-//      synth.js divides by the active count instead, which renders a two-channel
-//      session ~18 dB hot and a one-channel session ~24 dB hot.
+//      The old engine divided by the active count instead, rendering a
+//      two-channel session ~18 dB hot and a one-channel session ~24 dB hot.
 //      Three measured device reference points this reproduces exactly:
 //        one centre-panned sine at vol 100 → int16 peak 1448 (−27.1 dBFS)
 //        a binaural channel (pan bypassed) → −24.1 dBFS
 //        pink noise at vol 100            → −43.3 dBFS
 //      That is a quiet master by design; the UI's monitor trim exists for it.
 //
-//   2. THE ENVELOPE SYSTEM. synth.js implements only `1 + 0.1*sin(modPhase)`.
+//   2. THE ENVELOPE SYSTEM. The old engine had only `1 + 0.1*sin(modPhase)`.
 //      The device has five envelopes, a depth column with env-dependent
 //      defaults, and duty/attack/phase columns. A file saying `env 0` with a
-//      depth renders in synth.js as a 10 % tremolo instead of a full-depth
-//      gate — precisely the bug the firmware fixed (config_parser.c:2720:
+//      depth rendered as a 10 % tremolo instead of a full-depth gate —
+//      precisely the bug the firmware fixed (config_parser.c:2720:
 //      "every 'isochronic' gate measured ~5.8% depth: a tremolo, not a pulse").
 //
 //   3. NOISE IS SCALED BY 0.5. AUDIO_NOISE_LEVEL_SCALE (audio_generator.c:86)
-//      applies to waves 4/5/6 and deliberately NOT to wave 7, so synth.js
-//      renders noise beds 6 dB hot relative to the tones beside them.
+//      applies to waves 4/5/6 and deliberately NOT to wave 7; without it a
+//      noise bed sits 6 dB above the tones beside it.
 //
 // Also fixed here: the gate phase re-anchors to the entry's timestamp rather
 // than free-running (a measured ~48 ms offset before the firmware fix); freqR
@@ -472,6 +474,9 @@ export function createRenderer(channels, opts = {}) {
         }
     }
 
+    // Pre-clamp level statistics, accumulated across renderBlock calls.
+    const stats = { peak: 0, clipped: 0, samples: 0 };
+
     function seek(sample) {
         for (const st of states) resetChannel(st, sample);
     }
@@ -651,12 +656,30 @@ export function createRenderer(channels, opts = {}) {
 
         // Master gain then hard clamp, as audio_test.c:201 does after the BG and
         // speech post-mix stages.
+        //
+        // The PRE-clamp peak is recorded on the way through, because that is the
+        // only place the information exists: once the clamp has run, a session
+        // that overdrove the mix is indistinguishable from one that just touched
+        // full scale. The device clamps in exactly the same place and loses it in
+        // exactly the same way — which is why a simulator is the only thing that
+        // can tell you a session clips.
+        let peak = stats.peak;
+        let clipped = stats.clipped;
         for (let n = 0; n < count; n++) {
-            let l = outL[n] * masterGain;
-            let r = outR[n] * masterGain;
+            const l = outL[n] * masterGain;
+            const r = outR[n] * masterGain;
+            const al = l < 0 ? -l : l;
+            const ar = r < 0 ? -r : r;
+            if (al > peak) peak = al;
+            if (ar > peak) peak = ar;
+            if (al > 1) clipped++;
+            if (ar > 1) clipped++;
             outL[n] = l > 1 ? 1 : (l < -1 ? -1 : l);
             outR[n] = r > 1 ? 1 : (r < -1 ? -1 : r);
         }
+        stats.peak = peak;
+        stats.clipped = clipped;
+        stats.samples += count;
     }
 
     // What every channel is doing at tMs — for the timeline inspector. Pure
@@ -694,17 +717,23 @@ export function createRenderer(channels, opts = {}) {
         return out;
     }
 
-    return { renderBlock, seek, channelStates, sampleRate: sr, channelCount: states.length };
+    return {
+        renderBlock, seek, channelStates,
+        sampleRate: sr,
+        channelCount: states.length,
+        // Pre-clamp peak and the number of clipped samples since the last
+        // resetStats(). `peak > 1` means the session overdrives the mix.
+        stats: () => ({ ...stats }),
+        resetStats: () => { stats.peak = 0; stats.clipped = 0; stats.samples = 0; },
+    };
 }
 
 /*
- * Whole-session convenience render, device-accurate.
+ * Whole-session convenience render, used by gen/bounce.js.
  *
- * Deliberately NOT a drop-in replacement for gen/synth.js's renderSession: this
- * one is ~18-24 dB quieter because it uses the device's fixed 1/16 divisor, and
- * it applies the envelope system. Switching the bounce over to it is a
- * one-liner in gen/bounce.js, but it changes the level of every bounced WAV, so
- * that is a deliberate decision rather than a side effect of this module.
+ * Renders in blocks internally, so a long session costs no more memory than the
+ * output buffers themselves. Note the LEVEL: the device's fixed 1/16 divisor
+ * makes this ~18-24 dB quieter than the pre-2026-10 bounce, which was hot.
  */
 export function renderSessionDevice(channels, opts = {}) {
     const sr = opts.sampleRate || SAMPLE_RATE;

@@ -10,15 +10,10 @@
 import { setText } from './generator.js';
 import { saveConfigText } from '../configstore.js';
 import { showMessage } from '../util.js';
+import { REPO, BRANCH, fetchIndex, resetIndex, rawUrl, DEFAULT_PATH }
+    from './library.js';
 
 import { deviceFetch } from '../devicefetch.js';
-const REPO   = 'ppisljar/freeesp32_ave';
-const BRANCH = 'main';
-// Fully-qualified `refs/heads/<branch>` form (what GitHub's "Raw" button emits).
-const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}`;
-const INDEX_URL = `${RAW_BASE}/sessions/community.json`;
-const rawUrl = (path, file) => `${RAW_BASE}/${path}/${file}`;
-
 let loaded = false;
 
 function esc(x) {
@@ -72,8 +67,7 @@ export function communityShow() {
     const root = document.getElementById('genCommunityView');
     if (!root || loaded) return;
     root.innerHTML = '<div class="comm-msg">Loading community sessions from GitHub…</div>';
-    fetch(INDEX_URL, { cache: 'no-cache' })
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    fetchIndex()
         .then(idx => { renderList(root, idx); loaded = true; })
         .catch(err => {
             root.innerHTML =
@@ -82,20 +76,20 @@ export function communityShow() {
                 '(station mode), but not when your browser is joined to the device\'s SoftAP (no internet). ' +
                 '<button id="commRetry">Retry</button></div>';
             const b = document.getElementById('commRetry');
-            if (b) b.addEventListener('click', () => { loaded = false; communityShow(); });
+            if (b) b.addEventListener('click', () => { loaded = false; resetIndex(); communityShow(); });
         });
 }
 
 function renderList(root, idx) {
     const sessions = (idx && idx.sessions) || [];
-    const path = (idx && idx.path) || 'sessions/library';
+    const path = (idx && idx.path) || DEFAULT_PATH;
     root.innerHTML = '';
     const bar = document.createElement('div');
     bar.className = 'comm-bar';
     bar.innerHTML = `<span>${sessions.length} community sessions · ${esc(REPO)}@${esc(BRANCH)}</span>` +
                     `<button id="commRefresh">↻ Refresh</button>`;
     root.appendChild(bar);
-    bar.querySelector('#commRefresh').addEventListener('click', () => { loaded = false; communityShow(); });
+    bar.querySelector('#commRefresh').addEventListener('click', () => { loaded = false; resetIndex(); communityShow(); });
 
     sessions.forEach(s => {
         const card = document.createElement('div');

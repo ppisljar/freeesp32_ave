@@ -14,7 +14,7 @@
 
 import {
     emptyDoc, cell, blankRow, commentRow, rawRow, ledRow, audioRow, bgRow, bg,
-    speechRow,
+    speechRow, markerRow, MARKER_LABEL_RE, MARKER_MAX_KV, MARKER_MODALITIES,
     GLYPH_TO_INTERP, isModInterp, DEFAULT_MOD_PERIOD_MS, NYQUIST, WAVE_COUNT,
 } from './model.js';
 
@@ -243,6 +243,44 @@ function parseSpeech(rest) {
     return { row: speechRow({ time, voice, volume, text }) };
 }
 
+/*
+ * Parse the tokens AFTER the leading `M`: `<time> <LABEL> [key=value ...]`.
+ * Mirrors parse_marker_line (config_parser.c:126). Returns { row } or { error }.
+ *
+ * Three behaviours copied deliberately, because the device is lenient here and
+ * a stricter browser parser would reject files the hardware happily runs:
+ *   - a token without `=` is WARNED about and skipped, not fatal;
+ *   - key=value pairs past the fourth are dropped, not fatal;
+ *   - `mod=` is reserved: it sets the modality and is never stored as a kv.
+ * Only a missing/!-shaped label is an actual error.
+ */
+function parseMarker(tokens, comment) {
+    if (tokens.length < 2) {
+        return { error: "M line needs at least '<time> <LABEL>'" };
+    }
+    const time = parseInt(tokens[0], 10) || 0;
+    const label = tokens[1];
+    if (!MARKER_LABEL_RE.test(label)) {
+        return { error: 'M line: label "' + label + '" must be 1..31 chars of [A-Z0-9_]' };
+    }
+    const kv = [];
+    let modality = null;
+    for (let i = 2; i < tokens.length; i++) {
+        const t = tokens[i];
+        const eq = t.indexOf('=');
+        if (eq <= 0) continue;                       // no key: device warns + skips
+        const k = t.slice(0, eq);
+        const v = t.slice(eq + 1);
+        if (k === 'mod') {
+            if (MARKER_MODALITIES.indexOf(v) >= 0) modality = v;
+            continue;                                // reserved, never a kv
+        }
+        if (kv.length >= MARKER_MAX_KV) continue;    // device drops the rest
+        kv.push({ k, v });
+    }
+    return { row: markerRow({ time, label, kv, modality, inlineComment: comment }) };
+}
+
 export function parse(text) {
     const doc = emptyDoc();
     const diagnostics = [];
@@ -296,6 +334,21 @@ export function parse(text) {
             (trimmedLead.length === 1 || /\s/.test(trimmedLead[1]))) {
             const rest = trimmedLead.replace(/^[Ss][ \t]*/, '');
             const res = parseSpeech(rest);
+            if (res.row) {
+                doc.rows.push(res.row);
+            } else {
+                doc.rows.push(rawRow(line, res.error));
+                diagnostics.push({ line: lineNo, severity: 'error', msg: res.error });
+            }
+            continue;
+        }
+
+        // Marker line: "M" followed by ws. Produces no sound and no light; it
+        // exists to announce an experiment event to an external recorder.
+        if ((trimmedLead[0] === 'M' || trimmedLead[0] === 'm') &&
+            (trimmedLead.length === 1 || /\s/.test(trimmedLead[1]))) {
+            const { fields: mf, comment: mc } = splitInlineComment(line);
+            const res = parseMarker(tokenize(mf).slice(1), mc);
             if (res.row) {
                 doc.rows.push(res.row);
             } else {

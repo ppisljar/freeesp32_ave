@@ -225,6 +225,84 @@ export function findPeaks(mag, size, sampleRate, { limit = 8, minDb = -90, minHz
 }
 
 /*
+ * The ENVELOPE spectrum — where the entrainment rate actually lives.
+ *
+ * A 10 Hz binaural beat built from 200 Hz and 210 Hz has NO 10 Hz component in
+ * the ordinary spectrum. It has two carriers, and the beat only exists as the
+ * amplitude envelope of their sum. The same is true of a monaural pair, and an
+ * isochronic gate puts its rate in the envelope by construction. So the panel
+ * that answers "what rate is this session actually driving?" cannot be a
+ * carrier FFT at all — it has to be an FFT of the envelope.
+ *
+ * Method: rectify the mono sum, then box-average `decim` samples per output
+ * point. The box average is both the decimation and the anti-alias filter; its
+ * first null sits at sampleRate/decim (689 Hz at the default 64), which is far
+ * above the 0.5-60 Hz band this is for. Then transform at the decimated rate.
+ *
+ * At decim 64 and size 1024 that is 0.67 Hz bins over 0-344 Hz, from 1.49 s of
+ * signal — enough to separate a 6 Hz theta gate from a 10 Hz alpha one, and to
+ * show a 40 Hz gamma rate with room to spare.
+ *
+ * THE RIPPLE, and why the display band stops at 60 Hz. Rectifying a sine
+ * produces harmonics at 2f, 4f, ... and the box average does not fully kill
+ * them, so what survives aliases down into the decimated band. Measured on a
+ * steady unmodulated carrier: a residual around -13 to -25 dB, always landing
+ * ABOVE 60 Hz (88.8 Hz for a 300 Hz carrier, 275.2 Hz for 207 Hz, 191.1 Hz for
+ * 440 Hz), while inside 0.5-60 Hz the same tone sits at -79 to -87 dB — silent.
+ *
+ * So ENV_DISPLAY_MAX_HZ is not a cosmetic choice. Everything an entrainment
+ * session drives is below it, and everything the method's own rectification
+ * artifact produces is above it.
+ *
+ * Returns { mag, binHz, size, rate } where `mag` is dB relative to a
+ * full-depth modulation.
+ */
+export const ENV_DISPLAY_MIN_HZ = 0.5;
+export const ENV_DISPLAY_MAX_HZ = 60;
+export const ENV_DECIM = 64;
+export const ENV_FFT_SIZE = 1024;
+
+export function createEnvelopeAnalyser(size = ENV_FFT_SIZE, sampleRate = 44100,
+                                       decim = ENV_DECIM) {
+    const rate = sampleRate / decim;
+    const an = createAnalyser(size, rate);
+    const env = new Float32Array(size);
+
+    /*
+     * `mono` must hold size*decim samples (1.49 s at the defaults). Anything
+     * shorter is zero-padded, which widens the peak but does not move it.
+     */
+    function analyse(mono) {
+        const need = size * decim;
+        const have = Math.min(mono.length, need);
+        let dc = 0;
+        for (let i = 0; i < size; i++) {
+            let acc = 0;
+            const base = i * decim;
+            let n = 0;
+            for (let k = 0; k < decim; k++) {
+                const j = base + k;
+                if (j >= have) break;
+                const v = mono[j];
+                acc += v < 0 ? -v : v;          // rectify
+                n++;
+            }
+            const v = n ? acc / n : 0;
+            env[i] = v;
+            dc += v;
+        }
+        // Remove the mean: the envelope of any audible signal is mostly DC, and
+        // leaving it in puts a peak at 0 Hz tall enough to flatten everything
+        // the panel exists to show.
+        dc /= size;
+        for (let i = 0; i < size; i++) env[i] -= dc;
+        return an.analyse(env, 0);
+    }
+
+    return { analyse, size, rate, binHz: an.binHz, floorDb: an.floorDb, mag: an.mag };
+}
+
+/*
  * Build a whole-session spectrogram as a column-major dB grid.
  *
  * `render(startSample, count, outL, outR)` is called to fill scratch buffers,

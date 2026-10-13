@@ -80,7 +80,7 @@ export function initTextView(ctx) {
     const gutter = document.getElementById('genTextGutter');
     const badge = document.getElementById('genTextBadge');
     const problems = document.getElementById('genProblems');
-    if (!ta) return { refresh() {}, show() {}, hide() {} };
+    if (!ta) return { refresh() {}, show() {}, hide() {}, revealLine() {} };
 
     let debounceTimer = null;
 
@@ -212,5 +212,32 @@ export function initTextView(ctx) {
     function show() { if (root) root.style.display = ''; refresh(ctx.getDoc()); }
     function hide() { if (root) root.style.display = 'none'; }
 
-    return { refresh, show, hide };
+    /*
+     * Scroll to a 0-based source line and select it.
+     *
+     * The simulator's findings know which row they came from, and a finding you
+     * cannot get to is only half a finding — so clicking one brings the Text
+     * view here with the line highlighted, rather than leaving the reader to
+     * count down a 200-line file.
+     *
+     * Selection rather than a decoration because this is a plain <textarea>:
+     * there is no way to colour one line of it, and the native selection is
+     * both visible and exactly what you want before typing a correction.
+     */
+    function revealLine(index) {
+        if (!ta || typeof index !== 'number' || index < 0) return;
+        const lines = ta.value.split('\n');
+        if (index >= lines.length) return;
+        let start = 0;
+        for (let i = 0; i < index; i++) start += lines[i].length + 1;
+        const end = start + lines[index].length;
+        ta.focus();
+        ta.setSelectionRange(start, end);
+        // Put the line roughly a third down rather than at the very top, so the
+        // rows around it (which are usually what explain it) stay visible.
+        const lineH = ta.scrollHeight / Math.max(1, lines.length);
+        ta.scrollTop = Math.max(0, (index * lineH) - ta.clientHeight / 3);
+    }
+
+    return { refresh, show, hide, revealLine };
 }

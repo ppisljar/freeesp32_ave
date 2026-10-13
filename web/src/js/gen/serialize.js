@@ -128,6 +128,20 @@ function serializeSpeech(row) {
     return 'S ' + fmt(row.time) + ' ' + voice + ' ' + fmt(row.volume) + ' "' + (row.text || '') + '"';
 }
 
+/*
+ * `M <time> <LABEL> [mod=...] [key=value ...]`.
+ *
+ * `mod=` is emitted FIRST when present, matching how the device reads it (a
+ * reserved key, consumed into `modality` rather than stored alongside the
+ * ordinary pairs) and how the examples in docs/sessions/markers.html read.
+ */
+function serializeMarker(row) {
+    const parts = ['M', fmt(row.time), row.label || ''];
+    if (row.modality) parts.push('mod=' + row.modality);
+    for (const p of (row.kv || [])) parts.push(p.k + '=' + p.v);
+    return parts.join(' ');
+}
+
 export function serialize(doc) {
     if (!doc || !doc.rows) return '';
     const out = [];
@@ -140,6 +154,7 @@ export function serialize(doc) {
             case 'audio':   out.push(serializeAudio(row)); break;
             case 'bg':      out.push(serializeBg(row.bg)); break;
             case 'speech':  out.push(serializeSpeech(row)); break;
+            case 'marker':  out.push(serializeMarker(row)); break;
             default: break;
         }
     }

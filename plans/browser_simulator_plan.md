@@ -126,8 +126,15 @@ test. See `plans/ave_studio_adaptations_plan.md` §"Rejected".
 
 The port surfaced fifteen documented differences between `gen/synth.js` and the
 firmware. The simulator closes all of them. Three change what you hear, and
-**`gen/synth.js` itself was deliberately left alone** so the shipped bounce path
-did not change behaviour under this work — see the adaptations plan.
+`gen/synth.js` was deliberately left alone at first so the shipped bounce path
+did not change behaviour under this work; it was switched over immediately
+afterwards (see the UPDATE below).
+
+**UPDATE (same day):** `gen/synth.js`'s duplicate engine has since been deleted
+— see `ave_studio_adaptations_plan.md` B1. The file is now `gen/mix.js` and
+holds only the buffer/mixing helpers; the bounce renders with `sim/audio.js`,
+so there is one audio engine in the browser and the fifteen divergences are
+closed everywhere rather than only in the simulator.
 
 Fixed in shared code (and therefore live for every view):
 

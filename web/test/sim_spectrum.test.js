@@ -209,3 +209,87 @@ test('buildSpectrogram fills a column-major grid from a streaming render', () =>
         assert.equal(loudestRow(c), r0, 'column ' + c + ' drifted');
     }
 });
+
+// ---- envelope spectrum -----------------------------------------------------
+
+import { createEnvelopeAnalyser, ENV_DECIM, ENV_FFT_SIZE,
+         ENV_DISPLAY_MIN_HZ, ENV_DISPLAY_MAX_HZ } from '../src/js/gen/sim/spectrum.js';
+
+function peakHz(mag, binHz, minHz = 1) {
+    let best = -Infinity, k0 = 0;
+    for (let k = Math.ceil(minHz / binHz); k < mag.length; k++) {
+        if (mag[k] > best) { best = mag[k]; k0 = k; }
+    }
+    return k0 * binHz;
+}
+
+test('the envelope spectrum finds a binaural beat the carrier spectrum cannot', () => {
+    // 200 + 210 Hz summed: two carriers, and a 10 Hz amplitude envelope that has
+    // NO line of its own in the ordinary spectrum.
+    const an = createEnvelopeAnalyser();
+    const n = ENV_FFT_SIZE * ENV_DECIM;
+    const mono = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+        mono[i] = 0.5 * Math.sin(2 * Math.PI * 200 * i / SR)
+                + 0.5 * Math.sin(2 * Math.PI * 210 * i / SR);
+    }
+    const mag = an.analyse(mono);
+    const hz = peakHz(mag, an.binHz, 2);
+    assert.ok(Math.abs(hz - 10) < 1.5, 'expected a ~10 Hz envelope peak, got ' + hz);
+});
+
+test('it finds an isochronic gate rate', () => {
+    // A 300 Hz tone gated on and off at 6 Hz.
+    const an = createEnvelopeAnalyser();
+    const n = ENV_FFT_SIZE * ENV_DECIM;
+    const mono = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+        const gate = ((i / SR) * 6) % 1 < 0.5 ? 1 : 0;
+        mono[i] = gate * Math.sin(2 * Math.PI * 300 * i / SR);
+    }
+    const mag = an.analyse(mono);
+    const hz = peakHz(mag, an.binHz, 2);
+    assert.ok(Math.abs(hz - 6) < 1.5, 'expected a ~6 Hz gate rate, got ' + hz);
+});
+
+test('a steady unmodulated tone is silent across the displayed band', () => {
+    // Rectification leaves a residual (harmonics of the carrier aliasing down),
+    // but it always lands ABOVE the 60 Hz display ceiling — which is exactly why
+    // that ceiling is where it is. Inside the band a steady tone is ~-80 dB.
+    const an = createEnvelopeAnalyser();
+    const n = ENV_FFT_SIZE * ENV_DECIM;
+    for (const carrier of [207, 300, 440]) {
+        const mono = new Float32Array(n);
+        for (let i = 0; i < n; i++) mono[i] = Math.sin(2 * Math.PI * carrier * i / SR);
+        const mag = an.analyse(mono);
+        let inBand = -Infinity;
+        for (let k = 1; k < mag.length; k++) {
+            const hz = k * an.binHz;
+            if (hz >= ENV_DISPLAY_MIN_HZ && hz <= ENV_DISPLAY_MAX_HZ) {
+                inBand = Math.max(inBand, mag[k]);
+            }
+        }
+        assert.ok(inBand < -60,
+            carrier + ' Hz carrier left ' + inBand.toFixed(1) + ' dB inside the band');
+    }
+});
+
+test('the DC term is removed, so bin 0 does not swamp the band', () => {
+    const an = createEnvelopeAnalyser();
+    const n = ENV_FFT_SIZE * ENV_DECIM;
+    const mono = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+        const gate = ((i / SR) * 10) % 1 < 0.5 ? 1 : 0;
+        mono[i] = gate * Math.sin(2 * Math.PI * 300 * i / SR);
+    }
+    const mag = an.analyse(mono);
+    const tenHz = mag[Math.round(10 / an.binHz)];
+    assert.ok(tenHz > mag[0], 'the gate rate should stand above DC, not under it');
+});
+
+test('the decimated rate and bin width are what the band needs', () => {
+    const an = createEnvelopeAnalyser();
+    assert.equal(an.rate, SR / ENV_DECIM);
+    assert.ok(an.binHz < 1, 'sub-hertz bins, got ' + an.binHz);
+    assert.ok(an.rate / 2 > 60, 'must cover at least the 0.5-60 Hz band');
+});

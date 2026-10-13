@@ -31,16 +31,31 @@ import { NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS, WAVE_TYPES, SAMPLE_RATE } from '.
 import { ensureSafetyAccepted } from '../../safety.js';
 import { validate } from '../validate.js';
 import { lintSession } from '../sim/lint.js';
-import { resolveAudioChannels, resolveLedChannels, sessionEndMs } from '../sim/resolve.js';
+import { resolveAudioChannels, resolveLedChannels, resolveMarkers, sessionEndMs }
+    from '../sim/resolve.js';
 import { createRenderer, sessionBeatJitter, MIX_GAIN } from '../sim/audio.js';
 import {
     ledStateAt, neohexLayout, channelPixelCounts, DEFAULT_CHANNEL_MAP,
-    LED_BRIGHTNESS_Q8_MAX, AUDIO_DMA_PIPELINE_LAG_US,
+    LED_BRIGHTNESS_Q8_MAX, AUDIO_DMA_PIPELINE_LAG_US, markerPipelineLagUs,
 } from '../sim/led.js';
 import {
-    createAnalyser, logBands, buildSpectrogram, DEFAULT_FFT_SIZE,
+    createAnalyser, createEnvelopeAnalyser, logBands, buildSpectrogram,
+    ENV_FFT_SIZE, ENV_DECIM, ENV_DISPLAY_MIN_HZ, ENV_DISPLAY_MAX_HZ,
 } from '../sim/spectrum.js';
+
+/*
+ * Window for the LIVE carrier spectrum.
+ *
+ * 4096 points is a 10.8 Hz bin over 93 ms — deliberately shorter than
+ * spectrum.js's 8192 default. That default was chosen partly to show a slow
+ * gate's sidebands, but the entrainment-band panel below now reads gate and
+ * beat rates directly and far better, so the carrier view no longer has to.
+ * Halving it halves both the render and the transform, which is the most
+ * expensive thing in the frame.
+ */
+const LIVE_FFT_SIZE = 4096;
 import { createPlayer } from '../sim/player.js';
+import { exportWav, exportCsv, exportJson } from '../sim/export.js';
 import { PAL, fmtMs } from './lane_canvas.js';
 
 // How much of the session the scope trace shows, and at what resolution. 2 ms
@@ -130,6 +145,12 @@ export function initSimView(viewCtx) {
     let analysisR = null;
     let analysisMono = null;
     let inspectRenderer = null;
+    let markers = [];
+    let envAnalyser = null;
+    let envMono = null;            // ENV_FFT_SIZE * ENV_DECIM samples
+    let envL = null, envR = null;
+    let scopeAudio = null;         // { t0, min:[], max:[] } per channel pair
+    let scopeBufL = null, scopeBufR = null;
     let spectrogram = null;
     let sgState = 'idle';              // idle | building | ready | stale
     let lastInspectMs = -1;
@@ -178,6 +199,20 @@ export function initSimView(viewCtx) {
     trimWrap.appendChild(trim);
     trimWrap.appendChild(trimLbl);
     bar.appendChild(trimWrap);
+    // Peak meter: the PRE-clamp level, which is the only place a session that
+    // overdrives the mix can be seen. After the clamp it is indistinguishable
+    // from one that merely touches full scale — on the device as well as here.
+    const peakWrap = el('span', 'sim-peakwrap');
+    peakWrap.title = 'Peak level before the output clamp';
+    const peakBar = el('span', 'sim-peakbar');
+    const peakFill = el('i');
+    peakBar.appendChild(peakFill);
+    peakWrap.appendChild(el('span', 'sim-dim', 'Peak'));
+    peakWrap.appendChild(peakBar);
+    const peakLbl = el('span', 'sim-peaklbl', '−∞');
+    peakWrap.appendChild(peakLbl);
+    bar.appendChild(peakWrap);
+
     const audioNote = el('span', 'sim-audionote');
     audioNote.style.display = 'none';
     bar.appendChild(audioNote);
@@ -217,6 +252,16 @@ export function initSimView(viewCtx) {
     const specCanvas = document.createElement('canvas');
     specCanvas.className = 'sim-canvas sim-spec';
     specPanel.appendChild(specCanvas);
+    specPanel.appendChild(el('div', 'sim-subhead', 'Entrainment band — the envelope'));
+    const envCanvas = document.createElement('canvas');
+    envCanvas.className = 'sim-canvas sim-env';
+    specPanel.appendChild(envCanvas);
+    specPanel.appendChild(el('div', 'sim-cap',
+        'The spectrum above shows CARRIERS. A 10 Hz binaural beat made of 200 and '
+      + '210 Hz has no 10 Hz line there at all — the beat exists only as the '
+      + 'amplitude envelope of their sum. This panel transforms that envelope, so '
+      + 'it reads the rate the session is actually driving, whether it is built '
+      + 'from binaural carriers, a monaural pair or an isochronic gate.'));
     wrap.appendChild(specPanel);
 
     // -- inspector panel
@@ -237,6 +282,47 @@ export function initSimView(viewCtx) {
     const sgInfo = el('span', 'sim-dim');
     sgHead.appendChild(sgInfo);
     sgPanel.appendChild(sgHead);
+    // Exports live beside the spectrogram, because both are "take the whole
+    // session away and look at it" operations.
+    function download(name, data, mime) {
+        const blob = new Blob([data], { type: mime });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }
+    function sessionName(ext) {
+        return 'session-' + Math.round(durationMs / 1000) + 's.' + ext;
+    }
+    function guardedExport(label, fn) {
+        if (!doc || !doc.rows.length) { showMessage('Nothing to export', 'error'); return; }
+        showMessage('Rendering ' + label + '…', 'info');
+        // Yield so the status paints before the synchronous render.
+        setTimeout(() => {
+            try { fn(); showMessage(label + ' downloaded', 'success'); }
+            catch (err) { showMessage(label + ' failed: ' + (err.message || err), 'error'); }
+        }, 0);
+    }
+    const btnWav = el('button', 'sim-sg-btn', '⬇ WAV');
+    btnWav.title = 'The simulated audio, at device level (a single tone peaks near −27 dBFS)';
+    btnWav.addEventListener('click', () => guardedExport('WAV', () => {
+        const { bytes } = exportWav(doc);
+        download(sessionName('wav'), bytes, 'audio/wav');
+    }));
+    const btnCsv = el('button', 'sim-sg-btn', '⬇ CSV');
+    btnCsv.title = 'Per-channel audio and LED state sampled at the strip frame period';
+    btnCsv.addEventListener('click', () => guardedExport('CSV', () => {
+        download(sessionName('csv'), exportCsv(doc), 'text/csv');
+    }));
+    const btnJson = el('button', 'sim-sg-btn', '⬇ JSON');
+    btnJson.addEventListener('click', () => guardedExport('JSON', () => {
+        download(sessionName('json'), exportJson(doc), 'application/json');
+    }));
+    sgHead.appendChild(btnWav);
+    sgHead.appendChild(btnCsv);
+    sgHead.appendChild(btnJson);
+
     const sgCanvas = document.createElement('canvas');
     sgCanvas.className = 'sim-canvas sim-sg';
     sgPanel.appendChild(sgCanvas);
@@ -267,12 +353,29 @@ export function initSimView(viewCtx) {
         inspectRenderer = mk();
         analysisRenderer = mk();
 
-        if (!analyser || analyser.size !== DEFAULT_FFT_SIZE) {
-            analyser = createAnalyser(DEFAULT_FFT_SIZE, SAMPLE_RATE);
-            analysisL = new Float32Array(DEFAULT_FFT_SIZE);
-            analysisR = new Float32Array(DEFAULT_FFT_SIZE);
-            analysisMono = new Float32Array(DEFAULT_FFT_SIZE);
+        markers = resolveMarkers(doc, markerPipelineLagUs);
+
+        if (!analyser || analyser.size !== LIVE_FFT_SIZE) {
+            analyser = createAnalyser(LIVE_FFT_SIZE, SAMPLE_RATE);
+            analysisL = new Float32Array(LIVE_FFT_SIZE);
+            analysisR = new Float32Array(LIVE_FFT_SIZE);
+            analysisMono = new Float32Array(LIVE_FFT_SIZE);
         }
+        if (!envAnalyser) {
+            envAnalyser = createEnvelopeAnalyser(ENV_FFT_SIZE, SAMPLE_RATE, ENV_DECIM);
+            const n = ENV_FFT_SIZE * ENV_DECIM;
+            envL = new Float32Array(n);
+            envR = new Float32Array(n);
+            envMono = new Float32Array(n);
+        }
+        if (!scopeBufL) {
+            // One full scope window, which is also the worst case when the
+            // playhead jumps and every bucket has to be refilled.
+            const n = Math.ceil((SCOPE_MS / 1000) * SAMPLE_RATE) + SAMPLE_RATE / 100;
+            scopeBufL = new Float32Array(n);
+            scopeBufR = new Float32Array(n);
+        }
+        scopeAudio = null;
 
         spectrogram = null;
         scopeCache = new Map();        // traces describe the OLD session
@@ -326,7 +429,13 @@ export function initSimView(viewCtx) {
         for (const f of items) {
             const line = el('div', 'sim-finding sim-' + f.severity);
             if (f.row !== null && f.row !== undefined) {
-                line.appendChild(el('span', 'sim-finding-line', 'line ' + (f.row + 1)));
+                // Clickable: a finding you cannot get to is only half a finding.
+                const go = el('button', 'sim-finding-line', 'line ' + (f.row + 1));
+                go.title = 'Open this line in the Text view';
+                go.addEventListener('click', () => {
+                    if (viewCtx.revealSourceLine) viewCtx.revealSourceLine(f.row);
+                });
+                line.appendChild(go);
             }
             line.appendChild(el('span', 'sim-finding-msg', f.msg));
             if (f.timeMs !== null && f.timeMs !== undefined) {
@@ -507,6 +616,23 @@ export function initSimView(viewCtx) {
         return out;
     }
 
+    // Which zones get a phase wheel: the flickering ones (a DC zone has no
+    // cycle for a phase to be an offset into).
+    function rows2wheels(states) {
+        const out = [];
+        for (let bit = 0; bit < NUM_LED_CHANNELS; bit++) {
+            const st = states[bit];
+            if (!st || !st.active || st.dc) continue;
+            out.push({
+                n: bit + 1,
+                phase: st.phase,
+                colour: 'rgb(' + Math.max(70, st.r) + ',' + Math.max(70, st.g)
+                      + ',' + Math.max(70, st.b) + ')',
+            });
+        }
+        return out;
+    }
+
     function drawLed(tMs, states) {
         const { ctx: c, w, h } = fitCanvas(ledCanvas, 220);
         c.fillStyle = PAL.stripBg;
@@ -547,6 +673,40 @@ export function initSimView(viewCtx) {
             c.beginPath();
             c.arc(cx, cy, r, 0, Math.PI * 2);
             c.fill();
+        }
+
+        /*
+         * Phase wheels, one per flickering zone.
+         *
+         * `phase` is the subtlest column in the format: it is a LEAD, not a lag
+         * (the firmware ADDS the offset to elapsed time), and across the whole
+         * shipped session library it only ever takes 0 or 180. A dial makes an
+         * antiphase pair self-evident, where two numbers in a table do not.
+         */
+        {
+            const wheels = rows2wheels(states);
+            const R = 13, gap = 42;
+            let wx = w - 10 - wheels.length * gap + gap / 2;
+            const wy = 26;
+            c.font = '9px system-ui, sans-serif';
+            c.textAlign = 'center';
+            for (const wdef of wheels) {
+                c.strokeStyle = PAL.stripEdge;
+                c.lineWidth = 1;
+                c.beginPath(); c.arc(wx, wy, R, 0, Math.PI * 2); c.stroke();
+                // 12 o'clock is phase 0, clockwise, so 180 points straight down.
+                const a = (wdef.phase - 90) * Math.PI / 180;
+                c.strokeStyle = wdef.colour;
+                c.lineWidth = 2;
+                c.beginPath();
+                c.moveTo(wx, wy);
+                c.lineTo(wx + Math.cos(a) * (R - 2), wy + Math.sin(a) * (R - 2));
+                c.stroke();
+                c.fillStyle = PAL.dim;
+                c.fillText(wdef.phase + '\u00B0', wx, wy + R + 10);
+                c.fillText('L' + wdef.n, wx, wy - R - 3);
+                wx += gap;
+            }
         }
 
         // Eye labels.
@@ -629,6 +789,69 @@ export function initSimView(viewCtx) {
     }
 
     /*
+     * The audio half of the scope: L and R as a min/max envelope on the SAME
+     * time axis as the LED traces.
+     *
+     * That shared axis is the point. Whether light and sound line up is this
+     * project's entire thesis, and until the two are drawn against one clock
+     * you can only reason about it. Rendering the 1.5 s window is 66 150
+     * samples, so it is recomputed at the spectrum's cadence rather than every
+     * frame — the trace only moves 16 ms per frame anyway.
+     */
+    function audioScope(t0, steps) {
+        if (!audioCh.size || !scopeBufL) return null;
+        const startStep = Math.floor(t0 / SCOPE_STEP_MS);
+        const perStep = Math.max(1, Math.round((SCOPE_STEP_MS / 1000) * SAMPLE_RATE));
+
+        if (!scopeAudio || scopeAudio.steps !== steps) {
+            scopeAudio = {
+                steps,
+                startStep: startStep - (steps + 1),     // force a full fill
+                minL: new Float32Array(steps + 1), maxL: new Float32Array(steps + 1),
+                minR: new Float32Array(steps + 1), maxR: new Float32Array(steps + 1),
+            };
+        }
+        const a = scopeAudio;
+        const shift = startStep - a.startStep;
+        let from = 0;
+        if (shift === 0) {
+            return a;                                   // nothing new this frame
+        } else if (shift > 0 && shift <= steps) {
+            a.minL.copyWithin(0, shift); a.maxL.copyWithin(0, shift);
+            a.minR.copyWithin(0, shift); a.maxR.copyWithin(0, shift);
+            from = steps + 1 - shift;
+        }
+
+        // Render only the buckets that are actually new. Playing forward that is
+        // about eight of them per frame, not all 750 — the difference between
+        // ~700 samples of work per frame and 66 150, which is more audio than
+        // the renderer can produce in real time.
+        const nNew = steps + 1 - from;
+        const need = nNew * perStep;
+        if (need > 0) {
+            const startSample = Math.max(0, Math.round(
+                (((startStep + from) * SCOPE_STEP_MS) / 1000) * SAMPLE_RATE));
+            const buf = Math.min(need, scopeBufL.length);
+            analysisRenderer.seek(startSample);
+            analysisRenderer.renderBlock(scopeBufL, scopeBufR, startSample, buf);
+            for (let k = from; k <= steps; k++) {
+                const o = (k - from) * perStep;
+                let lo = 0, hi = 0, lo2 = 0, hi2 = 0;
+                for (let i = 0; i < perStep; i++) {
+                    const j = o + i;
+                    if (j >= buf) break;
+                    const l = scopeBufL[j], r = scopeBufR[j];
+                    if (l < lo) lo = l; else if (l > hi) hi = l;
+                    if (r < lo2) lo2 = r; else if (r > hi2) hi2 = r;
+                }
+                a.minL[k] = lo; a.maxL[k] = hi; a.minR[k] = lo2; a.maxR[k] = hi2;
+            }
+        }
+        a.startStep = startStep;
+        return a;
+    }
+
+    /*
      * The scope: each active zone's level over the last SCOPE_MS, at
      * SCOPE_STEP_MS resolution.
      *
@@ -640,7 +863,8 @@ export function initSimView(viewCtx) {
     function drawScope(tMs) {
         const rows = [...ledCh.keys()].sort((a, b) => a - b);
         const rowH = 34;
-        const H = Math.max(rowH, rows.length * rowH) + 22;
+        const audioRows = audioCh.size ? 2 : 0;
+        const H = Math.max(rowH, (rows.length + audioRows) * rowH) + 22;
         const { ctx: c, w, h } = fitCanvas(scopeCanvas, H);
         c.fillStyle = PAL.stripBg;
         c.fillRect(0, 0, w, h);
@@ -673,17 +897,54 @@ export function initSimView(viewCtx) {
         c.textAlign = 'right';
         c.fillText(trailing ? 'now' : (SCOPE_MS / 1000).toFixed(1) + ' s', w - 8, h - 7);
 
-        if (!rows.length) {
+        if (!rows.length && !audioRows) {
             c.fillStyle = PAL.dim;
             c.textAlign = 'center';
-            c.fillText('no LED rows in this session', w / 2, h / 2);
+            c.fillText('nothing to show for this session', w / 2, h / 2);
             return;
         }
 
         const steps = Math.floor(SCOPE_MS / SCOPE_STEP_MS);
         const trace = scopeTraces(rows, t0, steps);
 
-        rows.forEach((bit, i) => {
+        // Audio first, so light sits under sound in reading order.
+        if (audioRows) {
+            const au = audioScope(t0, steps);
+            ['L', 'R'].forEach((side, i) => {
+                const y0 = i * rowH + 4;
+                const y1 = y0 + rowH - 10;
+                const mid = (y0 + y1) / 2;
+                const halfH = (y1 - y0) / 2;
+                c.strokeStyle = PAL.stripEdge;
+                c.beginPath(); c.moveTo(left, mid); c.lineTo(w - 8, mid); c.stroke();
+                c.fillStyle = PAL.gutterText;
+                c.textAlign = 'left';
+                c.fillText('audio ' + side, 8, y0 + 12);
+                if (!au) return;
+                const lo = i === 0 ? au.minL : au.minR;
+                const hi = i === 0 ? au.maxL : au.maxR;
+                // Full scale is +-1, but a device-level session peaks near 0.044
+                // (the fixed 1/16 divisor), so draw against the window's own peak
+                // or the trace would be an invisible line.
+                let peak = 1e-4;
+                for (let k = 0; k <= steps; k++) {
+                    if (hi[k] > peak) peak = hi[k];
+                    if (-lo[k] > peak) peak = -lo[k];
+                }
+                c.strokeStyle = PAL.step;
+                c.lineWidth = 1;
+                c.beginPath();
+                for (let k = 0; k <= steps; k++) {
+                    const x = xOf(t0 + k * SCOPE_STEP_MS);
+                    c.moveTo(x, mid - (hi[k] / peak) * halfH);
+                    c.lineTo(x, mid - (lo[k] / peak) * halfH);
+                }
+                c.stroke();
+            });
+        }
+
+        rows.forEach((bit, i0) => {
+            const i = i0 + audioRows;
             const entries = ledCh.get(bit);
             const vals = trace.get(bit);
             const y0 = i * rowH + 4;
@@ -716,6 +977,28 @@ export function initSimView(viewCtx) {
             }
             c.stroke();
         });
+
+        // Marker ticks. A marker is announced to an external recorder at its
+        // scheduled time but reaches the senses at the PREDICTED onset, so both
+        // are drawn: a solid tick at the schedule, a hollow one at the onset.
+        for (const m of markers) {
+            if (m.timeMs < t0 || m.timeMs > t0 + SCOPE_MS) continue;
+            const x = xOf(m.timeMs);
+            c.strokeStyle = PAL.wave;
+            c.lineWidth = 1;
+            c.beginPath(); c.moveTo(x, 0); c.lineTo(x, h - 20); c.stroke();
+            c.fillStyle = PAL.wave;
+            c.textAlign = 'left';
+            c.fillText(m.label, x + 3, 10);
+            if (m.lagUs > 0) {
+                const xo = xOf(m.onsetMs);
+                if (xo <= w - 8) {
+                    c.setLineDash([2, 3]);
+                    c.beginPath(); c.moveTo(xo, 0); c.lineTo(xo, h - 20); c.stroke();
+                    c.setLineDash([]);
+                }
+            }
+        }
 
         // While the window is fixed at the session start, mark where the
         // playhead actually is inside it.
@@ -779,10 +1062,10 @@ export function initSimView(viewCtx) {
         // identically while paused and while scrubbing, which an AnalyserNode
         // tapped off the output could not do.
         const endSample = Math.round((tMs / 1000) * SAMPLE_RATE);
-        const start = Math.max(0, endSample - DEFAULT_FFT_SIZE);
+        const start = Math.max(0, endSample - LIVE_FFT_SIZE);
         analysisRenderer.seek(start);
-        analysisRenderer.renderBlock(analysisL, analysisR, start, DEFAULT_FFT_SIZE);
-        for (let i = 0; i < DEFAULT_FFT_SIZE; i++) {
+        analysisRenderer.renderBlock(analysisL, analysisR, start, LIVE_FFT_SIZE);
+        for (let i = 0; i < LIVE_FFT_SIZE; i++) {
             analysisMono[i] = (analysisL[i] + analysisR[i]) * 0.5;
         }
         const mag = analyser.analyse(analysisMono, 0);
@@ -806,7 +1089,7 @@ export function initSimView(viewCtx) {
 
         const F_MIN = 20, F_MAX = 20000;
         const cols = Math.max(32, Math.floor((w - 38) / 2));
-        const band = logBands(mag, DEFAULT_FFT_SIZE, SAMPLE_RATE, cols, F_MIN, F_MAX);
+        const band = logBands(mag, LIVE_FFT_SIZE, SAMPLE_RATE, cols, F_MIN, F_MAX);
         const bw = (w - 38) / cols;
         c.fillStyle = PAL.step;
         for (let i = 0; i < cols; i++) {
@@ -842,8 +1125,109 @@ export function initSimView(viewCtx) {
         }
 
         const rate = analyser.binHz.toFixed(2);
-        specInfo.textContent = DEFAULT_FFT_SIZE + '-point FFT, ' + rate
+        specInfo.textContent = LIVE_FFT_SIZE + '-point FFT, ' + rate
             + ' Hz bins — amber lines are the carriers the timeline specifies';
+    }
+
+    /*
+     * The entrainment-band panel: an FFT of the signal's ENVELOPE.
+     *
+     * Needs 1.49 s of audio (ENV_FFT_SIZE * ENV_DECIM samples), so it is both
+     * the most expensive thing here and the slowest-moving — an entrainment
+     * rate does not change in a tenth of a second. Drawn at a fifth of the
+     * spectrum's rate.
+     */
+    function drawEnvelope(tMs) {
+        const { ctx: c, w, h } = fitCanvas(envCanvas, 120);
+        c.fillStyle = PAL.stripBg;
+        c.fillRect(0, 0, w, h);
+        c.font = '10px system-ui, sans-serif';
+
+        if (!audioCh.size) {
+            c.fillStyle = PAL.dim;
+            c.textAlign = 'center';
+            c.fillText('no audio rows in this session', w / 2, h / 2);
+            return;
+        }
+
+        const need = ENV_FFT_SIZE * ENV_DECIM;
+        const end = Math.round((tMs / 1000) * SAMPLE_RATE);
+        const start = Math.max(0, end - need);
+        analysisRenderer.seek(start);
+        analysisRenderer.renderBlock(envL, envR, start, need);
+        for (let i = 0; i < need; i++) envMono[i] = (envL[i] + envR[i]) * 0.5;
+        const mag = envAnalyser.analyse(envMono);
+
+        const left = 34, plotW = w - left - 6;
+        const TOP = 0, BOT = -72;
+        const yOf = (db) => h - 16 - Math.max(0, Math.min(1, (db - BOT) / (TOP - BOT))) * (h - 24);
+        const logMin = Math.log2(ENV_DISPLAY_MIN_HZ);
+        const logSpan = Math.log2(ENV_DISPLAY_MAX_HZ) - logMin;
+        const xOfHz = (hz) => left + ((Math.log2(hz) - logMin) / logSpan) * plotW;
+
+        c.strokeStyle = PAL.grid;
+        c.fillStyle = PAL.dim;
+        c.textAlign = 'left';
+        for (let db = 0; db >= BOT; db -= 24) {
+            const y = yOf(db);
+            c.beginPath(); c.moveTo(left, y); c.lineTo(w - 4, y); c.stroke();
+            c.fillText(db + ' dB', 2, y + 3);
+        }
+
+        // One bar per pixel column across the band.
+        const cols = Math.max(24, Math.floor(plotW));
+        const base = yOf(BOT);
+        c.fillStyle = PAL.mod;
+        for (let i = 0; i < cols; i++) {
+            const hz0 = Math.pow(2, logMin + (logSpan * i) / cols);
+            const hz1 = Math.pow(2, logMin + (logSpan * (i + 1)) / cols);
+            let k0 = Math.max(1, Math.floor(hz0 / envAnalyser.binHz));
+            let k1 = Math.max(k0 + 1, Math.ceil(hz1 / envAnalyser.binHz));
+            if (k1 > mag.length) k1 = mag.length;
+            let peak = -Infinity;
+            for (let k = k0; k < k1; k++) if (mag[k] > peak) peak = mag[k];
+            if (peak === -Infinity) continue;
+            const y = yOf(peak);
+            if (y < base) c.fillRect(left + i, y, 1, base - y);
+        }
+
+        // Band ticks, and the rates the TIMELINE says are being driven.
+        c.fillStyle = PAL.dim;
+        c.textAlign = 'center';
+        for (const hz of [1, 2, 4, 8, 10, 20, 40, 60]) {
+            if (hz < ENV_DISPLAY_MIN_HZ || hz > ENV_DISPLAY_MAX_HZ) continue;
+            c.fillText(String(hz), xOfHz(hz), h - 4);
+        }
+        const states = inspectRenderer.channelStates(tMs);
+        c.strokeStyle = PAL.quad;
+        c.lineWidth = 1;
+        const marked = new Set();
+        for (const st of states) {
+            if (!(st.vol > 0)) continue;
+            for (const rate of [st.beatHz, st.mod > 0 ? st.mod : null]) {
+                if (!rate || rate < ENV_DISPLAY_MIN_HZ || rate > ENV_DISPLAY_MAX_HZ) continue;
+                const key = rate.toFixed(2);
+                if (marked.has(key)) continue;
+                marked.add(key);
+                const x = xOfHz(rate);
+                c.beginPath(); c.moveTo(x, yOf(TOP)); c.lineTo(x, base); c.stroke();
+            }
+        }
+    }
+
+    // Pre-clamp peak, read off the renderer the SPECTRUM drives (so it reflects
+    // the window just analysed rather than whatever the player last queued).
+    function drawPeak() {
+        const st = analysisRenderer ? analysisRenderer.stats() : null;
+        if (!st || !st.samples) return;
+        const db = st.peak > 0 ? 20 * Math.log10(st.peak) : -Infinity;
+        // -48 dB to +6 dB across the bar: a device-level session sits at -27.
+        const frac = Math.max(0, Math.min(1, (db + 48) / 54));
+        peakFill.style.width = (frac * 100).toFixed(1) + '%';
+        peakWrap.classList.toggle('clip', st.clipped > 0);
+        peakLbl.textContent = st.peak > 0 ? db.toFixed(1) + ' dB' : '−∞';
+        if (st.clipped > 0) peakLbl.textContent += ' CLIP';
+        analysisRenderer.resetStats();
     }
 
     // ---- inspector ---------------------------------------------------------
@@ -943,6 +1327,46 @@ export function initSimView(viewCtx) {
             }
             t.appendChild(tb);
             inspBody.appendChild(t);
+        }
+
+        if (markers.length) {
+            const t = el('table', 'sim-table');
+            const thead = el('thead');
+            const hr = el('tr');
+            for (const col of ['Marker', 'Scheduled', 'Modality',
+                               'Predicted onset', 'Keys']) {
+                hr.appendChild(el('th', null, col));
+            }
+            thead.appendChild(hr);
+            t.appendChild(thead);
+            const tb = el('tbody');
+            for (const m of markers) {
+                const tr = el('tr');
+                if (m.timeMs > tMs) tr.className = 'sim-silent';
+                tr.appendChild(el('td', null, m.label));
+                tr.appendChild(el('td', null, fmtClock(m.timeMs)));
+                tr.appendChild(el('td', null,
+                    m.modality + (m.inferred ? ' (inferred)' : '')));
+                tr.appendChild(el('td', null, m.lagUs
+                    ? '+' + (m.lagUs / 1000).toFixed(2) + ' ms'
+                    : 'same instant'));
+                tr.appendChild(el('td', null,
+                    m.kv.map(p => p.k + '=' + p.v).join(' ') || '—'));
+                tb.appendChild(tr);
+            }
+            t.appendChild(tb);
+            inspBody.appendChild(el('div', 'sim-subhead', 'Stimulus markers'));
+            inspBody.appendChild(t);
+            inspBody.appendChild(el('div', 'sim-cap',
+                'A marker carries three timestamps that must never be conflated: '
+              + 'when it was SCHEDULED, when the device DISPATCHED it, and when '
+              + 'the stimulus is PREDICTED to reach the senses. Only the first and '
+              + 'third can be known without the hardware. The predicted onset is '
+              + 'the scheduled time plus the pipeline lag for the modality — '
+              + (AUDIO_DMA_PIPELINE_LAG_US / 1000).toFixed(3) + ' ms of DMA for '
+              + 'audio, plus the strip write on top for light. Where no modality '
+              + 'is stated the device infers it from what else shares the '
+              + 'timestamp, and so does this table.'));
         }
 
         const foot = el('div', 'sim-cap');
@@ -1061,6 +1485,8 @@ export function initSimView(viewCtx) {
         drawScope(tMs);
         renderLedCaption(states);
         drawSpectrum(tMs);
+        drawEnvelope(tMs);
+        drawPeak();
         drawInspector(tMs);
         drawSpectrogram(tMs);
     }
@@ -1083,7 +1509,12 @@ export function initSimView(viewCtx) {
         drawLed(tMs, states);
         drawScope(tMs);
         if (frame % 10 === 0) renderLedCaption(states);
-        if (frame % SPECTRUM_EVERY === 0) drawSpectrum(tMs);
+        if (frame % SPECTRUM_EVERY === 0) { drawSpectrum(tMs); drawPeak(); }
+        // The envelope needs 1.49 s of audio and shows a quantity that cannot
+        // change quickly, so it runs at a fifth of the spectrum's rate.
+        // The envelope needs 1.49 s of audio and shows a quantity that cannot
+        // change quickly, so it runs at a fifth of the spectrum's rate.
+        if (frame % (SPECTRUM_EVERY * 5) === 0) drawEnvelope(tMs);
         drawInspector(tMs);
         if (frame % 6 === 0) drawSpectrogram(tMs);
     }

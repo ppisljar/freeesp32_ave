@@ -9,6 +9,7 @@ import { showMessage } from './util.js';
 
 import { deviceFetch } from './devicefetch.js';
 import { STANDALONE } from './env.js';
+import { fetchIndex, fetchSessionText } from './gen/library.js';
 const LOCAL_PREFIX = 'ledc:';
 const NAME_RE = /^[A-Za-z0-9._-]+\.ledc$/;
 
@@ -16,9 +17,13 @@ const NAME_RE = /^[A-Za-z0-9._-]+\.ledc$/;
 let currentSrc = null;     // 'spiffs' | 'local'
 let currentName = null;
 // Last-fetched name lists per source (for overwrite checks).
-const lastLists = { spiffs: [], local: [] };
+const lastLists = { spiffs: [], local: [], library: [] };
 
-const SRC_LABEL = { spiffs: 'Device (SPIFFS)', local: 'Browser (local)' };
+const SRC_LABEL = {
+    spiffs: 'Device (SPIFFS)',
+    local: 'Browser (local)',
+    library: 'Session library (GitHub)',
+};
 
 // Exposed for config.js report upload (tags the report with the config name).
 export function getCurrentConfigName() { return currentName; }
@@ -29,6 +34,23 @@ function listSpiffs() {
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(d => d.files || []);
 }
+/*
+ * The published session library on GitHub.
+ *
+ * Read-only, and only offered on the STANDALONE build: the device UI already
+ * has the Community tab for this, with per-session descriptions and
+ * on-device/update badges that a flat dropdown cannot show. On the docs site
+ * there is no device to install anything on, so a plain "open one of the real
+ * sessions" list is exactly what the dropdown is for.
+ *
+ * Needs the network. With none — offline, or opened over file:// — the group
+ * resolves to an error and `fetchConfigGroups` renders it as unavailable rather
+ * than hanging or throwing.
+ */
+function listLibrary() {
+    return fetchIndex().then(idx => ((idx && idx.sessions) || []).map(s => s.file));
+}
+
 function listLocal() {
     const names = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -39,6 +61,7 @@ function listLocal() {
 }
 
 function loadFromSource(src, name) {
+    if (src === 'library') return fetchSessionText(name);
     if (src === 'spiffs') {
         return deviceFetch('/api/configs/' + encodeURIComponent(name))
             .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); });
@@ -49,6 +72,11 @@ function loadFromSource(src, name) {
 }
 
 function saveToSource(src, name, body) {
+    if (src === 'library') {
+        return Promise.reject(new Error(
+            'The GitHub session library is read-only. Save to Browser (local), '
+          + 'or use Download to get a .ledc file.'));
+    }
     if (src === 'spiffs') {
         return deviceFetch('/api/configs/' + encodeURIComponent(name),
             { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body })
@@ -217,12 +245,15 @@ export function byConfigName(a, b) {
 // listed as "(unavailable)" — an empty slot the visitor cannot act on is worse
 // than no slot.
 export function configSources() {
-    return STANDALONE ? ['local'] : ['spiffs', 'local'];
+    return STANDALONE ? ['library', 'local'] : ['spiffs', 'local'];
 }
 
+// Sources you cannot write to. Save As filters its destination list by this.
+export function isReadOnlySource(src) { return src === 'library'; }
+
 export function fetchConfigGroups() {
-    const listers = { spiffs: listSpiffs, local: listLocal };
-    const sources = configSources().map(src => [src, listers[src]()]);
+    const byName = { spiffs: listSpiffs, local: listLocal, library: listLibrary };
+    const sources = configSources().map(src => [src, byName[src]()]);
     return Promise.allSettled(sources.map(s => s[1])).then(results => {
         const groups = [];
         results.forEach((res, i) => {

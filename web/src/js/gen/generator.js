@@ -7,8 +7,8 @@
 // serialized preview pane + a row-count / problem meter.
 
 import { showMessage } from '../util.js';
-import { fetchConfigGroups, loadConfigText, saveConfigText, isValidConfigName }
-    from '../configstore.js';
+import { fetchConfigGroups, loadConfigText, saveConfigText, isValidConfigName,
+         configSources, isReadOnlySource } from '../configstore.js';
 import { emptyDoc } from './model.js';
 import { parse } from './parse.js';
 import { serialize } from './serialize.js';
@@ -77,9 +77,14 @@ function renderPreview() {
 
     const meter = document.getElementById('genRowMeter');
     if (meter) {
-        let entries = 0, comments = 0, blanks = 0, raws = 0, bgs = 0;
+        // `M` markers occupy a slot in the device's timeline array just as LED
+        // and audio rows do (they are CONFIG_ENTRY_MARKER in the same
+        // entries[]), so they count against CONFIG_PARSER_MAX_ENTRIES. `S`
+        // rows do not, because serializeForDevice strips them before the POST.
+        let entries = 0, comments = 0, blanks = 0, raws = 0, bgs = 0, markers = 0;
         for (const r of doc.rows) {
             if (r.kind === 'led' || r.kind === 'audio') entries++;
+            else if (r.kind === 'marker') { entries++; markers++; }
             else if (r.kind === 'comment') comments++;
             else if (r.kind === 'blank') blanks++;
             else if (r.kind === 'raw') raws++;
@@ -92,6 +97,7 @@ function renderPreview() {
         let txt = entries + ' / 100 entries';
         if (comments) txt += ' · ' + comments + ' comment' + (comments > 1 ? 's' : '');
         if (bgs) txt += ' · BG';
+        if (markers) txt += ' · ' + markers + ' marker' + (markers > 1 ? 's' : '');
         if (raws) txt += ' · ' + raws + ' unparsable';
         if (probs) txt += ' · ' + probs + ' error' + (probs > 1 ? 's' : '');
         if (warns) txt += ' · ' + warns + ' warning' + (warns > 1 ? 's' : '');
@@ -194,9 +200,20 @@ function loadSelected() {
         .catch(err => showMessage('Load failed: ' + err, 'error'));
 }
 
+// Destinations Save As may offer: every configured source minus the read-only
+// ones. The GitHub library lists and loads but cannot be written to.
+function writableDestinations() {
+    const LABEL = { spiffs: 'Device (SPIFFS)', local: 'Browser (local)' };
+    return configSources()
+        .filter(src => !isReadOnlySource(src))
+        .map(src => ({ src, label: LABEL[src] || src }));
+}
+
 function saveCurrent() {
     if (!doc.rows.length) { showMessage('Nothing to save', 'error'); return; }
-    if (!currentSrc || !currentName) { saveAs(); return; }
+    // A session opened FROM the GitHub library has nowhere to save back to, so
+    // Save behaves as Save As rather than failing.
+    if (!currentSrc || !currentName || isReadOnlySource(currentSrc)) { saveAs(); return; }
     saveConfigText(currentSrc, currentName, serialize(doc))
         .then(() => { showMessage('Saved ' + currentName, 'success'); refreshGenList(); })
         .catch(err => showMessage('Save failed: ' + err, 'error'));
@@ -213,9 +230,8 @@ function saveAs() {
         '<h3 style="margin:0 0 12px 0;">Save Config As</h3>'
       + '<div style="margin-bottom:10px;"><label>Filename<br><input id="genSaveName" type="text" style="width:100%;padding:6px;" value="' + (currentName || 'untitled.ledc') + '"></label></div>'
       + '<div style="margin-bottom:14px;"><label>Destination<br><select id="genSaveDest" style="width:100%;padding:6px;">'
-      + (STANDALONE
-            ? '<option value="local">Browser (local)</option>'
-            : '<option value="spiffs">Device (SPIFFS)</option><option value="local">Browser (local)</option>')
+      + writableDestinations().map(d =>
+            '<option value="' + d.src + '">' + d.label + '</option>').join('')
       + '</select></label></div>'
       + '<div style="text-align:right;"><button id="genSaveCancel">Cancel</button> <button id="genSaveOk" style="background:var(--ok);color:#06240f;border-color:transparent;">Save</button></div>';
     back.appendChild(box);
@@ -372,6 +388,18 @@ function applyStandaloneChrome() {
     }
 }
 
+/*
+ * Jump to a source line in the Text view.
+ *
+ * Handed to the Simulate view through its ctx rather than imported from here,
+ * because generator.js already imports views/sim.js — going the other way would
+ * make a cycle for the sake of one callback.
+ */
+function revealSourceLine(rowIndex) {
+    switchView('text');
+    if (textView && textView.revealLine) textView.revealLine(rowIndex);
+}
+
 function setLoadedLabel(text) {
     const lbl = document.getElementById('genLoadedName');
     if (lbl) lbl.textContent = text ? '(' + text + ')' : '';
@@ -424,7 +452,7 @@ export function generatorInit() {
     // Read-only with respect to the model (it never calls setDoc), so it needs
     // no re-entrancy guard -- but it DOES hold an AudioContext and a rAF loop,
     // which show()/hide() start and stop.
-    simView = initSimView({ getDoc, setDoc });
+    simView = initSimView({ getDoc, setDoc, revealSourceLine });
     onModelChanged(d => { if (simView) simView.refresh(d); });
 
     if (STANDALONE) {

@@ -1,6 +1,7 @@
 # AVE Studio adaptations — follow-ups to the browser simulator
 
-**Status: NOT STARTED.** Depends on `browser_simulator_plan.md` (done).
+**Status: DONE** — all seven adopted items (A1-A7) and B1 built, 408 web tests
+green, verified in Chrome on the published page. B2 remains deferred.
 
 Source: `ave_studio_browser_simulator.zip` (an "AVE Studio" design proposal,
 2026-10-13), read against the simulator as built. This plan records what is
@@ -9,11 +10,18 @@ rejected for stated reasons rather than being re-proposed.
 
 ---
 
-## Adopt
+## Adopt — ALL DONE
 
-Ordered by value per unit of work.
+Ordered by value per unit of work, which is also the order they were built.
 
 ### A1. Envelope / modulation spectrum beside the carrier spectrum
+**DONE.** `sim/spectrum.js` `createEnvelopeAnalyser`, panel under the carrier
+spectrum. Verified on `27_genus_40hz_dim`: the carrier spectrum shows no 40 Hz
+line anywhere, and the envelope panel shows a single sharp peak at exactly
+40 Hz. The display band stops at 60 Hz for a measured reason — rectification
+leaves a residual that always lands ABOVE it (88.8 Hz for a 300 Hz carrier),
+while inside the band a steady tone sits at −79 to −87 dB.
+
 
 The proposal's sharpest technical point, and a real gap today.
 
@@ -35,6 +43,11 @@ channel) all put the rate in the envelope.
 Throttle to ~5 Hz — the window needs 65 536 samples, which is ~1.5 ms to render.
 
 ### A2. Audio waveforms on the scope's time axis
+**DONE.** L and R min/max rows above the LED traces on one axis. The bucket
+cache shifts on a fixed 2 ms grid like the LED traces do — keying it on the
+window start instead re-rendered 66 150 samples every frame, which is more
+audio than the renderer can produce in real time.
+
 
 The scope draws LED levels at 2 ms resolution. Adding L and R as min/max
 envelope rows on the *same* axis lets you see A/V alignment, which is this
@@ -45,6 +58,10 @@ Render the scope window once per spectrum tick (~20 Hz) and bucket min/max per
 not needed — the trace only moves 16 ms per frame.
 
 ### A3. Findings that link to the source line and seek the playhead
+**DONE.** `views/text.js` gained `revealLine`, handed to the Simulate view
+through its ctx rather than imported, so generator.js -> views/sim.js does not
+become a cycle.
+
 
 Half-built: `sim/lint.js` findings already carry `row` and `timeMs`, the panel
 already shows "line N" and a seek button. What is missing is the other
@@ -52,6 +69,9 @@ direction — clicking a finding should also scroll the Text view to that line
 and highlight it. Needs a small API on `views/text.js`.
 
 ### A4. Clipping detection on the summed signal
+**DONE.** `renderBlock` records the PRE-clamp peak and clipped-sample count;
+peak meter beside the monitor trim, red on clip.
+
 
 The device hard-clamps at ±1 after the master gain. Only a simulator can see
 when a session actually reaches that, and a clipped session sounds wrong on
@@ -64,6 +84,10 @@ trim with a clip indicator. Then lint the whole session offline (the renderer is
 moments as findings with timestamps.
 
 ### A5. Phase wheel
+**DONE.** One dial per flickering zone on the LED canvas. On
+`27_genus_40hz_dim` the antiphase pair reads at a glance: L1/L3 at 180 degrees,
+L2/L4 at 0.
+
 
 `phase` is the subtlest column in the format — it is a *lead*, not a lag, and
 across the whole session library it only ever takes 0 or 180. A small dial per
@@ -73,6 +97,10 @@ the lead-vs-lag question obvious years earlier.
 Cheap: one arc and one dot per zone on the existing LED canvas.
 
 ### A6. Exports
+**DONE.** `sim/export.js`: WAV (with the device's TRUNCATING int16 conversion,
+not the rounding one), plus CSV/JSON sampled at the strip frame period with a
+provenance header that says the data is PREDICTED, not measured.
+
 
 - **Stereo WAV** of the simulated session. Trivial: `renderSessionDevice` plus
   the existing `encodeWav16`. Must use the device's truncating int16 conversion
@@ -84,6 +112,11 @@ Cheap: one arc and one dot per zone on the existing LED canvas.
   rate, so the rows mean something physical.
 
 ### A7. `M` marker rows in the web parser
+**DONE.** parse/model/serialize plus `resolveMarkers`, which reproduces the
+firmware's modality INFERENCE from the batch and the predicted-onset lag
+(46 439 us audio, +led_count x 30/2 for light = 47 549 us at 74 px). Markers
+now also count against the 100-entry budget, which they do on the device.
+
 
 Not from the proposal — found while scouting. `main/config_parser.c` parses `M`
 lines and `docs/sessions/markers.html` documents them, but `web/src/js/gen/parse.js`
@@ -99,6 +132,15 @@ the last from the 46.439 ms DMA lag plus `pixel_index × 30 µs`).
 ## Consider later
 
 ### B1. Switch `gen/bounce.js` to the device-accurate renderer
+
+**DONE.** `gen/synth.js` is now `gen/mix.js` and holds only the buffer/mixing
+helpers; its duplicate engine is gone and the bounce renders with
+`sim/audio.js`. Bounced WAVs are ~18-24 dB quieter, which is correct. The BG
+clip's pan law is still equal-power where the device is linear (divergence D14)
+— deliberately untouched, because the BG path is hardware-verified over the
+WebSocket push and could not be re-verified here.
+
+Original note:
 
 `sim/audio.js` closes fifteen divergences that `gen/synth.js` still has, three of
 which change what you hear — most importantly the mix divisor, which leaves the

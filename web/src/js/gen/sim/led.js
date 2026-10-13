@@ -96,6 +96,35 @@ export function stripFrameUs(pixels = DEFAULT_CHANNEL_MAP.length) {
 }
 
 /*
+ * Predicted physical-onset lag for a stimulus marker, in microseconds.
+ * Port of marker_pipeline_lag_us (main/marker.c:130).
+ *
+ * The three timestamps a marker carries must never be conflated: when it was
+ * SCHEDULED (its `.ledc` time), when it was DISPATCHED (when the timeline task
+ * actually got to it), and when the stimulus is PREDICTED to reach the senses.
+ * Only the first is knowable here; this is the offset from it to the third.
+ *
+ * LED entries are anchored at demanded + the same DMA lag — that symmetry is
+ * what makes A/V sync hold — and then the strip write happens on top, at
+ * 30 us per pixel, HALVED because the average pixel sits halfway through the
+ * frame. Integer division, as in the C.
+ */
+export const LED_US_PER_PIXEL = 30;
+
+export function markerPipelineLagUs(modality, ledCount = DEFAULT_CHANNEL_MAP.length) {
+    const audioUs = AUDIO_DMA_PIPELINE_LAG_US;
+    const count = ledCount > 0 ? ledCount : 1;
+    const ledUs = audioUs + Math.trunc((count * LED_US_PER_PIXEL) / 2);
+    switch (modality) {
+        case 'audio': return audioUs;
+        case 'led':   return ledUs;
+        case 'both':  return Math.max(ledUs, audioUs);
+        case 'none':  return 0;
+        default:      return 0;
+    }
+}
+
+/*
  * The raised-sine table, (1 - cos(2*pi*x))/2 in Q16, 257 entries so that
  * `index = phase_q16 >> 8` needs no clamp.
  *

@@ -117,6 +117,39 @@ export function speechRow(opts) {
         text: opts.text || '',
     };
 }
+/*
+ * An `M <time> <LABEL> [key=value ...]` stimulus-marker line.
+ *
+ * Produces no sound and no light: it exists to tell an external recorder (an
+ * EEG, typically) that something happened at a known instant. The device
+ * dispatches it to its configured sinks — a TTL pulse, UDP into Lab Streaming
+ * Layer, JSONL on the SD card — carrying THREE timestamps that must never be
+ * conflated (scheduled, dispatched, and a *predicted* physical onset built from
+ * the measured DMA lag). See main/marker.h and docs/sessions/markers.html.
+ *
+ *   label     1..31 chars, [A-Z0-9_] only (config_parser.c:139)
+ *   kv        up to 4 {k, v} pairs; the parser drops the rest with a warning
+ *   modality  null = infer at dispatch from what else shares the timestamp;
+ *             otherwise 'audio' | 'led' | 'both' | 'none' from a `mod=` token,
+ *             which selects which pipeline latency the predicted onset uses.
+ *             Reserved: `mod=` is NEVER stored as an ordinary kv pair.
+ */
+export const MARKER_LABEL_RE = /^[A-Z0-9_]{1,31}$/;
+export const MARKER_MAX_KV = 4;
+export const MARKER_MODALITIES = ['audio', 'led', 'both', 'none'];
+
+export function markerRow(opts) {
+    opts = opts || {};
+    return {
+        kind: 'marker',
+        time: opts.time || 0,
+        label: opts.label || '',
+        kv: Array.isArray(opts.kv) ? opts.kv : [],
+        modality: (opts.modality === undefined) ? null : opts.modality,
+        inlineComment: opts.inlineComment || '',
+    };
+}
+
 export function ledRow(opts) {
     opts = opts || {};
     return {

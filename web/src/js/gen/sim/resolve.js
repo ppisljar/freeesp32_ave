@@ -275,7 +275,7 @@ function byTime(rows) {
  *
  * CHANNEL DEFAULT IS 0, NOT 1. config_parser.c:1816 reads
  * `int req = (token_count >= 6 && !tok_is_dash(tokens[5])) ? atoi(tokens[5]) : 0`
- * and clamps out-of-range to 0 with a warning. gen/synth.js's
+ * and clamps out-of-range to 0 with a warning. the pre-2026-10 bounce engine's
  * extractAudioChannels used `(row.channel == null) ? 1 : row.channel`, which
  * put channel-less `A` lines in a different bucket from the device's — so a
  * session mixing bare `A` lines with explicit `... 0` lines was grouped one way
@@ -436,13 +436,72 @@ export function stateAt(entries, tMs, fields) {
     return stateAtIndex(entries, activeIndexAt(entries, tMs), tMs, fields);
 }
 
+/*
+ * Resolve the `M` marker rows, inferring each one's modality from its batch.
+ *
+ * The author usually does not say which pipeline a marker is marking, and the
+ * device does not make them: `modality` is left at -1 and INFERRED at dispatch
+ * from what else shares the timestamp (config_parser.c:2206) — a marker sitting
+ * on the same millisecond as an LED row is marking an LED event. An explicit
+ * `mod=` overrides it.
+ *
+ * That matters because the modality is what selects the PREDICTED ONSET lag,
+ * and the three timestamps a marker carries must never be conflated. Only two
+ * are knowable without the device: `timeMs` (scheduled) and the predicted
+ * onset built from it. The dispatched time depends on when the timeline task
+ * actually ran, so it is deliberately absent here rather than guessed.
+ *
+ * Returns [{ row, timeMs, label, kv, modality, inferred, onsetMs, lagUs }].
+ */
+export function resolveMarkers(doc, lagFn) {
+    const rows = (doc && doc.rows) || [];
+    // What each timestamp is driving, so an unstated modality can be inferred.
+    const batch = new Map();
+    for (const r of rows) {
+        if (r.kind !== 'led' && r.kind !== 'audio') continue;
+        const t = r.time || 0;
+        const b = batch.get(t) || { led: false, audio: false };
+        if (r.kind === 'led') b.led = true; else b.audio = true;
+        batch.set(t, b);
+    }
+
+    const out = [];
+    for (const r of rows) {
+        if (r.kind !== 'marker') continue;
+        const t = r.time || 0;
+        let modality = r.modality;
+        const inferred = !modality;
+        if (inferred) {
+            const b = batch.get(t) || { led: false, audio: false };
+            modality = (b.led && b.audio) ? 'both'
+                     : b.led ? 'led'
+                     : b.audio ? 'audio'
+                     : 'none';
+        }
+        const lagUs = lagFn ? lagFn(modality) : 0;
+        out.push({
+            row: r,
+            timeMs: t,
+            label: r.label,
+            kv: r.kv || [],
+            modality,
+            inferred,
+            lagUs,
+            onsetMs: t + lagUs / 1000,
+        });
+    }
+    out.sort((a, b) => a.timeMs - b.timeMs);
+    return out;
+}
+
 // Total session length: the last timestamp of anything on the timeline. Speech
 // and BG rows carry their own duration, which only the bounce knows about, so
 // this is the TIMELINE end rather than the audible end.
 export function sessionEndMs(doc) {
     let end = 0;
     for (const row of (doc && doc.rows) || []) {
-        if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'speech') {
+        if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'speech' ||
+            row.kind === 'marker') {
             if ((row.time || 0) > end) end = row.time || 0;
         }
     }

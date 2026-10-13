@@ -1151,9 +1151,11 @@ textarea {
 .sim-finding-msg { flex: 1 1 20rem; min-width: 0; }
 .sim-finding-line {
     flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px;
-    padding: 1px 7px; border-radius: 999px;
-    background: var(--panel-3); color: var(--fg-mut);
+    padding: 1px 7px; border-radius: 999px; margin: 0; min-height: 0;
+    background: var(--panel-3); color: var(--fg-mut); border: 1px solid transparent;
+    cursor: pointer;
 }
+.sim-finding-line:hover { background: var(--panel-2); color: var(--fg); border-color: var(--edge-2); }
 .sim-jump {
     flex: 0 0 auto; margin: 0; padding: 2px 9px; min-height: 0;
     font-size: 11px; font-family: var(--font-mono);
@@ -1220,3 +1222,24 @@ textarea {
     .sim-mode { margin-left: 0; flex: 1 1 100%; }
 }
 .sim-audionote { flex: 1 1 100%; font-size: 11.5px; color: var(--warn); }
+
+/* Simulate: peak meter, envelope panel, sub-headings */
+.sim-peakwrap { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.sim-peakbar {
+    display: block; width: 5.5rem; height: 7px; border-radius: 999px;
+    background: var(--panel-3); overflow: hidden;
+}
+.sim-peakbar > i { display: block; height: 100%; width: 0; background: var(--ok); }
+.sim-peakwrap.clip .sim-peakbar > i { background: var(--err); }
+.sim-peaklbl {
+    font-family: var(--font-mono); font-size: 11px; color: var(--fg-mut);
+    min-width: 4.6rem;
+}
+.sim-peakwrap.clip .sim-peaklbl { color: var(--err); font-weight: 650; }
+.sim-subhead {
+    font-size: 11px; font-weight: 650; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--fg-dim); margin: 10px 0 4px;
+}
+.sim-env { margin-bottom: 2px; }
+.gen-demo { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-mut); }
+.gen-demo select { max-width: 16rem; }

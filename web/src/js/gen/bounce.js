@@ -6,9 +6,9 @@
 
 import * as store from './bgstore.js';
 import { synthSpeech } from './tts.js';
-import {
-    extractAudioChannels, renderSession, zeroBuffers, mixInto, clampBuffers,
-} from './synth.js';
+import { zeroBuffers, mixInto, clampBuffers } from './mix.js';
+import { resolveAudioChannels } from './sim/resolve.js';
+import { renderSessionDevice, sessionBeatJitter } from './sim/audio.js';
 import { encodeWav16, wavBlob, decodeFile } from './bgaudio.js';
 import { pushBg } from './transport.js';
 import { SAMPLE_RATE } from './model.js';
@@ -95,7 +95,7 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
     //    the last "S" line gets cut and reads as "never spoken". 2 s of trailing
     //    silence guarantees the final line plays in full with margin.
     const SPEECH_TAIL_MS = 2000;
-    const { channels, maxTimeMs } = extractAudioChannels(doc);
+    const { channels, maxTimeMs } = resolveAudioChannels(doc);
     let totalMs = (scope === 'all') ? maxTimeMs + 2000 : 0;
     for (const sp of speeches) {
         const endMs = ((sp.offset + sp.buf.length) / SAMPLE_RATE) * 1000 + SPEECH_TAIL_MS;
@@ -106,9 +106,19 @@ export async function bounceSession(doc, { scope = 'all', engine = 'puter', onPr
     await tick(); // let any status UI paint before the synchronous render
 
     // 4. Base: A entrainment mix (scope 'all') or silence.
+    //
+    // Rendered by sim/audio.js, the same engine the Simulate view plays, so a
+    // bounce and a preview cannot disagree. Note the LEVEL: that renderer uses
+    // the device's fixed 1/16 mix divisor, so a bounced session is ~18-24 dB
+    // quieter than the old one — and correct. A single centre-panned tone at
+    // vol 100 peaks at -27.1 dBFS, exactly where it measures on the bench.
     let left, right;
-    if (scope === 'all') { const r = renderSession(channels, { totalMs }); left = r.left; right = r.right; }
-    else { const z = zeroBuffers(totalMs); left = z.left; right = z.right; }
+    if (scope === 'all') {
+        const r = renderSessionDevice(channels, { totalMs, beatJitter: sessionBeatJitter(doc) });
+        left = r.left; right = r.right;
+    } else {
+        const z = zeroBuffers(totalMs); left = z.left; right = z.right;
+    }
 
     // 5. Mix BG clip (looped, equal-power panned).
     if (bgBuf) {
