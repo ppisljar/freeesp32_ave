@@ -1088,49 +1088,32 @@ static esp_err_t reports_get_handler(httpd_req_t *req)    { return store_get(req
 static esp_err_t reports_put_handler(httpd_req_t *req)    { return store_put(req, "/api/reports/"); }
 static esp_err_t reports_delete_handler(httpd_req_t *req) { return store_delete(req, "/api/reports/"); }
 
-/* Response scratch in PSRAM, NOT internal DRAM.
+/* Scratch for a JSON response body.
  *
- * sdkconfig sets CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384, so a plain
- * malloc() under 16 KB is forced into internal DRAM — and this build runs with
- * ~13 KB free there and a ~7.7 KB largest contiguous block. A plain
- * malloc(8192) for the /api/state body therefore cannot reliably succeed, which
- * is exactly how that endpoint failed: HTTP 200 with an EMPTY BODY, sometimes,
- * depending on fragmentation.
+ * INTERNAL DRAM, deliberately, after trying the opposite. PSRAM looks like the
+ * obvious home — this build has only ~13 KB of free internal DRAM with a
+ * ~7.7 KB largest block, and CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384 forces
+ * every sub-16 KB malloc there, so /api/state's 8 KB body is a genuinely
+ * awkward allocation.
  *
- * Safe for a response buffer because httpd memcpy's it into lwip pbufs rather
- * than DMA-ing from it. */
+ * But a response buffer cannot live in PSRAM on this stack. Handing one to
+ * httpd_resp_send() delivers the bytes and then never TERMINATES the response:
+ * curl reports size_download=0, writes the full body to its output file, and
+ * hangs until it times out, leaving the connection open. WiFi TX needs
+ * DMA-reachable memory, which PSRAM is not. Staging the copy out through a
+ * small internal chunk via httpd_resp_send_chunk() fixed the small endpoints
+ * (/api/settings, /api/markers) but still stalled the large ones.
+ *
+ * Measured, on this hardware:
+ *   PSRAM buffer        /api/state 0 B / 12 s timeout, /api/logs 0 B / 12 s
+ *   internal (this)     /api/state 5671 B / 0.04 s,    /api/logs 8765 B / 0.03 s
+ *
+ * So the big marker buffers go to PSRAM (see marker.c — task-touched data that
+ * is never handed to lwip, which is where the ~23 KB saving actually lives) and
+ * response bodies stay here. Keep it that way unless you re-measure. */
 static void *resp_buf_alloc(size_t n)
 {
-    void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    return p ? p : malloc(n);   /* boards without PSRAM keep the old behaviour */
-}
-
-/* Send a body that lives in PSRAM.
- *
- * httpd_resp_send() straight from a PSRAM buffer does NOT work here: the bytes
- * arrive, but the response is never terminated. curl reports size_download=0,
- * writes the full body to its output file anyway, and then sits until it times
- * out — i.e. every endpoint looked "empty" while actually delivering its
- * content and leaking an open connection.
- *
- * So stage it: the JSON is BUILT in PSRAM (which is the point — a 4-8 KB
- * internal allocation cannot reliably succeed against this build's ~7.7 KB
- * largest free block), then copied out in small internal-DRAM chunks that lwip
- * is happy to send. 512 bytes of stack, and HTTP response speed is not
- * critical here. */
-static esp_err_t send_body_psram(httpd_req_t *req, const char *body, size_t len)
-{
-    char chunk[512];
-    size_t off = 0;
-    while (off < len) {
-        size_t take = len - off;
-        if (take > sizeof(chunk)) take = sizeof(chunk);
-        memcpy(chunk, body + off, take);
-        esp_err_t e = httpd_resp_send_chunk(req, chunk, take);
-        if (e != ESP_OK) return e;
-        off += take;
-    }
-    return httpd_resp_send_chunk(req, NULL, 0);   /* terminate */
+    return malloc(n);
 }
 
 /* Send the settings JSON.
@@ -1166,7 +1149,7 @@ static esp_err_t send_settings_json(httpd_req_t *req, bool on_fail_ok)
         }
     } else {
         httpd_resp_set_type(req, "application/json");
-        r = send_body_psram(req, buf, (size_t)n);
+        r = httpd_resp_send(req, buf, n);
     }
     free(buf);
     return r;
@@ -1282,7 +1265,7 @@ static esp_err_t markers_handler(httpd_req_t *req)
     o += snprintf(buf + o, 4096 - o, "]}");
 
     httpd_resp_set_type(req, "application/json");
-    esp_err_t r = send_body_psram(req, buf, (size_t)o);
+    esp_err_t r = httpd_resp_send(req, buf, o);
     free(buf);
     return r;
 }
@@ -2816,7 +2799,7 @@ static esp_err_t state_handler(httpd_req_t *req)
     #undef APPEND
 
     httpd_resp_set_type(req, "application/json");
-    esp_err_t sr = send_body_psram(req, buf, (size_t)(p - buf));
+    esp_err_t sr = httpd_resp_send(req, buf, p - buf);
     free(buf);
     return sr;
 

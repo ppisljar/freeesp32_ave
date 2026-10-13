@@ -22,6 +22,7 @@
 #include "esp_heap_caps.h"   /* MALLOC_CAP_SPIRAM */
 #include "driver/gpio.h"
 #include <sys/stat.h>
+#include <unistd.h>
 
 #if CONFIG_BG_SDCARD_ENABLED
 #include "sdcard.h"
@@ -275,10 +276,18 @@ static void sd_sink_write(sink_state_t *s, const char *json, int len)
         s_stats.sink_errors++;
         return;
     }
-    /* Flush every record. A session is long and a crash mid-run is exactly when
-     * the log matters most; the write rate is a handful of records per minute,
-     * so there is nothing to gain by buffering. */
+    /* Flush AND fsync every record. A session is long and a crash mid-run is
+     * exactly when the log matters most; the write rate is a handful of records
+     * per minute, so there is nothing to gain by buffering.
+     *
+     * fflush alone is NOT enough on FATFS: it pushes the libc buffer down, but
+     * the directory entry — and therefore the file's SIZE — is only committed on
+     * close or fsync. A log written with fflush only reads back as a 0-byte file
+     * until the session ends, which is precisely the case the per-record flush
+     * exists to cover. Measured: session-001.jsonl was 200-but-empty over
+     * /api/sd for the whole run. */
     fflush(s->fp);
+    fsync(fileno(s->fp));
 }
 
 /* ------------------------------------------------------------- flusher ------ */
