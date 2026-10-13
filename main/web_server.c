@@ -10,7 +10,8 @@
 #include "wav_parser.h"          // POST /api/bg-stream — parse browser-sent WAV header
 #include "diagnostics.h"         // GET /api/logs, /api/coredump, reset reason in /api/state
 #include "esp_heap_caps.h"       // heap_caps_get_free_size (PSRAM) for /api/state diag
-#include "settings.h"            // runtime device settings (GET/POST /api/settings)
+#include "settings.h"           // runtime device settings (GET/POST /api/settings)
+#include "marker.h"             // stimulus-marker bus (sinks live in settings)
 #include "log_ctrl.h"            // runtime categorized logging (GET/POST /api/loglevels)
 #include "isr_profiling.h"       // g_isr_profiles for GET /api/isrprofile
 #include "audio_test.h"          // audio_test_get_stats for GET /api/audiostats
@@ -110,6 +111,7 @@ static esp_err_t tts_handler(httpd_req_t *req);         // thin async entry
 static esp_err_t tts_work(httpd_req_t *req);            // real body (worker task)
 #endif
 static esp_err_t state_handler(httpd_req_t *req);
+static esp_err_t markers_handler(httpd_req_t *req);
 static esp_err_t report_handler(httpd_req_t *req);
 static esp_err_t settings_get_handler(httpd_req_t *req);
 static esp_err_t settings_post_handler(httpd_req_t *req);
@@ -468,6 +470,14 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &state_uri);
+
+    httpd_uri_t markers_uri = {
+        .uri = "/api/markers",
+        .method = HTTP_GET,
+        .handler = markers_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &markers_uri);
 
     httpd_uri_t logs_uri = {
         .uri = "/api/logs",
@@ -1133,6 +1143,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    /* Marker sinks are re-armed immediately: a GPIO pin has to be configured,
+     * a UDP host resolved and a socket opened, and none of that should wait for
+     * a reboot when the rest of the page's settings take effect live. Also
+     * covers the RESET path, where every sink goes back to disabled and any
+     * open socket/file must actually be released. */
+    marker_reconfigure();
+
     char buf[1024];
     int n = settings_to_json(buf, sizeof(buf));
     httpd_resp_set_type(req, "application/json");
@@ -1144,6 +1161,64 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// GET /api/markers — the recent marker tail, for the UI.
+//
+// Returns all THREE timestamps per record, deliberately. A UI (or a person
+// eyeballing it) that only sees one number cannot tell a late dispatch from a
+// late stimulus, which is the entire distinction this feature exists to
+// preserve. `t_onset_pred_us` is named "pred" so it cannot be mistaken for a
+// measured onset.
+static esp_err_t markers_handler(httpd_req_t *req)
+{
+    marker_record_t recs[12];
+    size_t n = marker_get_recent(recs, sizeof(recs) / sizeof(recs[0]));
+
+    marker_stats_t st;
+    marker_get_stats(&st);
+
+    char *buf = malloc(4096);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    int o = 0;
+    o += snprintf(buf + o, 4096 - o,
+                  "{\"session_open\":%s,\"emitted\":%u,\"dropped\":%u,"
+                  "\"sink_errors\":%u,\"audio_lag_us\":%lld,\"led_lag_us\":%lld,"
+                  "\"onset_is_predicted\":true,\"recent\":[",
+                  st.session_open ? "true" : "false",
+                  (unsigned)st.emitted, (unsigned)st.dropped, (unsigned)st.sink_errors,
+                  (long long)marker_pipeline_lag_us(MARKER_MODALITY_AUDIO),
+                  (long long)marker_pipeline_lag_us(MARKER_MODALITY_LED));
+
+    for (size_t i = 0; i < n && o < 3800; i++) {
+        o += snprintf(buf + o, 4096 - o,
+                      "%s{\"seq\":%u,\"label\":\"%s\",\"t_sched_us\":%lld,"
+                      "\"t_disp_us\":%lld,\"t_onset_pred_us\":%lld,\"modality\":\"%s\"",
+                      i ? "," : "", (unsigned)recs[i].seq, recs[i].label,
+                      (long long)recs[i].t_sched_us, (long long)recs[i].t_disp_us,
+                      (long long)recs[i].t_onset_pred_us,
+                      recs[i].modality == MARKER_MODALITY_AUDIO ? "audio" :
+                      recs[i].modality == MARKER_MODALITY_LED   ? "led"   :
+                      recs[i].modality == MARKER_MODALITY_BOTH  ? "both"  : "none");
+        if (recs[i].kv_count) {
+            o += snprintf(buf + o, 4096 - o, ",\"kv\":{");
+            for (uint8_t k = 0; k < recs[i].kv_count && o < 3900; k++) {
+                o += snprintf(buf + o, 4096 - o, "%s\"%s\":\"%s\"",
+                              k ? "," : "", recs[i].kv[k].key, recs[i].kv[k].val);
+            }
+            o += snprintf(buf + o, 4096 - o, "}");
+        }
+        o += snprintf(buf + o, 4096 - o, "}");
+    }
+    o += snprintf(buf + o, 4096 - o, "]}");
+
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t r = httpd_resp_send(req, buf, o);
+    free(buf);
+    return r;
+}
+
 // POST /api/settings/reset — erase the settings namespace, reseed from the
 // compile-time CONFIG_* defaults, and return the fresh settings JSON.
 static esp_err_t settings_reset_handler(httpd_req_t *req)
@@ -1153,6 +1228,13 @@ static esp_err_t settings_reset_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "reset failed");
         return ESP_FAIL;
     }
+    /* Marker sinks are re-armed immediately: a GPIO pin has to be configured,
+     * a UDP host resolved and a socket opened, and none of that should wait for
+     * a reboot when the rest of the page's settings take effect live. Also
+     * covers the RESET path, where every sink goes back to disabled and any
+     * open socket/file must actually be released. */
+    marker_reconfigure();
+
     char buf[1024];
     int n = settings_to_json(buf, sizeof(buf));
     httpd_resp_set_type(req, "application/json");
@@ -2632,6 +2714,19 @@ static esp_err_t state_handler(httpd_req_t *req)
     APPEND("\"bg\":{\"active\":%s},", bg_active ? "true" : "false");
     APPEND("\"timeline\":{\"running\":%s,\"position_ms\":%u},",
            tl_running ? "true" : "false", (unsigned)tl_pos);
+
+    /* Marker counters. `dropped` is the one that matters: a marker lost to ring
+     * overflow leaves a gap in someone's recording, and a gap nobody is told
+     * about is worse than no log at all. */
+    {
+        marker_stats_t mk;
+        marker_get_stats(&mk);
+        APPEND("\"markers\":{\"session_open\":%s,\"emitted\":%u,\"dropped\":%u,"
+               "\"sink_errors\":%u,\"max_sched_disp_delta_us\":%lld},",
+               mk.session_open ? "true" : "false",
+               (unsigned)mk.emitted, (unsigned)mk.dropped, (unsigned)mk.sink_errors,
+               (long long)mk.max_sched_disp_delta_us);
+    }
 
     /* Diagnostics: why the last boot happened, liveness, and whether a crash
      * core dump is waiting to be retrieved (see diagnostics.c / GET /api/logs). */

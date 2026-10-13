@@ -24,6 +24,7 @@
 #include "speech_player.h"
 #endif
 #include "settings.h"
+#include "marker.h"
 #include "log_ctrl.h"
 
 static const char* TAG = "main";
@@ -471,6 +472,18 @@ void app_main(void)
     // ------------------------------------------------------------------
     // Post-soak: bring up WiFi, config parser, and web server now.
     // ------------------------------------------------------------------
+    /* Marker bus before the web server, so a settings POST always has
+     * something to reconfigure. After WiFi would be tidier for the UDP sinks,
+     * but arming is retried on every reconfigure and on every session start, so
+     * a sink that could not resolve its host yet is not lost. */
+    ret = marker_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "marker bus init failed: %s", esp_err_to_name(ret));
+        diagnostics_health_set("marker", false, esp_err_to_name(ret));
+    } else {
+        diagnostics_health_set("marker", true, NULL);
+    }
+
     ret = wifi_manager_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize WiFi manager: %s", esp_err_to_name(ret));

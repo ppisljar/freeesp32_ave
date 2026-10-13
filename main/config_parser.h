@@ -22,8 +22,32 @@ typedef enum {
     CONFIG_ENTRY_LED = 0,
     CONFIG_ENTRY_AUDIO,
     CONFIG_ENTRY_BG,         // Session-level background audio descriptor (not a timeline entry)
-    CONFIG_ENTRY_SPEECH      // `S` row: play a pre-rendered phrase from the SD card
+    CONFIG_ENTRY_SPEECH,     // `S` row: play a pre-rendered phrase from the SD card
+    CONFIG_ENTRY_MARKER      // `M` row: announce an experiment event to the marker sinks
 } config_entry_type_t;
+
+/**
+ * @brief Stimulus marker entry (`M <time> <LABEL> [key=value ...]`).
+ *
+ * Produces no sound and no light — it exists only to tell an external recorder
+ * (an EEG, say) that something happened at a known instant. See marker.h for
+ * why a marker carries three different timestamps.
+ *
+ * `modality` selects which pipeline latency the PREDICTED onset is built from.
+ * Left at MARKER_MODALITY_NONE by the parser, it is INFERRED at dispatch from
+ * what else is in the same batch — a marker sitting on the same timestamp as an
+ * LED row is marking an LED event — because making every author reason about
+ * DMA lag would be a bad trade. An explicit `mod=led|audio|both|none` key
+ * overrides the inference.
+ */
+typedef struct {
+    uint32_t time_ms;
+    char     label[32];                 // [A-Z0-9_]
+    char     keys[4][16];
+    char     vals[4][32];
+    uint8_t  kv_count;
+    int8_t   modality;                  // marker_modality_t; -1 = infer from the batch
+} config_marker_entry_t;
 
 /**
  * @brief Speech timeline entry (`S <time> <voice> <volume> "<text>"`).
@@ -228,6 +252,7 @@ typedef struct {
         config_led_entry_t led;
         config_audio_entry_t audio;
         config_speech_entry_t speech;
+        config_marker_entry_t marker;
     } data;
 } config_entry_t;
 

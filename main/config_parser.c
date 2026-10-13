@@ -3,6 +3,8 @@
 #include "led_strip.h"
 #include "led_matrix_example.h"
 #include "mod_engine.h"
+#include "marker.h"
+#include "mbedtls/sha256.h"
 #include "audio_config.h"
 #include "timing_engine.h"
 #include "lock_free_comm.h"
@@ -42,6 +44,47 @@ static bool timeline_loop = false;
 // config_parser_execute_timeline() call (including loop restarts).
 static uint64_t transport_origin_us = 0;
 
+/* Dispatch stamp and inferred modality for the batch currently executing.
+ *
+ * A marker must share its dispatch reference with the audio/LED entries it sits
+ * beside, not with the instant pass 3 happens to reach it — so it is stamped
+ * with the BATCH's start time. Held as module state rather than threaded
+ * through execute_timeline_entry_ctx's six call sites, the same way
+ * transport_origin_us already is. */
+static int64_t s_batch_disp_mono_us = 0;
+static int8_t  s_batch_modality     = 0;   /* marker_modality_t */
+
+/* SHA-256 of the .ledc source, hex, for the marker log's provenance header.
+ * Without it a log is a list of times with no way to prove which file produced
+ * them — and "I think it was that version of the session" is not a basis for a
+ * reproducible experiment. */
+static void session_sha256_hex(const char *src, char out[65])
+{
+    out[0] = '\0';
+    if (!src) return;
+    unsigned char dig[32];
+    if (mbedtls_sha256((const unsigned char *)src, strlen(src), dig, 0) != 0) return;
+    static const char hexd[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) {
+        out[i * 2]     = hexd[(dig[i] >> 4) & 0xF];
+        out[i * 2 + 1] = hexd[dig[i] & 0xF];
+    }
+    out[64] = '\0';
+}
+
+/* Does this timeline carry its own SESSION_START / SESSION_END markers? If not
+ * we emit them, so a recording always has its boundaries even when the author
+ * did not think to write them. */
+static bool timeline_has_marker(const config_timeline_t *tl, const char *label)
+{
+    if (!tl) return false;
+    for (size_t i = 0; i < tl->count; i++) {
+        if (tl->entries[i].type == CONFIG_ENTRY_MARKER &&
+            !strcmp(tl->entries[i].data.marker.label, label)) return true;
+    }
+    return false;
+}
+
 // Diagnostic-only mirror of transport_origin_us. Set whenever a timeline
 // starts; NOT reset by stop_timeline so /api/report can still correlate
 // button-press timestamps to the just-finished session. Overwritten by the
@@ -63,11 +106,85 @@ static inline uint32_t entry_time_ms(const config_entry_t *e)
         case CONFIG_ENTRY_LED:    return e->data.led.time_ms;
         case CONFIG_ENTRY_AUDIO:  return e->data.audio.time_ms;
         case CONFIG_ENTRY_SPEECH: return e->data.speech.time_ms;
+        case CONFIG_ENTRY_MARKER: return e->data.marker.time_ms;
         default:                  return 0u;
     }
 }
 
 static esp_err_t parse_led_line(const char *tokens[], size_t token_count, config_led_entry_t *led_entry);
+
+/* `M <time_ms> <LABEL> [key=value ...]` — a stimulus marker.
+ *
+ * Deliberately strict about the label: [A-Z0-9_] only, because these strings
+ * end up as event names in someone's analysis script, and a stray space or
+ * quote there is a debugging session in a language we don't control. An
+ * out-of-charset label is rejected rather than sanitised, so the author finds
+ * out at upload time instead of discovering a renamed event in their data.
+ *
+ * `mod=` is reserved: it sets the modality used for the onset PREDICTION
+ * instead of inferring it from the batch. It is not stored as a kv pair. */
+static esp_err_t parse_marker_line(const char *tokens[], size_t token_count,
+                                   config_marker_entry_t *m)
+{
+    if (token_count < 2) {
+        ESP_LOGE(TAG, "M line needs at least '<time> <LABEL>'");
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(m, 0, sizeof(*m));
+    m->modality = -1;                     /* infer at dispatch */
+    m->time_ms  = (uint32_t)atol(tokens[0]);
+
+    const char *label = tokens[1];
+    size_t ln = strlen(label);
+    if (ln == 0 || ln >= sizeof(m->label)) {
+        ESP_LOGE(TAG, "M line: label must be 1..%d chars", (int)sizeof(m->label) - 1);
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < ln; i++) {
+        char c = label[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+            ESP_LOGE(TAG, "M line: label '%s' must be [A-Z0-9_] only", label);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    strlcpy(m->label, label, sizeof(m->label));
+
+    for (size_t t = 2; t < token_count; t++) {
+        const char *eq = strchr(tokens[t], '=');
+        if (!eq || eq == tokens[t]) {
+            ESP_LOGW(TAG, "M line %s: ignoring '%s' (expected key=value)",
+                     m->label, tokens[t]);
+            continue;
+        }
+        size_t klen = (size_t)(eq - tokens[t]);
+        char key[16];
+        if (klen >= sizeof(key)) {
+            ESP_LOGW(TAG, "M line %s: key too long in '%s'; ignored", m->label, tokens[t]);
+            continue;
+        }
+        memcpy(key, tokens[t], klen);
+        key[klen] = '\0';
+
+        if (!strcmp(key, "mod")) {
+            const char *v = eq + 1;
+            if      (!strcmp(v, "audio")) m->modality = 1;   /* MARKER_MODALITY_AUDIO */
+            else if (!strcmp(v, "led"))   m->modality = 2;
+            else if (!strcmp(v, "both"))  m->modality = 3;
+            else if (!strcmp(v, "none"))  m->modality = 0;
+            else ESP_LOGW(TAG, "M line %s: mod='%s' unknown; inferring", m->label, v);
+            continue;                     /* reserved: never stored as a kv */
+        }
+        if (m->kv_count >= 4) {
+            ESP_LOGW(TAG, "M line %s: more than 4 key=value pairs; '%s' ignored",
+                     m->label, tokens[t]);
+            continue;
+        }
+        strlcpy(m->keys[m->kv_count], key, sizeof(m->keys[0]));
+        strlcpy(m->vals[m->kv_count], eq + 1, sizeof(m->vals[0]));
+        m->kv_count++;
+    }
+    return ESP_OK;
+}
 static esp_err_t parse_audio_line(const char *tokens[], size_t token_count, config_audio_entry_t *audio_entry);
 static esp_err_t parse_speech_line(const char *line, config_speech_entry_t *sp);
 static esp_err_t parse_bg_line(const char *tokens[], size_t token_count, config_bg_entry_t *bg_entry);
@@ -670,6 +787,24 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
     timeline_running = true;
     timeline_loop = loop;
 
+    /* ---- marker logging session -------------------------------------------
+     * Opened with the SAME origin the LED anchors use, so every marker
+     * timestamp and every stimulus timestamp are measured from one instant. */
+    {
+        char sha[65];
+        session_sha256_hex(persistent_timeline.source_content, sha);
+        marker_session_begin("session", sha, (int64_t)transport_origin_us);
+
+        /* Implicit boundary marker. A recording with no start event is one the
+         * analyst has to guess the beginning of. */
+        if (!timeline_has_marker(&persistent_timeline, "SESSION_START")) {
+            s_batch_disp_mono_us = (int64_t)transport_origin_us;
+            s_batch_modality     = MARKER_MODALITY_NONE;
+            marker_emit("SESSION_START", NULL, 0, MARKER_MODALITY_NONE, 0,
+                        (int64_t)transport_origin_us);
+        }
+    }
+
     // ---- BG pre-roll (Plan 006 Step 7) ----------------------------------------
     // Start the background audio stream BEFORE dispatching the t=0 batch so that
     // the BG producer task has a head-start filling the ring buffer.  This means
@@ -906,6 +1041,14 @@ esp_err_t config_parser_stop_timeline(void)
     // Reset at stop AND at start (see execute_timeline): stop alone is not
     // enough because a session that simply runs out of entries ends via the
     // timeline task, not through here.
+    /* Close the marker log before the state reset, so its footer counters
+     * describe the session that just ran. */
+    if (!timeline_has_marker(&persistent_timeline, "SESSION_END")) {
+        marker_emit("SESSION_END", NULL, 0, MARKER_MODALITY_NONE, 0,
+                    esp_timer_get_time());
+    }
+    marker_session_end();
+
     audio_generator_reset_session_state();
     led_matrix_reset_session_state();
 
@@ -1399,6 +1542,12 @@ static esp_err_t parse_line(const char *line, size_t line_number, config_entry_t
     if (tokens[0][0] == 'A' || tokens[0][0] == 'a') {
         entry->type = CONFIG_ENTRY_AUDIO;
         return parse_audio_line(tokens + 1, token_count - 1, &entry->data.audio); // Skip 'A'
+    } else if ((tokens[0][0] == 'M' || tokens[0][0] == 'm') && tokens[0][1] == '\0') {
+        // `M` row — stimulus marker. Tested before the LED fallback for the
+        // same reason as `S`: anything not matched here is parsed as an LED
+        // line, which would silently mangle it into a light command.
+        entry->type = CONFIG_ENTRY_MARKER;
+        return parse_marker_line(tokens + 1, token_count - 1, &entry->data.marker);
     } else if ((tokens[0][0] == 'S' || tokens[0][0] == 's') && tokens[0][1] == '\0') {
         // `S` row — speech. MUST be tested before the LED fallback below:
         // historically anything that was not 'A' fell through to the LED
@@ -1975,6 +2124,16 @@ static void timeline_execution_task(void *pvParameters)
                 timeline_running = false;
                 ESP_LOGI(TAG, "Timeline execution completed");
 
+                /* The session ended HERE, not through stop_timeline — which is
+                 * why the marker session is closed in both places. */
+                if (!timeline_has_marker(current_timeline, "SESSION_END")) {
+                    marker_emit("SESSION_END", NULL, 0, MARKER_MODALITY_NONE,
+                                (int64_t)entry_time_ms(
+                                    &current_timeline->entries[current_timeline->count - 1]) * 1000,
+                                esp_timer_get_time());
+                }
+                marker_session_end();
+
                 // Send lock-free message for timeline completion
                 lock_free_message_t complete_msg = {
                     .type = MSG_TYPE_TIMELINE_EVENT,
@@ -2001,9 +2160,11 @@ static void timeline_execution_task(void *pvParameters)
             continue;
         }
 
-        uint32_t batch_timestamp = current_timeline->entries[current_entry_index].type == CONFIG_ENTRY_LED ?
-                                   current_timeline->entries[current_entry_index].data.led.time_ms :
-                                   current_timeline->entries[current_entry_index].data.audio.time_ms;
+        /* entry_time_ms(), not the led/audio union read this used to do: that
+         * only worked because time_ms happens to sit first in every entry
+         * struct, and a new entry type makes that luck load-bearing. */
+        uint32_t batch_timestamp =
+            entry_time_ms(&current_timeline->entries[current_entry_index]);
 
         // Execute ALL entries at this timestamp in one batch
         size_t batch_start_index = current_entry_index;
@@ -2015,6 +2176,10 @@ static void timeline_execution_task(void *pvParameters)
         // Add timing measurement for batch execution
         uint64_t batch_start_time = esp_timer_get_time();
 
+        /* Markers in this batch are stamped with THIS instant, so a marker and
+         * the stimulus it announces carry the same dispatch reference. */
+        s_batch_disp_mono_us = (int64_t)batch_start_time;
+
         // Pre-scan to locate the contiguous slice that belongs to this batch.
         // batch_end is one past the last entry with time == batch_timestamp
         // (capped at MAX_BATCH_SIZE entries for safety).
@@ -2023,11 +2188,25 @@ static void timeline_execution_task(void *pvParameters)
         for (size_t i = batch_start_index;
              i < current_timeline->count && (i - batch_start_index) < MAX_BATCH_SIZE;
              i++) {
-            uint32_t entry_time = current_timeline->entries[i].type == CONFIG_ENTRY_LED ?
-                                  current_timeline->entries[i].data.led.time_ms :
-                                  current_timeline->entries[i].data.audio.time_ms;
+            uint32_t entry_time = entry_time_ms(&current_timeline->entries[i]);
             if (entry_time != batch_timestamp) break;
             batch_end_index = i + 1;
+        }
+
+        /* What is this batch actually driving? A marker in it is announcing
+         * that, so this is what its onset PREDICTION is built from — saving
+         * every session author from having to reason about DMA lag. An explicit
+         * `mod=` on the M line overrides it. */
+        {
+            bool has_audio = false, has_led = false;
+            for (size_t i = batch_start_index; i < batch_end_index; i++) {
+                if (current_timeline->entries[i].type == CONFIG_ENTRY_AUDIO) has_audio = true;
+                if (current_timeline->entries[i].type == CONFIG_ENTRY_LED)   has_led   = true;
+            }
+            s_batch_modality = (int8_t)((has_audio && has_led) ? MARKER_MODALITY_BOTH :
+                                        has_led               ? MARKER_MODALITY_LED  :
+                                        has_audio             ? MARKER_MODALITY_AUDIO :
+                                                                MARKER_MODALITY_NONE);
         }
 
         // Timeline task context — ESP_LOG safe. Greppable trace of the batch span.
@@ -2143,9 +2322,7 @@ static void timeline_execution_task(void *pvParameters)
             size_t next_index = current_entry_index + 1;
 
             while (next_index < current_timeline->count) {
-                next_time = current_timeline->entries[next_index].type == CONFIG_ENTRY_LED ?
-                           current_timeline->entries[next_index].data.led.time_ms :
-                           current_timeline->entries[next_index].data.audio.time_ms;
+                next_time = entry_time_ms(&current_timeline->entries[next_index]);
 
                 if (next_time > batch_timestamp) {
                     break; // Found next different timestamp
@@ -2375,6 +2552,28 @@ static esp_err_t execute_timeline_entry_ctx(const config_timeline_t *timeline,
         return ESP_OK;
     }
 #endif
+
+    // ------------------------------------------------------------------
+    // MARKER entry — announce the event and return. Produces no output of its
+    // own; the point is the timestamp. marker_emit() does no I/O (the GPIO
+    // sink arms a timer, everything else goes to a ring), so this is safe to
+    // call with audio_gen_mutex held.
+    // ------------------------------------------------------------------
+    if (entry->type == CONFIG_ENTRY_MARKER) {
+        const config_marker_entry_t *mk = &entry->data.marker;
+        marker_kv_t kv[MARKER_KV_MAX];
+        uint8_t n = mk->kv_count > MARKER_KV_MAX ? MARKER_KV_MAX : mk->kv_count;
+        for (uint8_t i = 0; i < n; i++) {
+            strlcpy(kv[i].key, mk->keys[i], sizeof(kv[i].key));
+            strlcpy(kv[i].val, mk->vals[i], sizeof(kv[i].val));
+        }
+        /* -1 means the author did not say, so use what the batch is driving. */
+        marker_modality_t mod = (mk->modality < 0)
+                                    ? (marker_modality_t)s_batch_modality
+                                    : (marker_modality_t)mk->modality;
+        return marker_emit(mk->label, kv, n, mod,
+                           (int64_t)mk->time_ms * 1000, s_batch_disp_mono_us);
+    }
 
     if (entry->type != CONFIG_ENTRY_AUDIO && entry->type != CONFIG_ENTRY_LED) {
         ESP_LOGE(TAG, "execute_timeline_entry_ctx: invalid type %d", entry->type);

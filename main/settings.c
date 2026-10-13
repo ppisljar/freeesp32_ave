@@ -33,6 +33,15 @@
 static const char *TAG = "settings";
 
 #define SETTINGS_VERSION   ((uint16_t)8)   // v8: marker_sinks[] added
+
+/* Oldest blob version this build can migrate from rather than discard.
+ *
+ * Versions from here up to SETTINGS_VERSION must be APPEND-ONLY changes to
+ * device_settings_t, so an older payload is a byte-exact prefix of the current
+ * struct. Raise this only if you break that rule — and read the migration
+ * branch in settings_init() first, because discarding a blob resets the WiFi
+ * credentials the device is reachable through. */
+#define SETTINGS_VERSION_MIGRATABLE_FROM ((uint16_t)7)
 #define SETTINGS_NS        "devcfg"
 #define SETTINGS_KEY       "blob"
 
@@ -583,18 +592,61 @@ esp_err_t settings_init(void)
     if (err == ESP_OK) {
         size_t needed = 0;
         err = nvs_get_blob(h, SETTINGS_KEY, NULL, &needed);
-        if (err == ESP_OK && needed == sizeof(uint16_t) + sizeof(device_settings_t)) {
+        /* Read ANY stored size, not just the current struct's: an older blob has
+         * to be MIGRATED, not discarded. See the comment on the migration
+         * branch below for why that distinction cost a device. */
+        if (err == ESP_OK && needed > sizeof(uint16_t)) {
             uint8_t *buf = malloc(needed);
             if (buf && nvs_get_blob(h, SETTINGS_KEY, buf, &needed) == ESP_OK) {
                 uint16_t ver = 0;
                 memcpy(&ver, buf, sizeof(ver));
-                if (ver == SETTINGS_VERSION) {
+                const size_t stored_payload = needed - sizeof(uint16_t);
+
+                if (ver == SETTINGS_VERSION && stored_payload == sizeof(device_settings_t)) {
                     memcpy(&s_settings, buf + sizeof(uint16_t), sizeof(device_settings_t));
                     loaded = true;
                     ESP_LOGI(TAG, "loaded settings blob (v%u)", (unsigned)ver);
+                } else if (ver >= SETTINGS_VERSION_MIGRATABLE_FROM &&
+                           ver <= SETTINGS_VERSION &&
+                           stored_payload <= sizeof(device_settings_t)) {
+                    /* ---- MIGRATE, do not discard -----------------------------
+                     * Every version in this range only ever APPENDED fields, so
+                     * the stored payload is a valid prefix of the current
+                     * struct: seed defaults (which fills the new tail), then
+                     * copy the old bytes over the part that existed.
+                     *
+                     * This branch exists because discarding was catastrophic.
+                     * The STA credentials live in this blob
+                     * (esp32_audioplayer.c: wifi_manager_connect(cfg->wifi_ssid,
+                     * ...)), so reseeding on a version bump reset them to
+                     * DEFAULT_WIFI_SSID — and since the only remote management
+                     * path IS WiFi, an OTA that bumped the version locked the
+                     * device out of the network and needed USB to recover. A
+                     * struct field is not worth a device.
+                     *
+                     * The append-only rule is therefore load-bearing: INSERTING
+                     * or REORDERING a field silently mis-migrates every value
+                     * after it. Append, and bump
+                     * SETTINGS_VERSION_MIGRATABLE_FROM if you ever must not. */
+                    settings_seed_defaults(&s_settings);
+                    memcpy(&s_settings, buf + sizeof(uint16_t), stored_payload);
+                    loaded = true;
+                    ESP_LOGW(TAG, "migrated settings v%u -> v%u (%u of %u bytes "
+                             "carried over; new fields seeded)",
+                             (unsigned)ver, (unsigned)SETTINGS_VERSION,
+                             (unsigned)stored_payload,
+                             (unsigned)sizeof(device_settings_t));
+                    /* Persist in the new shape so this runs once, not every boot. */
+                    if (settings_persist() != ESP_OK) {
+                        ESP_LOGW(TAG, "could not persist migrated settings");
+                    }
                 } else {
-                    ESP_LOGW(TAG, "settings version mismatch (stored %u != %u) — reseeding",
-                             (unsigned)ver, (unsigned)SETTINGS_VERSION);
+                    ESP_LOGW(TAG, "settings blob v%u (%u B payload) cannot be "
+                             "migrated to v%u (%u B) — reseeding; WIFI "
+                             "CREDENTIALS WILL RESET",
+                             (unsigned)ver, (unsigned)stored_payload,
+                             (unsigned)SETTINGS_VERSION,
+                             (unsigned)sizeof(device_settings_t));
                 }
             }
             free(buf);
