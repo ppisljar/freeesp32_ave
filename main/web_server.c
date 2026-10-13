@@ -112,6 +112,7 @@ static esp_err_t tts_work(httpd_req_t *req);            // real body (worker tas
 #endif
 static esp_err_t state_handler(httpd_req_t *req);
 static esp_err_t markers_handler(httpd_req_t *req);
+static esp_err_t clock_handler(httpd_req_t *req);
 static esp_err_t report_handler(httpd_req_t *req);
 static esp_err_t settings_get_handler(httpd_req_t *req);
 static esp_err_t settings_post_handler(httpd_req_t *req);
@@ -470,6 +471,14 @@ esp_err_t web_server_init(void)
         .user_ctx = NULL
     };
     httpd_register_uri_handler(g_server_state.server, &state_uri);
+
+    httpd_uri_t clock_uri = {
+        .uri = "/api/clock",
+        .method = HTTP_GET,
+        .handler = clock_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(g_server_state.server, &clock_uri);
 
     httpd_uri_t markers_uri = {
         .uri = "/api/markers",
@@ -1210,6 +1219,27 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     marker_reconfigure();
 
     return send_settings_json(req, true);
+}
+
+// GET /api/clock — the device's monotonic microsecond clock, and nothing else.
+//
+// Exists for the LSL bridge's offset estimation. That probe round-trips this
+// endpoint and takes the midpoint, so its accuracy is bounded by the ROUND TRIP
+// TIME: the bridge was probing /api/state, a ~5.6 KB response with a 44 ms
+// median RTT, which bounds the clock offset to about +/-22 ms — useless for
+// aligning an EEG. A ~40-byte reply makes the round trip a fraction of that.
+//
+// esp_timer_get_time(), not uptime_ms: the device has microsecond resolution
+// and the millisecond figure was throwing away three digits for nothing. This
+// is the SAME clock t_disp_mono_us is stamped from, which is what makes the two
+// comparable.
+static esp_err_t clock_handler(httpd_req_t *req)
+{
+    char buf[64];
+    int n = snprintf(buf, sizeof(buf), "{\"mono_us\":%lld}",
+                     (long long)esp_timer_get_time());
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, buf, n);
 }
 
 // GET /api/markers — the recent marker tail, for the UI.
