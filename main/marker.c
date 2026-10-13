@@ -15,6 +15,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"   /* xTaskCreateWithCaps */
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -322,7 +323,9 @@ static void marker_flusher(void *arg)
          * with timing requirements) never comes through here. */
         vTaskDelay(pdMS_TO_TICKS(did ? 1 : 20));
     }
-    vTaskDelete(NULL);
+    /* Matching deleter for xTaskCreateWithCaps — vTaskDelete would leak the
+     * PSRAM stack and TCB. */
+    vTaskDeleteWithCaps(NULL);
 }
 
 /* ------------------------------------------------------------- arm/disarm --- */
@@ -466,8 +469,27 @@ static esp_err_t ensure_flusher(void)
     s_run = true;
     /* Priority 3: above idle, well below the audio/LED real-time work. Markers
      * are sparse and latency-insensitive on this path — the GPIO sink, which
-     * is not latency-insensitive, never uses it. */
-    if (xTaskCreate(marker_flusher, "mk_flush", 3072, NULL, 3, &s_flusher) != pdPASS) {
+     * is not latency-insensitive, never uses it.
+     *
+     * STACK IN PSRAM (xTaskCreateWithCaps), because a plain xTaskCreate takes
+     * it from internal DRAM and this feature must not spend any. The failure it
+     * caused was not a shortage message, it was a BROKEN WEB SERVER:
+     *
+     *   - arming one record sink created this task, costing ~3 KB internal
+     *   - /api/state then could not get its 8 KB buffer from internal DRAM
+     *   - the unified heap silently fell back to PSRAM
+     *   - and httpd_resp_send() from PSRAM delivers the bytes but never
+     *     TERMINATES the response — HTTP 200, zero bytes, client hangs
+     *
+     * So /api/state and /api/logs died the moment anyone enabled a UDP or SD
+     * sink, and stayed dead because the task is never torn down. /api/version
+     * and /api/settings kept working, which made it look like a size limit.
+     *
+     * Measured by IP on a freshly booted device: baseline /api/state 5671 B in
+     * 0.030 s; immediately after POSTing a udp sink, 0 B and a 14 s timeout,
+     * four times running. */
+    if (xTaskCreateWithCaps(marker_flusher, "mk_flush", 3072, NULL, 3, &s_flusher,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(TAG, "flusher task create failed — record sinks will not write");
         s_run = false;
         s_flusher = NULL;

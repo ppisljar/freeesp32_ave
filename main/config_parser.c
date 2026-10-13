@@ -2372,6 +2372,23 @@ static void timeline_execution_task(void *pvParameters)
             // is over, but it does defeat the authored "alert end" intent.
             // avmeasure flags it as LEDC_LAST_ENTRY_CANCELLED.
             led_matrix_stop_flicker_masked(0xFF);
+
+            /* Close the marker log HERE too.
+             *
+             * There are two "timeline completed" sites in this task and the
+             * other one is the error path (current_entry_index past the end).
+             * This is the one a healthy session actually reaches, and hooking
+             * only the other left every log without its SESSION_END marker or
+             * its footer: /api/state reported session_open=true with
+             * timeline.running=false, and the counters that say whether any
+             * marker was DROPPED never reached the file. */
+            if (!timeline_has_marker(current_timeline, "SESSION_END")) {
+                marker_emit("SESSION_END", NULL, 0, MARKER_MODALITY_NONE,
+                            (int64_t)entry_time_ms(
+                                &current_timeline->entries[current_timeline->count - 1]) * 1000,
+                            esp_timer_get_time());
+            }
+            marker_session_end();
             // Lock-free operation - no mutex needed
         }
 
