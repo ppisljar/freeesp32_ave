@@ -513,7 +513,85 @@ def _parse_line(toks: list[str], raw: str, line_no: int):
         return _parse_audio(toks[1:], raw, line_no)
     if t0 in ("S", "s"):
         return _parse_speech(raw, line_no)
+    if t0 in ("M", "m"):
+        return _parse_marker(toks, raw, line_no)
     return _parse_led(toks, raw, line_no)
+
+
+# Reserved key: sets the modality instead of inferring it, and is never stored
+# as a key/value pair (config_parser.c, parse_marker_line).
+_MARKER_MOD = {"audio": 1, "led": 2, "both": 3, "none": 0}
+
+
+def _parse_marker(toks: list[str], raw: str, line_no: int):
+    """`M <time_ms> <LABEL> [key=value ...]` -- a stimulus marker.
+
+    Produces no light and no sound, so it contributes NOTHING to the optical or
+    audio expectation; it is modelled only so the linter can check the syntax
+    and so a marker line is not mistaken for an LED line. That last part is the
+    reason this exists at all: the device dispatches on the first character, and
+    anything unrecognised falls through to the LED parser -- an unlinted `M` row
+    would otherwise be silently modelled as a light command.
+    """
+    if len(toks) < 3:
+        return None, Finding(
+            code="LEDC_MARKER_TOKENS", severity="warning", domain="ledc",
+            line_no=line_no,
+            message=f"line {line_no}: marker needs '<time> <LABEL>'; device rejects",
+            detail="config_parser.c parse_marker_line")
+
+    label = toks[2]
+    if len(label) > 31 or not label or any(
+            not (c.isdigit() or ("A" <= c <= "Z") or c == "_") for c in label):
+        return None, Finding(
+            code="LEDC_MARKER_LABEL", severity="warning", domain="ledc",
+            line_no=line_no,
+            message=f"line {line_no}: marker label '{label}' must be 1..31 chars of "
+                    f"[A-Z0-9_]. The device REJECTS the line rather than cleaning "
+                    f"the label, because an event silently renamed by the firmware "
+                    f"cannot be recovered from the recording.",
+            detail="config_parser.c parse_marker_line")
+
+    lints = []
+    kv = 0
+    for t in toks[3:]:
+        if "=" not in t or t.startswith("="):
+            lints.append(Finding(
+                code="LEDC_MARKER_KV", severity="info", domain="ledc", line_no=line_no,
+                message=f"line {line_no}: marker '{label}' -- '{t}' is not key=value "
+                        f"and is ignored by the device",
+                detail="config_parser.c parse_marker_line"))
+            continue
+        k, _, v = t.partition("=")
+        if k == "mod":
+            if v not in _MARKER_MOD:
+                lints.append(Finding(
+                    code="LEDC_MARKER_MOD", severity="warning", domain="ledc",
+                    line_no=line_no,
+                    message=f"line {line_no}: marker '{label}' has mod='{v}'; valid "
+                            f"values are audio|led|both|none. The device warns and "
+                            f"falls back to inferring from the batch.",
+                    detail="config_parser.c parse_marker_line"))
+            continue          # reserved: never counted as a kv pair
+        if len(k) > 15 or len(v) > 31:
+            lints.append(Finding(
+                code="LEDC_MARKER_KV", severity="warning", domain="ledc",
+                line_no=line_no,
+                message=f"line {line_no}: marker '{label}' -- '{k}' is truncated by "
+                        f"the device (key max 15, value max 31 chars)",
+                detail="config_parser.c parse_marker_line"))
+        kv += 1
+        if kv > 4:
+            lints.append(Finding(
+                code="LEDC_MARKER_KV", severity="warning", domain="ledc",
+                line_no=line_no,
+                message=f"line {line_no}: marker '{label}' has more than 4 key=value "
+                        f"pairs; '{t}' is dropped",
+                detail="config_parser.c parse_marker_line"))
+
+    # No entry: a marker drives no output, so it must not appear in the
+    # expectation the optical/audio comparison is graded against.
+    return None, (lints[0] if len(lints) == 1 else (lints or None))
 
 
 def _parse_led(toks: list[str], raw: str, line_no: int):

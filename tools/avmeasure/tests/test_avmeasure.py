@@ -1154,6 +1154,39 @@ class TestFirmwareSemantics(unittest.TestCase):
         self.assertFalse(any(f.code == "LEDC_FREQR_PREFIX" for f in exp.lints),
                          "the lint describes a defect that is now fixed")
 
+    def test_84_marker_lines_are_linted_and_emit_no_light(self):
+        """`M` rows must be parsed as markers, not fall through to the LED parser.
+
+        The device dispatches on the first character and anything unrecognised
+        reaches parse_led_line, so an unmodelled M row would be silently graded
+        as a light command — the expectation would demand photons that the
+        session never asked for.
+        """
+        import tempfile, os
+        cases = [
+            ("M 0 BASELINE_START\n",                    []),
+            ("M 0 stim_start\n",                        ["LEDC_MARKER_LABEL"]),
+            ("M 0 OK_LABEL mod=sideways\n",             ["LEDC_MARKER_MOD"]),
+            ("M 0\n",                                   ["LEDC_MARKER_TOKENS"]),
+            ("M 0 OK_LABEL notakeyvalue\n",             ["LEDC_MARKER_KV"]),
+            ("M 0 OK_LABEL a=1 b=2 c=3 d=4 e=5\n",      ["LEDC_MARKER_KV"]),
+        ]
+        for text, want in cases:
+            body = text + "0 10 50 60 0 0 255 1\n4000 10 50 0 0 0 255 1\n"
+            fh = tempfile.NamedTemporaryFile("w", suffix=".ledc", delete=False)
+            fh.write(body); fh.close()
+            try:
+                exp = le.build_expectation(fh.name, duration_s=6.0)
+            finally:
+                os.unlink(fh.name)
+            got = [x.code for x in exp.lints if x.code.startswith("LEDC_MARKER")]
+            self.assertEqual(got, want, f"for {text!r}")
+            # The LED line beside it must still be modelled normally.
+            L = exp.light[1]
+            i = int(np.searchsorted(L.t, 1.0))
+            self.assertTrue(bool(L.active[i]), f"LED lost for {text!r}")
+            self.assertAlmostEqual(float(L.demanded_hz[i]), 10.0, delta=1e-6)
+
     def test_50_led_freq_zero_is_a_dc_channel(self):
         """freq 0 is a DC channel -- constant output -- not a stop.
 
