@@ -115,6 +115,13 @@ export function speechRow(opts) {
         voice: (opts.voice === undefined || opts.voice === null) ? 'default' : opts.voice,
         volume: (opts.volume === undefined || opts.volume === null) ? 80 : opts.volume, // 0..100
         text: opts.text || '',
+        // A trailing `# why this phrase is here` — the field ledRow, audioRow
+        // and markerRow already carry. It is NOT simply "the text after the
+        // first '#'": on an `S` line a '#' inside the quotes is spoken text, so
+        // the comment can only start after the CLOSING quote. parse.js
+        // parseSpeech derives that boundary from the firmware
+        // (config_parser.c:1743/:1748/:1756).
+        inlineComment: opts.inlineComment || '',
     };
 }
 /*
@@ -133,6 +140,15 @@ export function speechRow(opts) {
  *             otherwise 'audio' | 'led' | 'both' | 'none' from a `mod=` token,
  *             which selects which pipeline latency the predicted onset uses.
  *             Reserved: `mod=` is NEVER stored as an ordinary kv pair.
+ *   modalityRaw  a `mod=` value that is NOT one of the four above. The device
+ *             warns and falls back to inference (config_parser.c:174) without
+ *             rejecting the line, so the row stays a marker and `modality`
+ *             stays null — but the author's spelling is kept here so it is not
+ *             deleted from the file on the next save. Deliberately not folded
+ *             into `kv`: `mod=` never counts against the device's four-pair
+ *             budget (the cap at config_parser.c:177 is only reached by
+ *             non-`mod` keys), so parking it there would evict a real pair the
+ *             device keeps.
  */
 export const MARKER_LABEL_RE = /^[A-Z0-9_]{1,31}$/;
 export const MARKER_MAX_KV = 4;
@@ -146,6 +162,7 @@ export function markerRow(opts) {
         label: opts.label || '',
         kv: Array.isArray(opts.kv) ? opts.kv : [],
         modality: (opts.modality === undefined) ? null : opts.modality,
+        modalityRaw: opts.modalityRaw || '',
         inlineComment: opts.inlineComment || '',
     };
 }

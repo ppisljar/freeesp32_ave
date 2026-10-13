@@ -21,7 +21,14 @@
 // The `-` sentinel (format v2) is NOT a keyframe — it carries no value at all.
 // Its time rides in the sublane's `hold` list and is projected straight back as
 // `-`; see isHeldAt for why materialising a number there would change what the
-// device does.
+// device does. The same `hold` list says "this row wrote no token at all" for
+// the stepped freqR / wave sublanes — see steppedStateAt.
+//
+// ONE ROW PER (lane, time) is a hard constraint of the projection, not a bug:
+// laneUnionTimes is a SET of times and emitCellAt resolves a single value per
+// time. A file may legally put two rows on one channel at one timestamp, so
+// such a group is split across lanes that SHARE a key — see
+// splitOverlappingTimes for why merging them is not available.
 
 import {
     cell, ledRow, audioRow, commentRow, bgRow,
@@ -101,7 +108,9 @@ function sortedKeys(keys) {
 //
 // A real keyframe at exactly the same time always wins over the hold: dropping
 // a keyframe onto a held row is the user deliberately replacing the `-` with a
-// value, and the edit must survive the next projection.
+// value, and the edit must survive the next projection. coalesceRampKeys is
+// told about `hold` for the same reason — deleting the keyframe that sits at a
+// held time would hand the row back to the hold and silently invert this rule.
 function isHeldAt(s, t) {
     if (!s || !s.hold || s.hold.indexOf(t) < 0) return false;
     return !(s.keys || []).some(k => k.t === t);
@@ -152,12 +161,33 @@ function emitCellAt(keys, t) {
     return { v: quad(active.v, next.v, p), shape: 'quad', approx: true };
 }
 
-// Hold-style (stepped) value for freqR / wave sublanes at time t.
-function steppedAt(keys, t, dflt) {
-    if (!keys || !keys.length) return dflt;
-    let v = keys[0].v; // hold first value before the first keyframe
-    for (const k of keys) { if (k.t <= t) v = k.v; else break; }
-    return v;
+// Resolve a stepped (freqR / wave) sublane at time t.
+//
+// Returns { v } when the source row at t WROTE that token, and null when it did
+// not. The difference is the whole point: both tokens are "absent / `-` =>
+// leave the live value alone" fields (freq_r config_parser.c:1827, wave_type
+// :1845), and the engine acts on the present bit, not on the number — the
+// freq_r write is guarded by AUD_SET_FREQR (config_parser.c:1182) and the wave
+// write by has_wave_type (:1174). An explicit `0` is NOT the same thing: it is
+// a real write, collapsing the channel to mono / selecting the sine waveform.
+//
+// So absence is encoded, not inferred from the value:
+//   - no sublane at all      => no row in this lane ever wrote the token;
+//   - before the first key   => the writes start later;
+//   - a `hold` time          => this row wrote nothing while others did.
+// Keys are de-duplicated along a run of equal values (buildSteppedSublane), so
+// a time inside a run and not in `hold` did write the token and resolves to the
+// run's value.
+// Returns the resolved KEYFRAME, so freqR's `>`/`*` glide prefix survives too
+// (see freqRKeyframe).
+function steppedStateAt(s, t) {
+    const keys = (s && s.keys) || [];
+    if (!keys.length) return null;
+    if (keys[0].t > t) return null;              // the writes start after t
+    if (isHeldAt(s, t)) return null;             // this row wrote no token
+    let kf = keys[0];
+    for (const k of keys) { if (k.t <= t) kf = k; else break; }
+    return kf;
 }
 
 function emissionToCell(em) {
@@ -235,13 +265,28 @@ export function lanesToDoc(lanes, opts) {
                         conflicts.push({ laneKey: lane.key, kind: 'audio', field: f, t });
                     }
                 }
-                const freqR = sub.freqR ? steppedAt(sub.freqR.keys, t, 0) : 0;
-                const waveType = (sub.wave && sub.wave.keys && sub.wave.keys.length)
-                    ? steppedAt(sub.wave.keys, t, null) : null;
+                // Both of these are tri-state (absent / explicit value), so the
+                // PRESENT BIT travels with the number — see steppedStateAt.
+                // Without it the serializer has to guess from the value, and it
+                // guesses "0 means mono" (serialize.js:142), so a row that said
+                // nothing about freq_r came back saying `0` and killed a live
+                // binaural pair. `freqRPresent: false` makes it write `-`
+                // instead when a later column forces the slot (serialize.js:153).
+                const fr = steppedStateAt(sub.freqR, t);
+                const wv = steppedStateAt(sub.wave, t);
                 const pulse = (lane.pulse && lane.pulse[t]) || null;
                 emitted.push({ time: t, order: li, row: audioRow(Object.assign({
                     time: t, freq: fields.freq, pan: fields.pan, vol: fields.vol,
-                    mod: fields.mod, channel: lane.key, freqR: freqR, waveType: waveType,
+                    mod: fields.mod, channel: lane.key,
+                    freqR: fr ? fr.v : 0, freqRPresent: !!fr,
+                    // A `>`/`*` on freq_r only survives on the compound cell
+                    // that rides alongside the number (model.js freqRCell,
+                    // preferred by serialize.js:139). Without it the glide
+                    // became a step: the firmware wires a real FREQ_R sweep
+                    // off that prefix (config_parser.c:2937).
+                    freqRCell: (fr && fr.shape !== 'step')
+                        ? emissionToCell(fr) : undefined,
+                    waveType: wv ? wv.v : null,
                 }, pulse)) });
             } else {
                 const fields = {};
@@ -295,6 +340,24 @@ export function lanesToDoc(lanes, opts) {
                 ' ms, exceeding the same-timestamp batch cap (' + MAX_BATCH_SIZE + ').');
         }
     }
+    // Two lanes sharing a key can land a row on the same (channel|mask, time).
+    // That is legal and it is how an overlap lane round-trips (see
+    // splitOverlappingTimes), but the author should know, because the firmware
+    // runs both entries in one batch and the LATER one wins field by field —
+    // and because dragging a point onto an occupied timestamp is how the
+    // situation gets created by hand.
+    const overlaps = new Set();
+    for (const e of emitted) {
+        const r = e.row;
+        const id = r.kind + ':' + (r.kind === 'audio' ? r.channel : r.mask) + ':' + e.time;
+        if (overlaps.has(id)) overlaps.add('!' + id); else overlaps.add(id);
+    }
+    const overlapCount = Array.from(overlaps).filter(k => k[0] === '!').length;
+    if (overlapCount) {
+        warnings.push(overlapCount + ' timestamp(s) carry two or more rows on one ' +
+            'channel/mask. Both are written, in lane order, and the firmware ' +
+            'applies them in that order — the later row wins each field it sets.');
+    }
     if (conflicts.length) {
         warnings.push(conflicts.length + ' interior-LFO conflict(s): a foreign ' +
             'keyframe falls inside an LFO band and restarts its phase. Snap those ' +
@@ -336,14 +399,23 @@ function cellToKeyframe(time, c) {
 // interpolation line of a same-shape ramp run (undoes lanesToDoc's resampling).
 // Quad spans recorded in metadata are coalesced exactly; here we coalesce any
 // interior point whose value matches the curve within EPS.
-export function coalesceRampKeys(keys) {
+//
+// `hold` is the sublane's `-` times, and a keyframe sitting on one of them is
+// NEVER dropped. Dropping it does not leave the value "implied by the curve"
+// the way every other drop here does: isHeldAt starts answering true for that
+// time (the keyframe that outvoted the hold is gone), so the row is re-emitted
+// as `-` and the value becomes whatever the device had reached. That is the
+// opposite of the rule isHeldAt documents, and it would materialise-by-deletion
+// the one thing the sentinel exists to protect.
+export function coalesceRampKeys(keys, hold) {
     const ks = sortedKeys(keys);
+    const held = (hold && hold.length) ? new Set(hold) : null;
     const out = [];
     for (let i = 0; i < ks.length; i++) {
         const b = ks[i];
         const a = out[out.length - 1];
         const c = ks[i + 1];
-        if (a) {
+        if (a && !(held && held.has(b.t))) {
             // (1) Interior of a same-shape ramp whose value lies on the curve:
             //     a->b->c collapses to a single a->c ramp (undo resampling).
             if (a && c && isRampShape(a.shape) && a.shape === b.shape && c.t > a.t) {
@@ -379,24 +451,52 @@ function buildCellSublane(grp, field) {
         if (c === null || c === undefined) hold.push(r.time);
         else keys.push(cellToKeyframe(r.time, c));
     }
-    const s = { keys: coalesceRampKeys(keys) };
+    const s = { keys: coalesceRampKeys(keys, hold) };
     if (hold.length) s.hold = hold;
     return s;
 }
 
-// Build a stepped sublane (freqR / wave) from per-row values, dropping
-// consecutive duplicates so unchanged fields don't explode into keyframes.
-function buildSteppedSublane(rows, getVal, isActive) {
+// Build a stepped sublane (freqR / wave) from per-row values.
+//
+// Consecutive duplicates are dropped so an unchanged field does not explode
+// into keyframes — measured over the 99 shipped sessions, the 1449 audio rows
+// that write freq_r reduce to 379 keyframes and the 1433 that write wave_type
+// to 367, and the `# @ave-lane` snapshot is one line in the file.
+//
+// Rows that write NOTHING are recorded instead as `hold` times, the same way a
+// `-` is on a cell sublane: run-length encoding alone cannot tell "absent" from
+// "the run continues", and absent is a different instruction to the engine (see
+// steppedStateAt). Only absences AFTER the first write need recording — before
+// it there is no sublane value to leak backwards — which is what keeps the cost
+// to 110 freq_r and 104 wave_type hold times across all 99 sessions.
+function buildSteppedSublane(rows, makeKey, isWritten) {
     const keys = [];
-    let prev;
+    const hold = [];
+    let prev = null;
     for (const r of rows) {
-        if (isActive && !isActive(r)) continue;
-        const v = getVal(r);
-        if (keys.length && approxEqual(prev, v)) continue;
-        keys.push(keyframe(r.time, v, 'step'));
-        prev = v;
+        if (isWritten && !isWritten(r)) {
+            if (keys.length) hold.push(r.time);
+            continue;
+        }
+        const kf = makeKey(r);
+        // Only a run of the same value AND the same shape is redundant: `250`
+        // after `>250` restates the value but cancels the glide.
+        if (prev && approxEqual(prev.v, kf.v) && prev.shape === kf.shape) continue;
+        keys.push(kf);
+        prev = kf;
     }
-    return keys.length ? { keys } : null;
+    if (!keys.length) return null;
+    const s = { keys };
+    if (hold.length) s.hold = hold;
+    return s;
+}
+
+// freq_r is a compound cell in format v3, so its keyframe comes from the parsed
+// cell when the token carried a prefix (parse.js keeps `freqRCell` only then)
+// and from the plain number otherwise.
+function freqRKeyframe(r) {
+    if (r.freqRCell) return cellToKeyframe(r.time, r.freqRCell);
+    return keyframe(r.time, r.freqR || 0, 'step');
 }
 
 // Capture the v2 pulse fields of each row into a time-keyed sidecar. Only stores
@@ -411,6 +511,49 @@ function capturePulse(grp, fieldNames) {
     }
     return Object.keys(pulse).length ? pulse : undefined;
 }
+
+/*
+ * Split one channel/mask group into lanes that can each hold it.
+ *
+ * A lane cannot hold two rows at one timestamp — laneUnionTimes is a SET of
+ * times and emitCellAt resolves one value per time (the same limit
+ * snapObstacle refuses to walk into). The file may legally contain two, so slot
+ * n gets the (n+1)-th row at each timestamp: slot 0 is the ordinary lane, and a
+ * further slot is an OVERLAP lane carrying the rows that used to be collapsed
+ * away. Returns [rows[]] — one entry for a group with no overlap, so the
+ * ordinary case is untouched.
+ *
+ * MERGING THE ROWS INSTEAD IS NOT AVAILABLE, even field by field. The row COUNT
+ * is itself load-bearing: find_next_audio_for_bit returns the FIRST later
+ * same-channel entry (config_parser.c:2471) as a sweep's target, and the
+ * parse-time insertion sort breaks ties with `<=` to keep file order
+ * (config_parser.c:572), so deleting the earlier of two rows at one timestamp
+ * re-points every sweep that aimed at it. Measured on
+ * sessions/library/test2a.ledc: the `A 20000 294 0 50 >4 4` mod ramp aims at
+ * `A 30000 - - - 12 4` (mod 12); with that row collapsed into
+ * `A 30000 440 -100 45 0 4` the target became mod 0, turning a 10 s 4->12 Hz
+ * AM ramp into 4->0 Hz — and the collapse also materialised that row's three
+ * `-` tokens into 440 / -100 / 45. The file went from 51 `-` tokens to 48.
+ *
+ * Splitting keeps both rows, in file order, and lanesToDoc orders its output by
+ * (time, lane index) — so with the overlap lane sitting immediately after its
+ * primary, the two rows come back out at one timestamp in the order they went
+ * in, which is the order the firmware preserves.
+ */
+function splitOverlappingTimes(grp) {
+    const slots = [];
+    const seen = new Map();
+    for (const r of grp) {
+        const n = seen.get(r.time) || 0;
+        seen.set(r.time, n + 1);
+        if (!slots[n]) slots[n] = [];
+        slots[n].push(r);
+    }
+    return slots;
+}
+
+// Name for slot > 0, so the view does not show two identically-named lanes.
+function overlapName(base, slot) { return base + ' · overlap ' + (slot + 1); }
 
 // Reconstruct lanes from a flat doc with no metadata (best-effort structure).
 export function reconstructLanes(doc) {
@@ -432,31 +575,45 @@ export function reconstructLanes(doc) {
     const sortByTime = (a, b) => a.time - b.time;
 
     Array.from(audioGroups.keys()).sort((a, b) => a - b).forEach(ch => {
-        const grp = audioGroups.get(ch).slice().sort(sortByTime);
-        const sub = {};
-        for (const f of AUDIO_CELL_FIELDS) sub[f] = buildCellSublane(grp, f);
-        const freqR = buildSteppedSublane(grp, r => r.freqR || 0);
-        if (freqR && freqR.keys.some(k => k.v > 0)) sub.freqR = freqR;
-        const wave = buildSteppedSublane(grp,
-            r => (r.waveType === null || r.waveType === undefined) ? -1 : r.waveType,
-            r => r.waveType !== null && r.waveType !== undefined);
-        if (wave) sub.wave = wave;
-        lanes.push({
-            kind: 'audio', key: ch, name: 'Audio ch ' + ch,
-            collapsed: false, sub, pulse: capturePulse(grp, AUDIO_PULSE_FIELDS),
+        // Array.prototype.sort is stable (ES2019), so rows that share a
+        // timestamp keep file order — which splitOverlappingTimes relies on.
+        const whole = audioGroups.get(ch).slice().sort(sortByTime);
+        splitOverlappingTimes(whole).forEach((grp, slot) => {
+            const sub = {};
+            for (const f of AUDIO_CELL_FIELDS) sub[f] = buildCellSublane(grp, f);
+            // Kept whenever ANY row wrote the token, even `0`: an explicit 0 is
+            // a mono collapse, not "no freq_r" (config_parser.c:1834 sets the
+            // present bit either way), so gating on a positive value deleted
+            // the `0` that ends a binaural beat.
+            const freqR = buildSteppedSublane(grp, freqRKeyframe,
+                                              r => r.freqRPresent !== false);
+            if (freqR) sub.freqR = freqR;
+            const wave = buildSteppedSublane(grp,
+                r => keyframe(r.time, r.waveType, 'step'),
+                r => r.waveType !== null && r.waveType !== undefined);
+            if (wave) sub.wave = wave;
+            lanes.push({
+                kind: 'audio', key: ch,
+                name: slot ? overlapName('Audio ch ' + ch, slot) : 'Audio ch ' + ch,
+                collapsed: false, sub, pulse: capturePulse(grp, AUDIO_PULSE_FIELDS),
+            });
         });
     });
 
     Array.from(ledGroups.keys()).sort((a, b) => a - b).forEach(mask => {
-        const grp = ledGroups.get(mask).slice().sort(sortByTime);
-        const sub = {};
-        for (const f of LED_CELL_FIELDS) sub[f] = buildCellSublane(grp, f);
-        // Color is "split" if any of R/G/B carries an interp; else combined.
-        const split = ['r', 'g', 'b'].some(f =>
-            sub[f].keys.some(k => k.shape !== 'step'));
-        lanes.push({
-            kind: 'led', key: mask, name: maskName(mask),
-            collapsed: false, colorSplit: split, sub, pulse: capturePulse(grp, LED_PULSE_FIELDS),
+        const whole = ledGroups.get(mask).slice().sort(sortByTime);
+        splitOverlappingTimes(whole).forEach((grp, slot) => {
+            const sub = {};
+            for (const f of LED_CELL_FIELDS) sub[f] = buildCellSublane(grp, f);
+            // Color is "split" if any of R/G/B carries an interp; else combined.
+            const split = ['r', 'g', 'b'].some(f =>
+                sub[f].keys.some(k => k.shape !== 'step'));
+            lanes.push({
+                kind: 'led', key: mask,
+                name: slot ? overlapName(maskName(mask), slot) : maskName(mask),
+                collapsed: false, colorSplit: split, sub,
+                pulse: capturePulse(grp, LED_PULSE_FIELDS),
+            });
         });
     });
 

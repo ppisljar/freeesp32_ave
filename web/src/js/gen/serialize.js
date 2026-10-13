@@ -182,7 +182,16 @@ function serializeBg(b) {
 // the device — see serializeForDevice).
 function serializeSpeech(row) {
     const voice = (row.voice && String(row.voice).trim()) ? String(row.voice).trim() : 'default';
-    return 'S ' + fmt(row.time) + ' ' + voice + ' ' + fmt(row.volume) + ' "' + (row.text || '') + '"';
+    const line = 'S ' + fmt(row.time) + ' ' + voice + ' ' + fmt(row.volume)
+        + ' "' + (row.text || '') + '"';
+    // Re-attach the inline comment, as serializeLed / serializeAudio /
+    // serializeMarker do. A `#` on an `S` line is only a comment AFTER the
+    // closing quote — inside the quotes it is spoken text — and parse.js splits
+    // it on exactly that boundary, which is the boundary the firmware uses too
+    // (it finds the payload with strchr/strrchr on the quotes,
+    // config_parser.c:1743-1756, having already cut at '#', :1523). Without
+    // this the parser captured the comment and the first save deleted it.
+    return row.inlineComment ? line + ' # ' + row.inlineComment : line;
 }
 
 /*
@@ -194,7 +203,12 @@ function serializeSpeech(row) {
  */
 function serializeMarker(row) {
     const parts = ['M', fmt(row.time), row.label || ''];
-    if (row.modality) parts.push('mod=' + row.modality);
+    // `modalityRaw` holds a `mod=` value this build does not recognise. The
+    // device warns and infers (config_parser.c:174-177) but keeps running, so
+    // an unknown modality is a forward-compatibility case, not an error — and
+    // dropping the token here deleted the author's text on the first save.
+    const modTok = row.modality || row.modalityRaw;
+    if (modTok) parts.push('mod=' + modTok);
     for (const p of (row.kv || [])) parts.push(p.k + '=' + p.v);
     // Re-attach the inline comment exactly as serializeLed / serializeAudio do.
     // parse.js:281 carries it into the model, and a marker's `# why` is often

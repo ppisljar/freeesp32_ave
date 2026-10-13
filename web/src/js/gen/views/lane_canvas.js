@@ -5,7 +5,7 @@
 // are rAF-batched. Hit targets are >= 44px. Gesture map:
 //   tap empty area  -> add keyframe (then inspector)
 //   tap keyframe    -> select + inspector
-//   drag keyframe   -> move (t snaps to grid, v to nice values)
+//   drag keyframe   -> move (v always; t only once the pointer travels in x)
 //   long-press kf   -> context menu (delete / duplicate / set-curve / to-mod)
 //   midpoint handle -> cycle outgoing shape step -> '>' -> '*'
 //   ctrl/cmd + wheel-> zoom the time axis about the cursor
@@ -133,6 +133,153 @@ export function dropCoincidentKeys(keys, keeper) {
         }
     }
     return dropped;
+}
+
+// ---- Keyframe drag: the time axis engages only when the pointer does ------
+// A drag the user means as value-only must not be able to consume a sibling.
+// The handler used to write `snapTime(xToTime(p.x))` on EVERY pointermove, so
+// the dragged keyframe's time was re-derived from the pointer's ABSOLUTE x and
+// re-rounded to the snap grid even when the pointer had not moved sideways at
+// all — and pointerup then handed that time to dropCoincidentKeys, which
+// deletes whatever sibling shares it.
+//
+// Measured on sessions/library/03_deep_relaxation.ledc — 30 minutes, its last
+// AUDIO row `A 1800000 200 0 0 10 1 0 0` (its four `S ... "WAKE UP!"` rows run
+// on from 1800000 to 1830000, but speech rows get no lane slot in docToLanes
+// and fitToContent walks the lane model, so they do not move the zoom) — right
+// after fitToContent on a 1310 px canvas, which is what a 1440 px window
+// leaves once body padding (2 x 20), .container (2 x 24 + border), .section
+// (2 x 18 + border) and the scroller's border are off it (the generator tab
+// runs .container.is-wide, nav.js, so the canvas does get the rest):
+// msPerPx = 1642, and the snap grid is snapStep(1642) = niceStep(8 * 1642) =
+// 20000 ms. A TWENTY SECOND grid, 12.2 px wide. (The same session on a 390 px
+// phone window is a 316 px canvas — the <= 640px media query tightens the
+// chrome to 8 + 13 + 13 px of padding plus the three 1 px borders, 37 px a
+// side — so 9340 ms/px, where the grid is 120 s.)
+// Coarse is the normal case and not an edge case: of the 99 sessions under
+// sessions/, 78 open at a 10 s grid or coarser and 55 at exactly 20 s.
+//
+// Two measured ways that erased a keyframe nobody aimed at:
+//   * off-grid keyframes are ordinary — of the 6690 keyframes those 99 sessions
+//     parse into, 650 sit off their own session's fit grid (497 of them in the
+//     85 files under sessions/library, 153 in the 14 under sessions/test), and
+//     41 of those round onto a timestamp a sibling in the same sublane already
+//     holds (34 library, 7 test). One of the 41, in
+//     sessions/library/13_astral_deep.ledc: `15000 0 50 12 255 80 0 10` and
+//     `30000 0 50 ~4:10:12000 255 80 0 10` put LED brightness keys at 15 s and
+//     30 s, and that session (50 min) fits at 2736 ms/px with a 30 s grid — so
+//     dragging the 15 s dot down to re-dial brightness snapped it 5.5 px onto
+//     30000 and the collapse ate the second key outright: the whole
+//     `~4:10:12000` breathing LFO gone, not just a value. That session's rows
+//     are a test of their own. Enumerated across the shipped sessions at the
+//     fitToContent zoom, there are 34 such off-grid-key-onto-sibling pairs: 17
+//     on a 5 s grid, 14 on 10 s and 3 on 30 s (the 13_astral_deep brightness
+//     pair above, 5.9 px). None on the 20 s grid of the worked example — that
+//     zoom has the same risk geometry but no actual collision in any shipped
+//     session, so the arithmetic generalises while the step does not;
+//   * keyframeAt accepts a grab up to HIT_R = 22 px away from the dot, which
+//     at 1642 ms/px is 36 s of time the keyframe teleported through on the
+//     first move, because the handler read the pointer's position instead of
+//     its travel.
+// Hence three rules, in one place so they can be tested without a pointer
+// event: the keyframe follows the pointer's TRAVEL (grab offset preserved),
+// the time axis stays frozen at the keyframe's original t until that travel
+// passes DRAG_X_DEADZONE_PX, and a snap that would land on a sibling the
+// pointer is not actually near is refused rather than merged. Dropping one
+// keyframe onto another on purpose still works — aim within DROP_AIM_PX of the
+// dot you can see.
+//
+// The third rule is deliberately the narrow one: snapStep targets an ~8 px
+// grid at every zoom, so rounding can never displace a key by more than half a
+// cell — 6.1 px at the zoom measured above — and the refusal therefore only
+// fires in the 4..6.1 px band where the pointer is off the sibling's dot but
+// close enough for the grid to pull onto it. It is the belt to the dead zone's
+// braces: the dead zone can judge a value-only drag, but nothing else can
+// judge a sideways drag that stops just short of a neighbour.
+
+// Snap grid for times, in ms, at a given zoom: a ~8px grid, so it stays usable
+// when zoomed in and goes deliberately coarse when zoomed out. The one
+// definition of "the grid" — every gesture that rounds a time goes through it,
+// so there is a single thing to measure and a single thing to retune.
+export function snapStep(msPerPx) { return niceStep(msPerPx * 8); }
+
+export const DRAG_X_DEADZONE_PX = 4;  // 6.6 s of time at the zoom measured above
+export const DROP_AIM_PX = 4;         // a dot's drawn radius (drawStrip: 4, 6 selected)
+
+// Snap `raw` onto the grid — unless the cell it rounds into is already held by
+// a keyframe the pointer is not actually on. Then keep the unsnapped
+// millisecond: both keyframes survive as their own rows, and the dot stays
+// under the cursor where the user put it. `mine` is the keyframe being moved
+// (null when one is being added), which is never its own neighbour.
+function snapAwayFromNeighbour(keys, mine, raw, msPerPx, aim) {
+    const step = snapStep(msPerPx);
+    const snapped = Math.max(0, Math.round(raw / step) * step);
+    const occupant = (keys || []).find(k => k !== mine && k.t === snapped);
+    if (!occupant) return snapped;
+
+    // How far the pointer actually is from the dot it would consume. The x term
+    // alone is not enough on the ADD path: valToY spreads a field over 30 px, so
+    // a tap can sit in the same ~6 px half-cell in x while being 22+ px away in
+    // VALUE — visibly nowhere near the dot, and outside the HIT_R = 22 px circle
+    // that would otherwise have routed it to select. Measured before this was
+    // 2D: at 1642 ms/px a tap 2 px across and 22.8 px up from a dot still ate
+    // it, and on an exact x hit the old `snapped !== raw` guard could never fire
+    // at all, so any vertical distance was ignored.
+    //
+    // `aim` is supplied by the add path, which knows the pointer's y. The drag
+    // path passes none and stays x-only on purpose: there the keyframe being
+    // moved is under the cursor by construction, and those three rules are
+    // pinned by tests.
+    const dxPx = Math.abs(snapped - raw) / msPerPx;
+    const dyPx = (aim && typeof aim.yPx === 'number' && typeof aim.yOf === 'function')
+        ? Math.abs(aim.yPx - aim.yOf(occupant)) : 0;
+    if (Math.hypot(dxPx, dyPx) > DROP_AIM_PX) return raw;
+    return snapped;
+}
+
+// The time one pointermove of a keyframe drag should write. `dxPx` is the
+// pointer's travel in x since pointerdown (NOT its position), `startT` the
+// keyframe's time when the drag began.
+export function dragTime(keys, kf, startT, dxPx, msPerPx) {
+    if (Math.abs(dxPx) <= DRAG_X_DEADZONE_PX) return startT; // value-only drag
+    return snapAwayFromNeighbour(
+        keys, kf, Math.max(0, Math.round(startT + dxPx * msPerPx)), msPerPx);
+}
+
+// Apply one pointermove to the model: same contract as moveKeyframe (the
+// keyframe object is kept, keys[] stays sorted), with the time axis rules
+// above. No collision is resolved here — see commitKeyframeDrag.
+export function dragKeyframe(keys, kf, startT, dxPx, msPerPx, v) {
+    return moveKeyframe(keys, kf, dragTime(keys, kf, startT, dxPx, msPerPx), v);
+}
+
+// Finish a keyframe drag (pointerup). A drag that left the keyframe's time
+// where it found it was a value edit, so it may consume nothing — otherwise a
+// vertical drag at 20 s/grid spends a sibling for a volume change. Returns the
+// number of keyframes dropped.
+export function commitKeyframeDrag(keys, kf, startT) {
+    if (kf.t === startT) return 0;
+    return dropCoincidentKeys(keys, kf);
+}
+
+// ---- Tap-to-add: the same hazard reached from the other gesture -----------
+// The add path only runs when the tap missed every dot, because keyframeAt
+// routes a tap within HIT_R = 22 px of one to SELECT instead — but that radius
+// is measured in 2D while the snap moves only the time. So a tap a few px to
+// the side of a dot and a long way DOWN the strip misses it on screen and
+// lands on its timestamp in the model, where the add path's own
+// dropCoincidentKeys call (deliberate: one (lane, t) is one row) deletes it.
+// Measured on the 46 px strip: valToY spreads a field over SUB_H - 2 * 8 =
+// 30 px, so a tap can be up to 30 px off in value while staying inside the
+// 6.1 px half-cell in x, and past 21 px of that it is outside the 22 px circle
+// — on a 0..100 field (vol, bright, duty) a tap 70 units away in value from
+// the keyframe it silently replaced. Hence the same refusal as the drag: a
+// snapped time may only consume a neighbour the pointer is within DROP_AIM_PX
+// of, measured as the real 2D distance to that dot. Aim at the dot and the
+// replace still happens, which is what makes a deliberate "re-dial this row"
+// tap work.
+export function addTime(keys, tRaw, msPerPx, aim) {
+    return snapAwayFromNeighbour(keys, null, Math.max(0, Math.round(tRaw)), msPerPx, aim);
 }
 
 // ---- Mid-handle hit targets ------------------------------------------------
@@ -527,11 +674,9 @@ export function createLaneCanvas(canvas, cb) {
         return null;
     }
 
-    // ---- Value/time snapping ----------------------------------------------
-    function snapTime(t) {
-        const step = niceStep(msPerPx * 8); // ~8px grid
-        return Math.max(0, Math.round(t / step) * step);
-    }
+    // ---- Value snapping ----------------------------------------------------
+    // Times are snapped by dragTime / addTime, which own the grid and the rule
+    // about not letting it eat a neighbour; nothing here rounds a time.
     function snapVal(field, v) {
         const r = FIELD_RANGES[field] || [0, null];
         const lo = r[0], hi = r[1];
@@ -604,8 +749,11 @@ export function createLaneCanvas(canvas, cb) {
             selected = { laneKey: s.lane.key, field: s.field, t: kf.t };
             // `keys` rides along: the move has to re-sort the array the
             // keyframe lives in, not just the keyframe (see moveKeyframe).
+            // `downX` is what the time axis moves relative to: the drag
+            // follows the pointer's travel, so grabbing the dot off-centre
+            // (keyframeAt reaches HIT_R = 22 px) does not teleport it.
             drag = { strip: s, kf, keys: s.lane.sub[s.field].keys,
-                     moved: false, startT: kf.t };
+                     moved: false, startT: kf.t, downX: p.x };
             // Long-press -> context menu.
             longTimer = setTimeout(() => {
                 longTimer = null;
@@ -642,10 +790,12 @@ export function createLaneCanvas(canvas, cb) {
 
         if (drag.kf) {
             if (!drag.moved) {
-                const movedEnough = Math.hypot(p.x - timeToX(drag.startT), 0) > 3 || true;
-                if (movedEnough) { drag.moved = true; clearLong(); cb.beginEdit(); }
+                // Any movement at all starts the edit, because the VALUE
+                // follows the pointer from the first move; the threshold that
+                // matters is on the time axis, inside dragTime.
+                drag.moved = true; clearLong(); cb.beginEdit();
             }
-            moveKeyframe(drag.keys, drag.kf, snapTime(xToTime(p.x)),
+            dragKeyframe(drag.keys, drag.kf, drag.startT, p.x - drag.downX, msPerPx,
                          snapVal(drag.strip.field, yToVal(drag.strip, p.y)));
             selected = { laneKey: drag.strip.lane.key, field: drag.strip.field, t: drag.kf.t };
             scheduleRender();
@@ -669,8 +819,9 @@ export function createLaneCanvas(canvas, cb) {
 
         if (d.kf) {
             if (d.moved) {
-                // Dropped on top of a sibling? Only one of them can be a row.
-                if (dropCoincidentKeys(d.keys, d.kf)) scheduleRender();
+                // Dropped on top of a sibling? Only one of them can be a row
+                // — but a drag that never changed the time consumes nothing.
+                if (commitKeyframeDrag(d.keys, d.kf, d.startT)) scheduleRender();
                 cb.commit();
             } else {
                 openInspectorFor(d.strip, d.kf, e.clientX, e.clientY); // tap = inspect
@@ -680,14 +831,20 @@ export function createLaneCanvas(canvas, cb) {
         if (d.addAt && !d.moved) {
             // tap empty -> add a keyframe at this t/v
             const s = d.strip;
-            const t = snapTime(xToTime(p.x));
             const v = snapVal(s.field, yToVal(s, p.y));
             cb.beginEdit();
             if (!s.lane.sub[s.field]) s.lane.sub[s.field] = { keys: [] };
             const keys = s.lane.sub[s.field].keys;
+            // Hand the refusal the pointer's y and this strip's value->y
+            // mapping, so "is the tap near the dot it would replace?" is the
+            // distance the user can actually see, not just the x component.
+            const t = addTime(keys, xToTime(p.x), msPerPx,
+                { yPx: p.y, yOf: (k) => valToY(s, k.v) });
             const kf = insertKeyframe(keys, keyframe(t, v, 'step'));
-            // Tapping onto a timestamp this sublane already uses replaces that
-            // keyframe — the row can only carry the value just tapped in.
+            // Tapping ONTO a timestamp this sublane already uses replaces that
+            // keyframe — the row can only carry the value just tapped in. The
+            // grid no longer pulls a tap onto a timestamp it missed on screen
+            // (addTime, above), so this fires only where the pointer really is.
             dropCoincidentKeys(keys, kf);
             cb.commit();
             selected = { laneKey: s.lane.key, field: s.field, t };

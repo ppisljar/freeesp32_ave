@@ -320,13 +320,16 @@ export function orderRowsForDisplay(rows, mode) {
 
 // `-` (null) is NOT a zero: it means "leave this field unchanged", and the
 // firmware keeps the present bit clear so the channel's live value survives
-// (config_parser.c:1595-1601 for freq/duty/bright, :1624-1646 for R/G/B). A
+// (config_parser.c:1598/1604/1614 for freq/duty/bright, :1627/1636/1645 for
+// R/G/B — each `if (!tok_is_dash(tokens[n]))` is what sets the present bit). A
 // copy that collapsed it to 0 forced the field down — black for a colour,
-// silence for a volume — and 48 LED rows plus 116 audio rows in the shipped
-// sessions are written exactly that way (40 of the LED rows are the _SINE/_TRAP
-// variants of 21_gateway_focus12 and 25_gateway_journey, 10 each; the other 8
-// are in test/t12_format_edges.ledc). undefined still defaults to 0, as the
-// model does.
+// silence for a volume — and 48 LED rows plus 117 audio rows under sessions/
+// are written exactly that way (40 of the LED rows are the _SINE/_TRAP variants
+// of 21_gateway_focus12 and 25_gateway_journey, 10 each, the other 8 in
+// test/t12_format_edges.ledc; 114 of the audio rows are the five parser
+// fixtures library/test.ledc, test2a/b/c.ledc and test_iso.ledc, the other 3 in
+// test/t12_format_edges.ledc and test/t13_rejects.ledc). undefined still
+// defaults to 0, as the model does.
 function cloneCell(c) { return c ? { ...c } : (c === null ? null : cell(0)); }
 
 // Preserve the v2 pulse-field tri-state: undefined (omit) / null (`-` leave
@@ -372,7 +375,11 @@ export function cloneRow(r) {
         });
         case 'comment': return commentRow(r.text);
         case 'bg': return bgRow(bg(r.bg.url, r.bg.pan, r.bg.loudness));
-        case 'speech': return speechRow({ time: r.time, voice: r.voice, volume: r.volume, text: r.text });
+        // inlineComment rides along explicitly: speechRow takes named fields,
+        // so a new one is silently dropped unless listed (the marker case below
+        // spread-copies, so it gets modalityRaw for free).
+        case 'speech': return speechRow({ time: r.time, voice: r.voice, volume: r.volume,
+            text: r.text, inlineComment: r.inlineComment });
         // A marker used to fall through to `raw` below, which produced a row
         // with no text at all: Duplicate turned `M 0 BASELINE_START` into a
         // line reading "undefined". Spread-copied rather than rebuilt field by
@@ -385,7 +392,9 @@ export function cloneRow(r) {
     }
 }
 
-function newRowOfKind(kind, time) {
+// Exported so the seeding helpers below can be unit-tested against the row
+// they actually produce, rather than against their arguments.
+export function newRowOfKind(kind, time) {
     switch (kind) {
         case 'led':     return ledRow({ time: time || 0 });
         case 'audio':   return audioRow({ time: time || 0, channel: 1 });
@@ -394,6 +403,44 @@ function newRowOfKind(kind, time) {
         case 'comment': return commentRow('# ');
         default:        return ledRow({ time: time || 0 });
     }
+}
+
+// ---- Seeding a NEW row (pure, unit-tested) --------------------------------
+
+// The kinds that carry a time of their own: ledRow, audioRow, speechRow and
+// markerRow in model.js all take `time`. `bg`, `comment`, `raw` and `blank`
+// have no time at all, so there is nothing to inherit from one.
+const TIMED_KINDS = { led: true, audio: true, speech: true, marker: true };
+
+// The instant a new row starts at when it is seeded from `row` — "Insert
+// after", and the Kind dropdown rebuilding a row in place.
+//
+// EVERY timed kind counts, not just led/audio. A session is authored instant by
+// instant, and speech cues and markers are part of that timeline: in 67 of the
+// 85 .ledc files in sessions/library the LAST row is a speech cue (measured by
+// parsing each one — the other 18 end on audio or LED). Reading the time off
+// led/audio rows only sent an insert after a speech cue or a marker to t=0 —
+// the top of the file, where the new row is both wrong and easy to lose.
+export function insertTimeOf(row) {
+    return (row && TIMED_KINDS[row.kind]) ? (row.time || 0) : 0;
+}
+
+// The kind "Insert after" creates: a led/audio row begets its own kind, and
+// everything else begets an LED row (there is no newRowOfKind('marker'), and a
+// `#`/BG row says nothing about what the author wants next).
+export function insertKindAfter(row) {
+    return (row && (row.kind === 'led' || row.kind === 'audio')) ? row.kind : 'led';
+}
+
+// Where the "Add row" bar lands: the LAST instant in the document, so a new row
+// appends to the end of the timeline instead of silently landing at t=0 — which
+// is what a marker- or speech-only doc used to get (an EEG script of nothing but
+// `M` lines has no led/audio row to read a time off at all).
+export function appendTimeOf(rows) {
+    for (let i = (rows || []).length - 1; i >= 0; i--) {
+        if (TIMED_KINDS[rows[i].kind]) return rows[i].time || 0;
+    }
+    return 0;
 }
 
 // ---- View ------------------------------------------------------------------
@@ -503,9 +550,7 @@ export function initTableView(ctx) {
         }
         sel.addEventListener('change', () => {
             const d = ctx.getDoc();
-            const t = (row.kind === 'led' || row.kind === 'audio' ||
-                       row.kind === 'speech' || row.kind === 'marker') ? row.time : 0;
-            d.rows[idx] = newRowOfKind(sel.value, t);
+            d.rows[idx] = newRowOfKind(sel.value, insertTimeOf(row));
             recomputeBg();
             commitStructure();
         });
@@ -889,13 +934,12 @@ export function initTableView(ctx) {
                 recomputeBg(); commitStructure();
             });
             item('Insert after', () => {
+                // insertTimeOf covers every timed kind, so inserting after a
+                // speech cue or a marker lands in that instant instead of
+                // jumping back to t=0.
                 const cur = d.rows[idx];
-                // Every timed kind, so inserting after a speech cue or a marker
-                // lands in that instant instead of jumping back to t=0.
-                const t = (cur.kind === 'led' || cur.kind === 'audio' ||
-                           cur.kind === 'speech' || cur.kind === 'marker') ? cur.time : 0;
-                const k = (cur.kind === 'led' || cur.kind === 'audio') ? cur.kind : 'led';
-                d.rows.splice(idx + 1, 0, newRowOfKind(k, t));
+                d.rows.splice(idx + 1, 0,
+                              newRowOfKind(insertKindAfter(cur), insertTimeOf(cur)));
                 commitStructure();
             });
             item('Delete', () => {
@@ -1138,13 +1182,7 @@ export function initTableView(ctx) {
             b.textContent = label;
             b.addEventListener('click', () => {
                 const d = ctx.getDoc();
-                const lastT = (() => {
-                    for (let i = d.rows.length - 1; i >= 0; i--) {
-                        const r = d.rows[i];
-                        if (r.kind === 'led' || r.kind === 'audio') return r.time;
-                    }
-                    return 0;
-                })();
+                const lastT = appendTimeOf(d.rows);
                 d.rows.push(newRowOfKind(kind, kind === 'bg' || kind === 'comment' ? 0 : lastT));
                 recomputeBg();
                 commitStructure();

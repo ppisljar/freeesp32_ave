@@ -12,8 +12,11 @@ import assert from 'node:assert/strict';
 import {
     setRowField, toggleMaskBit, markerSummary, cloneRow,
     freqRCellOf, applyFreqRCell,
+    newRowOfKind, insertTimeOf, insertKindAfter, appendTimeOf,
 } from '../src/js/gen/views/table.js';
-import { ledRow, audioRow, markerRow, cell } from '../src/js/gen/model.js';
+import {
+    ledRow, audioRow, markerRow, speechRow, commentRow, bgRow, bg, cell,
+} from '../src/js/gen/model.js';
 import { parse } from '../src/js/gen/parse.js';
 import { serialize } from '../src/js/gen/serialize.js';
 
@@ -278,10 +281,12 @@ test('typing a FreqR value marks it present so the preview stops inheriting', ()
 // ---- Duplicate must not turn a `-` field into a zero ----------------------
 
 test('Duplicate preserves `-` (leave unchanged) on an LED colour', () => {
-    // `- - -` keeps the channel's live colour; `0 0 0` forces it black. 46 LED
+    // `- - -` keeps the channel's live colour; `0 0 0` forces it black. 40 LED
     // rows in the shipped library are written exactly this way (the _SINE and
-    // _TRAP variants of 21_gateway_focus12 and 25_gateway_journey), so a copy
-    // used to come out black.
+    // _TRAP variants of 21_gateway_focus12 and 25_gateway_journey, 10 each), so
+    // a copy used to come out black. (48 counting sessions/test — the other 8
+    // are in t12_format_edges.ledc; that is the figure cloneCell() quotes,
+    // table.js:333.)
     const row = firstRow('0 4 50 >0 - - - 10 1 0\n');
     assert.equal(row.r, null, 'fixture really does carry `-`');
     assert.equal(lineOf(cloneRow(row)), '0 4 50 >0 - - - 10 1 0');
@@ -291,4 +296,97 @@ test('Duplicate preserves `-` on an audio volume', () => {
     const row = firstRow('A 1000 440 - - 0 1\n');
     assert.equal(row.vol, null);
     assert.equal(lineOf(cloneRow(row)), 'A 1000 440 - - 0 1');
+});
+
+// ---- (7) a new row must land in the instant you are working in ------------
+// "Insert after", the Kind dropdown and the Add-row bar all seed the new row
+// with a time read off a row that is already there. That read used to consider
+// led/audio rows ONLY, so after a speech cue or a marker it fell through to 0
+// and the new row appeared at the TOP of the file — in 01_sleep_onset's case 25
+// minutes from where the author was looking, sorted above every other row by
+// orderRowsForDisplay, and easy to miss entirely.
+
+test('Insert after a speech cue lands in that instant, not at t=0', () => {
+    // sessions/library/01_sleep_onset.ledc:60-63, verbatim (comments dropped):
+    // the session's last instant, whose last line is the cue.
+    const rows = parse(
+        '1500000 2 50 0 150 20 0 15\n' +
+        'A 1500000 248 0 0 0 1 250 0\n' +
+        'A 1500000 0 0 0 0 3 0 5\n' +
+        'S 1500000 default 10 "Two hertz, deep sleep. Rest."\n').doc.rows;
+    const cue = rows[rows.length - 1];
+    assert.equal(cue.kind, 'speech', 'fixture really does end on a speech cue');
+    const fresh = newRowOfKind(insertKindAfter(cue), insertTimeOf(cue));
+    assert.equal(fresh.time, 1500000, 'the new row inherited the cue\'s instant');
+    rows.splice(rows.length, 0, fresh);
+    assert.match(serialize({ rows }), /\n1500000 0 0 0 255 255 255 1\n?$/);
+});
+
+test('Insert after a MARKER lands in the marker\'s instant', () => {
+    // docs/sessions/markers.html:69-72, verbatim. A marker produces no sound
+    // and no light, so its row is the only thing in the grid that says where
+    // the author is: an EEG script is authored around exactly these.
+    const rows = parse('M 0      BASELINE_START\n' +
+                       'M 30000  STIM_START      condition=alpha10 block=3\n').doc.rows;
+    const mark = rows[1];
+    assert.equal(mark.kind, 'marker');
+    const fresh = newRowOfKind(insertKindAfter(mark), insertTimeOf(mark));
+    assert.equal(fresh.kind, 'led', 'there is no newRowOfKind("marker") to mirror');
+    assert.equal(lineOf(fresh), '30000 0 0 0 255 255 255 1');
+});
+
+test('insertTimeOf: every timed kind hands over its own instant', () => {
+    assert.equal(insertTimeOf(ledRow({ time: 1000 })), 1000);
+    assert.equal(insertTimeOf(audioRow({ time: 2000, channel: 1 })), 2000);
+    assert.equal(insertTimeOf(speechRow({ time: 1500000, text: 'Rest.' })), 1500000);
+    assert.equal(insertTimeOf(markerRow({ time: 30000, label: 'STIM_START' })), 30000);
+    assert.equal(insertTimeOf(firstRow('S 90000 default 60 "WAKE UP!"\n')), 90000);
+});
+
+test('insertTimeOf: a row with no time of its own seeds t=0', () => {
+    // BG is a document-wide descriptor and `#`/blank/raw rows are text: none of
+    // them is AT an instant, so there is nothing to inherit and 0 is honest.
+    assert.equal(insertTimeOf(commentRow('# a note')), 0);
+    assert.equal(insertTimeOf(bgRow(bg('push://bed', 0, 50))), 0);
+    assert.equal(insertTimeOf({ kind: 'raw', text: 'nonsense' }), 0);
+    assert.equal(insertTimeOf({ kind: 'blank' }), 0);
+    assert.equal(insertTimeOf(undefined), 0);
+    assert.equal(insertTimeOf(speechRow({})), 0, 'an un-timed cue is still 0, not NaN');
+});
+
+test('insertKindAfter: led/audio beget their own kind, everything else an LED row', () => {
+    assert.equal(insertKindAfter(ledRow({ time: 0 })), 'led');
+    assert.equal(insertKindAfter(audioRow({ time: 0, channel: 1 })), 'audio');
+    for (const row of [speechRow({ time: 1 }), markerRow({ time: 1 }),
+                       commentRow('# x'), bgRow(bg('', 0, 50)), { kind: 'blank' }]) {
+        assert.equal(insertKindAfter(row), 'led', row.kind);
+    }
+});
+
+test('retyping a speech cue as audio keeps the instant', () => {
+    // The Kind <select> replaces the row in place with newRowOfKind(kind,
+    // insertTimeOf(row)) — the same read, so the same bug lived here too: a
+    // cue retyped as A used to come back as `A 0 ...`.
+    const cue = firstRow('S 1500000 default 10 "Two hertz, deep sleep. Rest."\n');
+    const retyped = newRowOfKind('audio', insertTimeOf(cue));
+    assert.equal(retyped.kind, 'audio');
+    assert.equal(lineOf(retyped), 'A 1500000 0 0 0 0 1');
+});
+
+test('Add row appends at the last instant, even past a speech/marker tail', () => {
+    // In 67 of the 85 .ledc files in sessions/library the last row is a speech
+    // cue (11 end on audio, 7 on LED), so the bottom of the grid — where the
+    // Add-row bar is — is usually a cue.
+    const rows = parse('0 10 50 20 1\n' +
+                       'A 0 248 0 0 0 1 250 0\n' +
+                       'S 1500000 default 10 "Two hertz, deep sleep. Rest."\n').doc.rows;
+    assert.equal(appendTimeOf(rows), 1500000);
+    const rowsM = parse('M 0 BASELINE_START\nM 90000 STIM_END\n').doc.rows;
+    assert.equal(appendTimeOf(rowsM), 90000, 'a marker-only EEG script has no led/audio row');
+});
+
+test('appendTimeOf: nothing timed in the document is t=0', () => {
+    assert.equal(appendTimeOf(parse('# just a header\n\nBG push://bed 0 50\n').doc.rows), 0);
+    assert.equal(appendTimeOf([]), 0);
+    assert.equal(appendTimeOf(undefined), 0);
 });

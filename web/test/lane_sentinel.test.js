@@ -1,6 +1,23 @@
 // Lane-model handling of the `-` sentinel, and the one-click interior-LFO snap.
 //
-// Two defects, both of which lost data the author wrote:
+// Five defects, all of which lost data the author wrote. (1) and (2) are the
+// original pair; (3)-(5) were found by an adversarial verifier afterwards and
+// are documented at their own section headers further down:
+//
+//   (3) two rows at one (lane, time) collapsed into one, materialising the
+//       sentinels of the row that was deleted — and re-pointing the sweeps that
+//       targeted it;
+//   (4) coalesceRampKeys could delete the keyframe sitting at a held time,
+//       after which the hold won and the row went back to `-`;
+//   (5) the freq_r present bit (and the wave_type token beside it) was dropped,
+//       so "leave the right carrier alone" came back as "go mono".
+//
+// Still open, deliberately, and visible in two tests below as a comment rather
+// than an assertion: a row that re-states its lane's previous values exactly is
+// coalesced away entirely, which for a TRAILING row shortens the session. The
+// wizard re-admits those (wizard_compile.js); the lane view does not.
+//
+// The original pair:
 //
 // (1) CRASH. A lone `-` parses to a null Cell (parse.js parseCell: "`-` sentinel
 //     = leave unchanged"), and reconstructLanes used to feed every core cell
@@ -25,7 +42,8 @@
 //     t=0 the nearest boundary for everything — dragging keyframes onto the
 //     opening entry and overwriting it.
 //
-// Covers both, plus the four curated library sessions as named regressions.
+// Covers all five, plus the four curated library sessions, test2a.ledc and
+// t14_batch_cap.ledc as named regressions.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,6 +55,7 @@ import { parse } from '../src/js/gen/parse.js';
 import { serialize } from '../src/js/gen/serialize.js';
 import {
     docToLanes, lanesToDoc, reconstructLanes, snapToBandBoundaries, keyframe,
+    coalesceRampKeys,
 } from '../src/js/gen/views/lane_serialize.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -395,4 +414,273 @@ test('lane.js consumes the snap report, and does not assign it to the model', ()
         + 'commit throws "laneList.forEach is not a function"');
     assert.match(src, /\.snapped\b/,
         'lane.js must check .snapped so a fully-refused snap is not a silent no-op');
+});
+
+// ===========================================================================
+// (3) THE FOURTH WAY A `-` BECAME A NUMBER: two rows at one (lane, time).
+// ===========================================================================
+//
+// The three mechanisms above all PRESERVE the sentinel. This one materialised
+// it, which is the harm the whole `hold` mechanism exists to prevent.
+//
+// The lane projection emits exactly one row per (lane, time) — laneUnionTimes is
+// a SET of times and emitCellAt resolves one value per time. That is a real
+// constraint, not a bug. But a `.ledc` file may legally put two rows on one
+// channel at one timestamp, and reconstructLanes used to drop them into the same
+// lane, where the second row's keyframes simply overwrote the first row's. In
+// sessions/library/test2a.ledc that deleted line 54, `A 30000 - - - 12 4`, and
+// materialised its three sentinels as 440 / -100 / 45 from line 64,
+// `A 30000 440 -100 45 0 4`.
+//
+// DEVICE-VISIBLE, and not only through the sentinels. The row COUNT is
+// load-bearing: find_next_audio_for_bit returns the FIRST later same-channel
+// entry (config_parser.c:2471) as a sweep's target, and the parse-time insertion
+// sort breaks ties with `<=` so equal timestamps keep file order
+// (config_parser.c:572). So `A 20000 294 0 50 >4 4` aimed its mod ramp at mod 12
+// and, with that row gone, aimed at mod 0 — a 10 s 4->12 Hz AM ramp became
+// 4->0 Hz. No field-by-field merge can repair that: the device needs TWO
+// entries. The group is therefore SPLIT across lanes that share a key, which
+// keeps both rows, in order.
+
+// A ch4 mod ramp whose target row holds freq/pan/vol with `-`, plus the second
+// ch4 row that shares its timestamp. The shape of test2a.ledc lines 53/54/64.
+const OVERLAP_PAIR = [
+    'A 20000 294 0 50 >4 4',
+    'A 30000 - - - 12 4',
+    'A 30000 440 -100 45 0 4',
+].join('\n') + '\n';
+
+test('overlap: two rows at one (lane, time) both survive, sentinels and all', () => {
+    // Pre-fix the middle line vanished and its `- - -` came back as 440/-100/45.
+    assert.equal(laneCommit(OVERLAP_PAIR), OVERLAP_PAIR);
+});
+
+test('overlap: the sweep target stays the FIRST row at the shared timestamp', () => {
+    // What the firmware actually reads (config_parser.c:2471): the first later
+    // same-channel entry. Order among equal timestamps must be file order, so
+    // the `-`/mod-12 row has to come back BEFORE the 440 Hz row or the ramp
+    // silently re-targets mod 0.
+    const out = laneCommit(OVERLAP_PAIR).trim().split('\n');
+    assert.deepEqual(out, ['A 20000 294 0 50 >4 4',
+                           'A 30000 - - - 12 4',
+                           'A 30000 440 -100 45 0 4']);
+    const rows = lanesToDoc(docToLanes(parse(OVERLAP_PAIR).doc), { withMeta: false })
+        .doc.rows.filter(r => r.kind === 'audio' && r.time === 30000);
+    assert.equal(rows.length, 2, 'both entries reach the timeline');
+    assert.equal(rows[0].mod.value, 12, 'the ramp target is the row that sets mod 12');
+    assert.equal(rows[0].freq, null, 'and it still leaves freq unchanged');
+});
+
+test('overlap: the extra row becomes a lane of its own, sharing the key', () => {
+    const lanes = reconstructLanes(parse(OVERLAP_PAIR).doc);
+    assert.equal(lanes.lanes.length, 2, 'one ordinary lane plus one overlap lane');
+    assert.deepEqual(lanes.lanes.map(l => l.key), [4, 4], 'both are channel 4');
+    // Slot order is file order, so the primary lane holds the FIRST row of each
+    // timestamp and projects before the overlap lane.
+    assert.deepEqual(lanes.lanes[0].sub.mod.keys.map(k => [k.t, k.v]),
+                     [[20000, 4], [30000, 12]]);
+    assert.deepEqual(lanes.lanes[0].sub.freq.hold, [30000],
+                     'the sentinel is still a hold, not a value');
+    assert.deepEqual(lanes.lanes[1].sub.freq.keys.map(k => [k.t, k.v]), [[30000, 440]]);
+    assert.ok(/overlap/.test(lanes.lanes[1].name),
+              'the overlap lane is named apart: ' + lanes.lanes[1].name);
+});
+
+test('overlap: a lane group with no shared timestamp is untouched', () => {
+    // The split must be invisible to the overwhelmingly common case, or every
+    // session's `# @ave-lane` snapshot changes shape.
+    const lanes = reconstructLanes(parse('A 0 200 0 80 0 1\nA 5000 300 0 80 0 1\n').doc);
+    assert.equal(lanes.lanes.length, 1);
+    assert.equal(lanes.lanes[0].name, 'Audio ch 1');
+});
+
+test('overlap: the projection reports it instead of hiding it', () => {
+    const res = lanesToDoc(docToLanes(parse(OVERLAP_PAIR).doc), { withMeta: false });
+    assert.ok(res.warnings.some(w => /two or more rows on one channel\/mask/.test(w)),
+        'expected an overlap warning, got ' + JSON.stringify(res.warnings));
+});
+
+test('sessions: test2a.ledc keeps all 51 of its `-` tokens', () => {
+    // The named regression. Measured on the file as shipped: 51 `-` tokens, of
+    // which three (line 54's freq/pan/vol) used to become 440 / -100 / 45.
+    const text = readFileSync(join(SESSIONS, 'library', 'test2a.ledc'), 'utf8');
+    const before = serialize(parse(text).doc);
+    const after = laneCommit(text);
+    const dashes = (s) => (s.match(/(?<=\s)-(?=\s|$)/gm) || []).length;
+    assert.equal(dashes(before), 51, 'the fixture still has 51 sentinels');
+    assert.equal(dashes(after), 51, 'a lane round-trip materialised one');
+    assertSameEntries(before, after, 'test2a.ledc');
+    // And the two ch4 rows at t=30000 are still two rows, in that order.
+    const ch4 = after.split('\n').map(l => l.replace(/\s*#.*$/, ''))
+        .filter(l => /^A 30000 .*\s4$/.test(l));
+    assert.deepEqual(ch4, ['A 30000 - - - 12 4', 'A 30000 440 -100 45 0 4']);
+});
+
+test('sessions: t14_batch_cap.ledc keeps all 54 entries at t=1000', () => {
+    // The pathological case, and the reason the split cannot be capped: this
+    // fixture exists to trip the firmware's 50-per-timestamp batch cap
+    // (config_parser.c:572 keeps the order the cap then truncates), so dropping
+    // the duplicates would delete the very thing under test. 54 entries share
+    // t=1000; 49 of them are byte-identical on mask 3.
+    const text = readFileSync(join(SESSIONS, 'test', 't14_batch_cap.ledc'), 'utf8');
+    const before = serialize(parse(text).doc);
+    const after = laneCommit(text);
+    const at1000 = (s) => s.split('\n').filter(l => /^1000 /.test(l)).sort();
+    assert.equal(at1000(before).length, 54, 'the fixture still batches 54 entries');
+    // Line for line, not just the count: the 49 identical mask-3 rows and the
+    // four mask-12 rows that the cap drops must all still be there.
+    assert.deepEqual(at1000(after), at1000(before));
+    // NOT assertSameEntries: this file also loses its trailing
+    // `13000 -1 50 0 0 0 0 15` row to the redundant-constant-step coalesce,
+    // which is a different (and still open) mechanism — see the module header.
+});
+
+// ===========================================================================
+// (4) coalesceRampKeys MUST NOT DELETE THE KEYFRAME AT A HELD TIME.
+// ===========================================================================
+//
+// isHeldAt documents the precedence: "a real keyframe at exactly the same time
+// always wins over the hold". coalesceRampKeys can repeal that by deletion. Its
+// redundant-constant-step rule drops a step keyframe whose value the previous
+// one already holds — and if that keyframe was the one outvoting a hold, the
+// hold starts winning again and the row is re-emitted as `-`. Every other drop
+// in that function is value-preserving (the value stays implied by the
+// surrounding curve); this one hands the field back to whatever the device had
+// reached, which is the materialisation-by-deletion the sentinel forbids.
+//
+// Tested at the function level because that is where the invariant lives. The
+// reconstruction path can no longer reach it — a single row contributes either a
+// key or a hold for a field, and the one way to get both at one time was two
+// rows at one (lane, time), which the split above now separates into different
+// lanes. So this is the guard on the exported contract, not a live repro.
+
+test('coalesce: a keyframe at a held time is never dropped as redundant', () => {
+    const keys = [keyframe(0, 50, 'step'), keyframe(2000, 50, 'step')];
+    // Without `hold` the second keyframe IS redundant and is dropped (the
+    // behaviour view_passthrough.test.js relies on for its orphan-note case).
+    assert.deepEqual(coalesceRampKeys(keys).map(k => k.t), [0]);
+    // With a `-` at 2000 it must stay, or isHeldAt flips and the row goes back
+    // to `-`.
+    assert.deepEqual(coalesceRampKeys(keys, [2000]).map(k => k.t), [0, 2000]);
+});
+
+test('coalesce: a held time also survives the on-the-curve ramp rule', () => {
+    // The other drop rule, same harm: 1000 lies exactly on the 0->2000 line, so
+    // it is removed as a resampling artefact — unless a `-` sits there.
+    const keys = [keyframe(0, 0, 'lin'), keyframe(1000, 50, 'lin'),
+                  keyframe(2000, 100, 'step')];
+    assert.deepEqual(coalesceRampKeys(keys).map(k => k.t), [0, 2000]);
+    assert.deepEqual(coalesceRampKeys(keys, [1000]).map(k => k.t), [0, 1000, 2000]);
+});
+
+test('coalesce: the keyframe-wins-over-hold rule survives a projection', () => {
+    // A forward guard, not a repro: this passes on the pre-fix code too, because
+    // the committed row states a value and so re-imports as a keyframe with no
+    // hold beside it. It is here to catch the end-to-end regression if either
+    // half of the rule is ever changed — the user drops a value onto a held row
+    // (the existing test above), commits, and the value must still be there
+    // after the next import rebuilds the sublanes through the coalesce.
+    const lanes = docToLanes(parse(SENTINEL_PAIR).doc);
+    lanes.lanes[0].sub.bright.keys.push(keyframe(2000, 80, 'step'));
+    // 80 is exactly what t=0 sets, so the new keyframe is "redundant" by value.
+    const once = serialize(lanesToDoc(lanes, { withMeta: false }).doc);
+    assert.equal(once, '0 10 50 80 255 255 255 1\n2000 14 - 80 - - - 1\n');
+    assert.equal(laneCommit(once), once, 'the value survives the next round-trip');
+});
+
+// ===========================================================================
+// (5) THE freq_r PRESENT BIT, AND THE WAVE TOKEN NEXT TO IT.
+// ===========================================================================
+//
+// Both columns are "absent / `-` => leave the live value alone" fields: freq_r
+// is written only under AUD_SET_FREQR (config_parser.c:1182, set at :1834) and
+// wave_type only under has_wave_type (:1174, set at :1849). An explicit value is
+// a real write — freq_r 0 collapses the channel to mono, wave_type 0 selects
+// sine — so absent and 0 are opposite instructions that both store 0.
+//
+// serialize.js was fixed to honour `row.freqRPresent`, but lanesToDoc rebuilt
+// its rows through audioRow() without it, so a Lanes commit walked straight past
+// that fix. The lane model now encodes ABSENCE rather than inferring it from the
+// value: no sublane at all, a time before the first keyframe, or a `hold` time —
+// the same vocabulary the cell sublanes already use for `-`, so the
+// `# @ave-lane` comment gains no new key.
+
+test('freqR: an explicit `-` in the freq_r slot comes back as `-`', () => {
+    // The named case. Without the present bit the serializer has to guess from
+    // the value and guesses "0 means mono" (serialize.js:142), so this line came
+    // back as `A 10000 200 0 80 0 1 0 1` and killed a live binaural pair.
+    const text = 'A 10000 200 0 80 0 1 - 1\n';
+    assert.equal(laneCommit(text), text);
+});
+
+test('freqR: an explicit 0 (the mono collapse) is not deleted', () => {
+    // The opposite error. ledc_format.md tells authors to "restate freqR (0 for
+    // mono) on any entry that moves an audio carrier", and gating the sublane on
+    // a positive value dropped exactly those rows' token — so a beat the author
+    // ENDED kept beating.
+    const text = 'A 0 200 0 80 0 1 210\nA 5000 220 0 80 0 1 0\n';
+    assert.equal(laneCommit(text), text);
+});
+
+test('freqR: no token is invented on a row that wrote none', () => {
+    // The backfill that compounded it: the stepped sublanes held their FIRST
+    // value backwards in time, so a row before the first freq_r / wave_type row
+    // was given one. For wave_type that is not a placeholder — `0` is the SINE
+    // waveform — so a channel running square or noise was silently reset.
+    const text = 'A 0 3000 0 70 0 1\nA 600 0 0 0 0 1\nA 1000 200 0 70 0 1 0 1\n';
+    assert.equal(laneCommit(text), text);
+    const lane = reconstructLanes(parse(text).doc).lanes[0];
+    assert.deepEqual(lane.sub.wave.keys.map(k => [k.t, k.v]), [[1000, 1]],
+        'only the row that wrote the token gets a keyframe');
+    assert.equal(Object.prototype.hasOwnProperty.call(lane.sub.wave, 'hold'), false,
+        'absences BEFORE the first write need no hold entry');
+});
+
+test('freqR: a row that stops writing the token mid-lane is held, not back-filled', () => {
+    // Here the absence comes AFTER a write, so run-length encoding alone cannot
+    // tell it from "the run continues" — it needs a `hold` time. Pre-fix the run
+    // continued and the row re-stated 210 Hz and wave 1.
+    const text = 'A 0 200 0 80 0 1 210 1\nA 5000 220 0 80 0 1 - -\n';
+    const lane = reconstructLanes(parse(text).doc).lanes[0];
+    assert.deepEqual(lane.sub.freqR.hold, [5000]);
+    assert.deepEqual(lane.sub.wave.hold, [5000]);
+    // With nothing after them to hold their position, the two `-` placeholders
+    // are simply omitted — the firmware reads an absent token and a `-` the same
+    // way (config_parser.c:1827 freq_r, :1845 wave_type), and the serializer's
+    // minimal-trailing-token rule prefers the shorter spelling.
+    assert.equal(laneCommit(text), 'A 0 200 0 80 0 1 210 1\nA 5000 220 0 80 0 1\n');
+    // Give them a later column to align and the exact tokens come back.
+    const held = 'A 0 200 0 80 0 1 210 1\nA 5000 220 0 80 0 1 - - 40\n';
+    assert.equal(laneCommit(held), held);
+});
+
+test('freqR: a `>` glide on freq_r is not flattened to a step', () => {
+    // freq_r is a compound cell in format v3 and the firmware wires a real
+    // FREQ_R sweep off the prefix (config_parser.c:2937). The lane model holds
+    // it as a plain number, so the prefix only survives on the cell that rides
+    // alongside (model.js freqRCell) — unset, the glide became a step and the
+    // beat stopped moving.
+    const text = 'A 25000 500 0 70 0 3 >250 1\nA 35000 500 0 70 0 3 300 1\n';
+    assert.equal(laneCommit(text), text);
+});
+
+test('freqR: an unchanged run still collapses to one keyframe', () => {
+    // The dedupe is what keeps the `# @ave-lane` snapshot small — measured over
+    // the 99 shipped sessions, 1449 rows that write freq_r reduce to 379
+    // keyframes and 1433 that write wave_type to 367 — so it must survive the
+    // presence work.
+    const text = 'A 0 200 0 80 0 1 210 1\nA 5000 220 0 80 0 1 210 1\n'
+               + 'A 9000 240 0 80 0 1 210 1\n';
+    assert.equal(laneCommit(text), text);
+    const lane = reconstructLanes(parse(text).doc).lanes[0];
+    assert.deepEqual(lane.sub.freqR.keys.map(k => k.t), [0]);
+    assert.deepEqual(lane.sub.wave.keys.map(k => k.t), [0]);
+});
+
+test('freqR: a lane that never mentions freq_r grows no sublane', () => {
+    // Same stability rule as `hold` above: a session that does not use the
+    // column must serialize its snapshot exactly as it did before.
+    const lane = reconstructLanes(parse('A 0 200 0 80 0 1\n').doc).lanes[0];
+    assert.equal(lane.sub.freqR, undefined);
+    assert.equal(lane.sub.wave, undefined);
 });

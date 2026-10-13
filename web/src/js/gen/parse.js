@@ -218,13 +218,58 @@ function parseBg(tokens) {
 // between the FIRST and LAST double-quote so embedded quotes survive. If there
 // are no quotes, the 4th token onward is treated as the (unquoted) text.
 // Returns { row } or { error }.
+//
+// WHERE A COMMENT MAY BEGIN ON AN `S` LINE. The quoted text may itself contain
+// a '#', so "everything after the first '#'" — the rule splitInlineComment
+// applies to every other row kind — is wrong here. The boundary comes from the
+// C, which is unambiguous about it:
+//   - the payload is parsed from the RAW line, not from the comment-stripped
+//     copy: config_parser.c:1556 passes `line`, while the '#' cut at
+//     config_parser.c:1523 is made on `line_copy`, a scratch buffer that exists
+//     only to produce the tokens the dispatch switches on. So '#' is not a
+//     delimiter anywhere parse_speech_line looks.
+//   - the text runs from the first '"' at or after the volume
+//     (config_parser.c:1743) to the LAST '"' on the line (config_parser.c:1748
+//     — `strrchr`, which is why embedded quotes survive), and nothing past that
+//     last quote is ever read: config_parser.c:1756 terminates the copy there.
+// Hence: inside the quotes a '#' is spoken text; after the closing quote it is
+// the only thing that can be a comment.
+//
+// One consequence reads like a bug and is not. A comment containing a double
+// quote MOVES the "last quote", so the device hears
+//     S 0 en 80 "hi" # he said "no"
+// as the single phrase  hi" # he said "no  . We read it the same way, which is
+// both faithful and byte-stable (the first and last quote are re-emitted where
+// they stood), so even that spelling round-trips without anyone guessing.
 function parseSpeech(rest) {
     const q1 = rest.indexOf('"');
-    let head, text;
+    let head, text, comment = '';
     if (q1 >= 0) {
         const q2 = rest.lastIndexOf('"');
         head = rest.slice(0, q1);
         text = (q2 > q1) ? rest.slice(q1 + 1, q2) : rest.slice(q1 + 1);
+        if (q2 > q1) {
+            const tail = rest.slice(q2 + 1);
+            const h = tail.indexOf('#');
+            const before = (h >= 0) ? tail.slice(0, h) : tail;
+            if (before.trim() !== '') {
+                // Non-comment text after the closing quote. The device ignores
+                // it silently (config_parser.c:1756 stops reading there), so it
+                // means nothing to the engine — but it is not a comment either
+                // and the model has no field to hold it, and deleting an
+                // author's bytes on save is the one outcome this parser avoids.
+                // Held verbatim as a raw row instead, with the reason attached.
+                return { error: 'S line: "' + before.trim() + '" after the closing quote ' +
+                                'is ignored by the firmware and cannot be represented; ' +
+                                'only a trailing "# comment" may follow the quoted text' };
+            }
+            if (h >= 0) comment = tail.slice(h + 1).trim();
+        }
+        // An UNTERMINATED quote (q2 === q1) is rejected outright by the device
+        // (config_parser.c:1749). The browser repairs it instead — serializing
+        // the row supplies the missing quote — so there is no closing quote to
+        // measure a comment from, and a '#' after the lone quote is inside the
+        // text the author was still typing. No split in that case.
     } else {
         head = rest;
         text = '';
@@ -234,13 +279,17 @@ function parseSpeech(rest) {
         return { error: 'S line needs: S <time> <voice> <volume> "text"' };
     }
     if (q1 < 0) {
-        // No quotes — reconstruct text from the 4th token onward.
+        // No quotes — reconstruct text from the 4th token onward. The device
+        // rejects such a line outright (config_parser.c:1744), so there is no
+        // firmware rule here to mirror and no comment is split off: a '#' is
+        // kept as text, and the row serializes back QUOTED, which is what makes
+        // it device-legal. Nothing is lost either way.
         text = htokens.slice(3).join(' ');
     }
     const time = parseInt(htokens[0], 10) || 0;
     const voice = htokens[1];
     const volume = parseFloat(htokens[2]) || 0;
-    return { row: speechRow({ time, voice, volume, text }) };
+    return { row: speechRow({ time, voice, volume, text, inlineComment: comment }) };
 }
 
 /*
@@ -253,6 +302,9 @@ function parseSpeech(rest) {
  *   - key=value pairs past the fourth are dropped, not fatal;
  *   - `mod=` is reserved: it sets the modality and is never stored as a kv.
  * Only a missing/!-shaped label is an actual error.
+ *
+ * Returns { row, warn } — `warn` is a non-fatal diagnostic for something the
+ * device logs and carries on past.
  */
 function parseMarker(tokens, comment) {
     if (tokens.length < 2) {
@@ -265,6 +317,8 @@ function parseMarker(tokens, comment) {
     }
     const kv = [];
     let modality = null;
+    let modalityRaw = '';
+    let warn = '';
     for (let i = 2; i < tokens.length; i++) {
         const t = tokens[i];
         const eq = t.indexOf('=');
@@ -272,13 +326,29 @@ function parseMarker(tokens, comment) {
         const k = t.slice(0, eq);
         const v = t.slice(eq + 1);
         if (k === 'mod') {
-            if (MARKER_MODALITIES.indexOf(v) >= 0) modality = v;
+            if (MARKER_MODALITIES.indexOf(v) >= 0) {
+                modality = v;
+            } else {
+                // An unknown modality is not an error on the device: it warns
+                // and falls back to inferring from the batch
+                // (config_parser.c:174), leaving the marker in the timeline.
+                // Mirroring only the "modality stays unset" half of that threw
+                // the token away entirely — neither `modality` nor a kv pair
+                // held it — so the author's text was deleted from the file by
+                // the next save. Keep the spelling verbatim (model.js
+                // modalityRaw) and report it instead of silently editing it.
+                modalityRaw = v;
+                warn = 'M line ' + label + ': mod="' + v + '" is not one of ' +
+                       MARKER_MODALITIES.join('/') + ' — the device warns and infers ' +
+                       'the modality from what shares this timestamp. Value kept verbatim.';
+            }
             continue;                                // reserved, never a kv
         }
         if (kv.length >= MARKER_MAX_KV) continue;    // device drops the rest
         kv.push({ k, v });
     }
-    return { row: markerRow({ time, label, kv, modality, inlineComment: comment }) };
+    return { row: markerRow({ time, label, kv, modality, modalityRaw,
+                              inlineComment: comment }), warn };
 }
 
 export function parse(text) {
@@ -351,6 +421,9 @@ export function parse(text) {
             const res = parseMarker(tokenize(mf).slice(1), mc);
             if (res.row) {
                 doc.rows.push(res.row);
+                // Non-fatal: the line still runs on the device, so it is a
+                // 'warn' (validate.js's spelling), not an 'error'.
+                if (res.warn) diagnostics.push({ line: lineNo, severity: 'warn', msg: res.warn });
             } else {
                 doc.rows.push(rawRow(line, res.error));
                 diagnostics.push({ line: lineNo, severity: 'error', msg: res.error });
@@ -370,6 +443,38 @@ export function parse(text) {
 
         let res;
         if (tokens[0][0] === 'A' || tokens[0][0] === 'a') {
+            // `A1000 240 …` is NOT "an audio row at t=1000". The firmware's
+            // audio branch tests only the first BYTE of the token
+            // (config_parser.c:1542) and then drops the WHOLE token
+            // (config_parser.c:1544 passes `tokens + 1, token_count - 1`), so
+            // everything glued to the A is discarded and every remaining field
+            // slides one column left: `A1000 240 0 60 0 1` plays at t=240 ms
+            // with freq 0, pan 60, vol 0, mod 1. The `M` and `S` branches guard
+            // against precisely this by requiring a lone keyword character
+            // (config_parser.c:1545 / :1551); the `A` branch does not, so there
+            // is no device rejection to mirror either — it accepts the line and
+            // misreads it.
+            //
+            // Neither reading is therefore honest. `A 1000 240 …` is not what
+            // the device plays, and `A 240 0 60 …` — what we used to emit,
+            // because parseAudio never saw the glued digits — is a DIFFERENT,
+            // valid-looking command with the author's 1000 ms silently gone.
+            // (Both spellings do produce the same wrong row on the device,
+            // which is exactly why the rewrite was invisible.) So hold the
+            // bytes and say why, the way every other line the device would not
+            // run as written is held. The stale `A1500 binaural 40.0 6.0` in
+            // the project CLAUDE.md is from the old keyword grammar, which
+            // parse_audio_line no longer implements at all; it does not make
+            // the glued form legal.
+            if (tokens[0].length > 1) {
+                const glued = tokens[0].slice(1);
+                const msg = 'Audio prefix "' + tokens[0] + '" must be a lone "A": the ' +
+                    'firmware drops the entire first token, so "' + glued + '" is lost ' +
+                    'and every field shifts one column left. Write "A ' + glued + ' …".';
+                doc.rows.push(rawRow(line, msg));
+                diagnostics.push({ line: lineNo, severity: 'error', msg });
+                continue;
+            }
             res = parseAudio(tokens.slice(1), comment);
         } else {
             res = parseLed(tokens, comment);

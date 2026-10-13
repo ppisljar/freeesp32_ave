@@ -507,21 +507,53 @@ test('(h) a trailing hold keeps its note inline — the wizard must not fold it'
         'so there is no orphan comment for it');
 });
 
-test('(h) two notes on one identity: the second orphans rather than mis-attaching', () => {
+test('(h) two rows sharing one identity: no note text is lost, by either route', () => {
     // Two rows CAN share (kind, time, channel) — a legal firmware batch where
-    // the later row wins. Both views collapse them into one row, so there is
-    // only one row for two notes. The first note takes it (source order); the
-    // second must NOT be stacked onto the same row (which would read as a note
-    // about the wrong thing) and must not be dropped either.
+    // file order decides what the device sees (find_next_audio_for_bit takes the
+    // first later same-channel entry, config_parser.c:2460-2476, and the stable
+    // sort at :566-576 preserves file order among equal timestamps).
+    //
+    // This test used to assert that BOTH views collapsed the pair to one row and
+    // orphaned the second note. That collapse was itself a data-loss bug: it
+    // deleted a row outright and materialised any `-` sentinel on it into a hard
+    // number, which on test2a.ledc turned a 4->12 Hz AM ramp into 4->0 Hz on the
+    // device. The views now reach the same guarantee by different routes, so the
+    // assertion here is the CONTRACT (no note text is lost) rather than one
+    // view's mechanism:
+    //   - Lanes keeps both rows, so both notes stay inline.
+    //   - the Wizard's coalesce() still folds a byte-identical consecutive
+    //     duplicate — which is its legitimate job, not the sentinel bug; it
+    //     materialises nothing (verified: the sentinel case round-trips with its
+    //     dashes intact) — so the second note orphans to a comment.
     const src = 'A 0 200 0 80 0 1 # first note\nA 0 200 0 80 0 1 # second note\n';
     for (const [label, trip] of [['lane', laneTrip], ['wizard', wizardTrip]]) {
         const out = trip(parse(src).doc, false);
-        const audio = out.rows.filter(r => r.kind === 'audio');
-        assert.equal(audio.length, 1, label + ': the duplicate row was collapsed');
-        assert.equal(audio[0].inlineComment, 'first note', label + ': first note attached once');
-        assert.equal(out.rows.filter(r => r.kind === 'comment' &&
-            String(r.text).indexOf('second note') >= 0).length, 1,
-            label + ': second note kept as a comment, not dropped or doubled');
+        const text = serialize(out);
+        for (const note of ['first note', 'second note']) {
+            assert.equal((text.split(note).length - 1), 1,
+                label + ': "' + note + '" survives exactly once');
+        }
+        // Whatever survives inline must be attached in source order, never
+        // shuffled onto the wrong row.
+        const inline = out.rows.filter(r => r.inlineComment).map(r => r.inlineComment);
+        assert.deepEqual(inline, inline.slice().sort(), label + ': notes in source order');
+        assert.equal(inline[0], 'first note', label + ': the first note keeps its row');
+    }
+});
+
+test('(h) a duplicate identity does not materialise a `-` sentinel in either view', () => {
+    // The device-visible half of the same bug, and the reason the test above
+    // stopped asserting a collapse. test2a.ledc has `A 30000 - - - 12 4`
+    // followed by `A 30000 440 -100 45 0 4`; collapsing them rewrote the three
+    // sentinels to 440 / -100 / 45, so the mod sweep from `A 20000 294 0 50 >4 4`
+    // retargeted from 12 Hz to 0 Hz — a 4->12 Hz AM ramp became 4->0 Hz.
+    const src = 'A 20000 294 0 50 >4 4\nA 30000 - - - 12 4\nA 30000 440 -100 45 0 4\n';
+    const dashes = (t) => (t.match(/(^| )-( |$)/g) || []).length;
+    for (const [label, trip] of [['lane', laneTrip], ['wizard', wizardTrip]]) {
+        const out = serialize(trip(parse(src).doc, false));
+        assert.equal(dashes(out), dashes(src),
+            label + ': every `-` survives; a materialised sentinel changes what'
+            + ' the device plays');
     }
 });
 
