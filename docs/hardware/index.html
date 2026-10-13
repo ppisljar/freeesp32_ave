@@ -1171,6 +1171,131 @@ idf.py build
     app image, so OTA alone leaves the device serving the old bundle.
   </p>
 
+  <h2 id="measuring">Measuring what you built</h2>
+
+  <p>A build is not finished when it lights up. The things that decide whether a
+  session does what it claims — how far the light lags the sound, whether a
+  10&nbsp;Hz flicker is 10&nbsp;Hz, whether two eyes are in phase or antiphase —
+  depend on your wiring, your LED backend and your diffuser, and none of them are
+  visible by looking. They are, however, cheap to record. Everything on
+  <a href="../hardware/measurements.html">measured results</a> came off the rig
+  below.</p>
+
+  <figure class="photo photo-sm">
+    <img src="../assets/hw/measure-rig.jpg" loading="lazy" decoding="async"
+         alt="The capture rig photographed from above. On the left, a white Arturia audio interface with two illuminated input jacks. On the right, the wearable sleep mask opened flat, with a green 80 by 60 millimetre photovoltaic panel taped over each eye cup. Each panel's red and black leads run to its own jack — one on a coiled yellow cable, one on a black cable — plugged into the interface's two inputs, with a small capacitor in line at each jack.">
+    <figcaption><strong>The whole instrument.</strong> One small photovoltaic
+    panel over each eye cup, each wired through a series capacitor to its own jack
+    and into its own input on an audio interface. No microcontroller, no
+    oscilloscope, no amplifier.</figcaption>
+  </figure>
+
+  <h3 id="rig-parts">Parts</h3>
+
+  <div class="spec-table">
+  <table>
+    <thead><tr><th>Item</th><th>Qty</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Audio interface with Hi-Z / instrument inputs</strong></td><td>1</td>
+          <td>The input type matters more than the brand — see below. Two inputs
+              measures light only; four lets you capture the device's audio at the
+              same time, which is what an audio-to-light offset needs. Record
+              24-bit: a long 16-bit take can overflow a WAV's size field.</td></tr>
+      <tr><td><strong>Photovoltaic panel</strong></td><td>2</td>
+          <td>Small — the pair pictured are 80 × 60 mm. Search
+              <code>mini solar panel 5V</code>. The voltage rating is irrelevant;
+              you are reading its waveform, not powering anything from it.</td></tr>
+      <tr><td><strong>100 nF capacitor</strong></td><td>2</td>
+          <td>In series with one leg of each panel, to block the DC the cell
+              produces under ambient light. Not optional — see below.</td></tr>
+      <tr><td><strong>Jack leads</strong></td><td>2</td>
+          <td>Whatever your interface takes. Polarity sets the waveform's sign,
+              which the analyser can invert, so getting it backwards breaks
+              nothing.</td></tr>
+      <tr><td><strong>Isolated USB adapter</strong></td><td>1</td>
+          <td>For the device. Strongly recommended — see the ground-loop note.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="rig-build">Building it</h3>
+
+  <ol>
+    <li><strong>Solder a 100 nF capacitor in series</strong> with one leg of each
+    panel, and the panel's two leads to a jack. Keep the two channels identical:
+    any difference between them shows up as a fake inter-eye offset.</li>
+    <li><strong>Tape one panel over each eye cup</strong>, facing the LEDs, as
+    close to where an eye would be as the build allows. Note which LED zone each
+    panel sits over — the analyser's channel map needs it, and the sensor's
+    position along the LED chain is itself worth writing down (below).</li>
+    <li><strong>Plug each into its own input</strong> and set that input to
+    <strong>Hi-Z / instrument</strong>, not line.</li>
+    <li><strong>Power the device from an isolated USB adapter</strong>, not from
+    the same computer as the interface.</li>
+    <li><strong>Check the floor before trusting anything:</strong> record a few
+    seconds with the LEDs dark and look at 50 Hz (or 60 Hz). On this rig the line
+    sits at −87.6 dBFS, giving a sensor signal-to-noise of +45.2 dB and
+    +41.8 dB.</li>
+  </ol>
+
+  <h3 id="rig-why">Why those two choices matter</h3>
+
+  <div class="warn">
+    <p><strong>Hi-Z, not line.</strong> On a line input (~20&nbsp;kΩ) the series
+    capacitor differentiates — corner around 80&nbsp;Hz — and the capture shows
+    edge spikes instead of a brightness envelope. The harmonic ladder of a
+    50&nbsp;% square flattens to 1 / 0.91 / 0.86 / 0.82 / 0.79, and every
+    amplitude or brightness number becomes meaningless. On a high-impedance input
+    the same signal reads 1 / 0.33 / 0.20 / 0.14 / 0.11, matching theory to within
+    0.01. <strong>If your interface has no instrument input, the rig will produce
+    confident, wrong numbers rather than obviously broken ones.</strong></p>
+  </div>
+
+  <div class="warn">
+    <p><strong>Isolate the device's USB.</strong> Sharing a ground with the
+    recording computer put a 10&nbsp;Hz LED component into the audio channels at
+    <strong>+44&nbsp;dB</strong> — which looked exactly like a firmware crosstalk
+    bug and was chased as one. On an isolated adapter it drops to +16.9&nbsp;dB,
+    which is 39.6&nbsp;dB below the audio carrier and not worth chasing.</p>
+  </div>
+
+  <div class="note">
+    <p><strong>A solar cell is a convenient photodiode.</strong> Large area, no
+    bias supply, no amplifier, output at a level an instrument input is happy
+    with, and bandwidth orders of magnitude beyond the 100&nbsp;Hz ceiling of
+    anything this device emits. It also has the polarity you want: more light
+    means a more positive voltage, so the waveform rises when the LED turns on.
+    A phototransistor with a pull-up, or a photodiode into a transimpedance amp,
+    both pull <em>down</em> on light — tell the analyser with a <code>!</code>
+    before the channel number (<code>--map "light1=!3"</code>) rather than
+    rewiring.</p>
+  </div>
+
+  <h3 id="rig-capture">Taking a capture</h3>
+
+  <p>Start recording, play a session, stop. The one thing to get right is
+  <strong>where the session's <code>t=0</code> sits in the recording</strong>: the
+  recorder started when you pressed record, the session started when the device
+  accepted the POST, and nothing in the file relates the two. A wrong
+  <code>t=0</code> makes every timing number downstream meaningless. Author a sync
+  marker into the <code>.ledc</code> and the analyser finds it; otherwise it
+  cross-correlates and tells you how much it trusts the result.</p>
+
+  <p>Two sensors is the useful minimum — one per eye also gives inter-eye phase,
+  which is the only way to confirm an
+  <a href="../sessions/techniques.html#antiphase">antiphase pair</a> really is in
+  antiphase. The analyser degrades honestly with less: with no light sensors the
+  audio-to-light offset is reported as <em>not measurable</em> rather than
+  guessed, and with one audio channel the binaural beat comes back
+  <code>BEAT_UNAVAILABLE</code>.</p>
+
+  <p>The channel map, the sync methods, what each number means and which survive a
+  dropped buffer are in <code>tools/avmeasure/README.md</code>, with the practical
+  cautions summarised under
+  <a href="../sessions/authoring.html#test">how to test a session</a>. What the rig
+  has actually produced is on
+  <a href="../hardware/measurements.html">measured results</a>.</p>
+
   <h2 id="variant">Making your own variant</h2>
 
   <p>

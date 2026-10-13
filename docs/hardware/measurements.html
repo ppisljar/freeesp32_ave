@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Measured results — ESP32 AVE</title>
+<meta name="description" content="Every number this project claims, with the capture that produced it: audio-to-light synchronisation, carrier and envelope harmonics, gate accuracy, output levels and rig characterisation.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="../index.html">ESP32&nbsp;AVE</a>
+  <a href="../index.html">Overview</a>
+  <a href="../user-guide/index.html">User guide</a>
+  <a href="../sessions/index.html">Session developer</a>
+  <a href="../hardware/index.html" aria-current="page">Hardware</a>
+</nav>
+
+<div class="layout">
+
+<aside class="toc" id="toc"></aside>
+
+<main class="page">
+
+<div class="hero">
+  <span class="eyebrow">Hardware</span>
+  <h1>Measured results</h1>
+  <p class="lead">Every number this project puts its name to, in one place, with
+  the capture that produced it. Entrainment hardware is an unusually easy place
+  to publish figures nobody checked; the point of this page is that each row
+  below can be argued with.</p>
+</div>
+
+<div class="note">
+  <p><strong>How to read this.</strong> Figures come from the reports in
+  <code>reports/non_planned_reports/</code>, taken on the ESP32-S3 build through
+  the rig described under
+  <a href="../hardware/index.html#measuring">measuring what you built</a>.
+  Where a number is a <em>hypothesis</em> rather than a measurement it says so.
+  Where something is still unknown it is listed at the end rather than omitted.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="sync">Audio-to-light synchronisation</h2>
+
+<p>The headline number, and the one that justifies the whole rig. A
+<code>.ledc</code> drives an LED gate and an audio gate at the same rate and
+phase, so the offset between the two recorded envelopes <em>is</em> the sync
+error.</p>
+
+<h3>Why the method is trustworthy</h3>
+
+<ul>
+  <li>Edges are located by the <strong>peak of the derivative inside each
+  cycle</strong>, not by a threshold crossing. The cell sits behind a capacitor
+  into a high-impedance input, so the square droops and a fixed threshold is
+  crossed repeatedly — that counted <strong>42 edges where 27 existed</strong>. A
+  drooping square still has exactly one sharp slope spike per edge.</li>
+  <li>All smoothing is a <strong>centred</strong> moving average. A causal filter
+  folds its own group delay straight into the answer.</li>
+  <li>Running several rates in one session separates a real latency (constant
+  <em>time</em>) from an envelope-shape artifact (constant <em>phase</em>). At
+  2/4/8&nbsp;Hz the constant-latency model fit to <strong>0.03&nbsp;ms</strong>
+  while constant-phase needed <strong>39.9°</strong> of spread. It is a latency,
+  unambiguously.</li>
+</ul>
+
+<p>Per-edge scatter is 0.23–0.31&nbsp;ms, and the two audio channels agree to
+0.01&nbsp;ms.</p>
+
+<h3>Where it started, and where it is now</h3>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>State</th><th>Audio-to-light offset</th></tr></thead>
+<tbody>
+<tr><td><strong>Before any fix</strong></td>
+    <td>A random <strong>0–23&nbsp;ms</strong> that re-rolled at every session
+        start, <em>plus</em> a <strong>25–42&nbsp;ms</strong> jump at every rate
+        change, <em>plus</em> up to a further <strong>±62&nbsp;ms</strong>
+        depending where the entry fell relative to the old period.</td></tr>
+<tr><td>After the dispatch-origin fix</td>
+    <td>Range collapses <strong>21.92&nbsp;ms → 1.30&nbsp;ms</strong>
+        (n&nbsp;=&nbsp;8, sd&nbsp;0.38); residual constant −1.79&nbsp;ms.</td></tr>
+<tr><td><strong>After all four fixes</strong></td>
+    <td>A <strong>constant −2.7&nbsp;ms</strong> (audio early), stable across
+        rate changes and across session restarts.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Final verification, entry time swept across one old period, two runs each,
+both blocks measured — twelve captures:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Entry</th><th>Run</th><th>8 Hz block (fresh start)</th><th>6 Hz block (rate change)</th></tr></thead>
+<tbody>
+<tr><td>9000 ms</td><td>1</td><td>−2.52 ms</td><td>−2.68 ms</td></tr>
+<tr><td>9000 ms</td><td>2</td><td>−3.09 ms</td><td>−2.80 ms</td></tr>
+<tr><td>9040 ms</td><td>1</td><td>−3.04 ms</td><td>−2.95 ms</td></tr>
+<tr><td>9040 ms</td><td>2</td><td>−3.17 ms</td><td>−3.05 ms</td></tr>
+<tr><td>9080 ms</td><td>1</td><td>−3.53 ms</td><td>−3.03 ms</td></tr>
+<tr><td>9080 ms</td><td>2</td><td>−2.99 ms</td><td>−3.01 ms</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>All twelve fall within <strong>−2.52…−3.53&nbsp;ms</strong> — a 1.0&nbsp;ms
+spread — independent of entry alignment and of whether the rate changed. Audio
+health across the run: 0 write errors, 0 short writes, 0 generator failures, fill
+average 910&nbsp;µs of a 23&nbsp;220&nbsp;µs budget.</p>
+
+<div class="warn">
+  <p><strong>The −2.7 ms is deliberately not trimmed to zero.</strong> It cannot
+  currently be separated into device-side offset versus measurement-chain bias:
+  the audio path adds the codec's interpolation-filter group delay and its analog
+  output stage, the light path adds LED turn-on and the cell's RC, and neither is
+  independently known. Calibrating the constant away would bake one particular
+  rig's bias into the firmware.</p>
+</div>
+
+<h3 id="residual">What the residual probably is <span class="pill">hypothesis</span></h3>
+
+<p>Not confirmed by re-measurement — the arithmetic below is a prediction.</p>
+
+<p>WS2812 bit timing makes a pixel <strong>30.0&nbsp;µs</strong>, so a 74-pixel
+strip takes <strong>2.220&nbsp;ms</strong> to clock out end to end. The analysis
+model treats the light path as a <em>flat</em> 2.5&nbsp;ms regardless of where
+the sensor sits — but pixel <em>i</em>'s bits reach the strip at
+<em>i</em>&nbsp;×&nbsp;30&nbsp;µs, so the model over-subtracts for any sensor
+near the head of the chain.</p>
+
+<p>Independent support: the measured <strong>inter-eye offset of
+0.33&nbsp;ms</strong> is 0.33&nbsp;ms ÷ 30.0&nbsp;µs = <strong>exactly 11.0
+pixels</strong>, which is what two sensors at different chain positions must look
+like. That number had been recorded for some time without an explanation. For two
+sensors near the head of the chain 11 pixels apart, the predicted residual is
+−2.34&nbsp;ms against a measured −2.7&nbsp;ms, leaving ~0.35&nbsp;ms for the
+sensor's RC rise and recorder group delay — rather than the full 2.7&nbsp;ms.</p>
+
+<p>If that holds, <strong>the device-side A/V error is sub-millisecond</strong>
+and the residual is mostly a model and rig artifact.</p>
+
+<!-- ================================================================= -->
+<h2 id="carriers">Audio carriers</h2>
+
+<p>200&nbsp;Hz carrier, 10&nbsp;s per wave type, harmonics relative to the
+fundamental. Measured acoustically through the headphone jack.</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Wave</th><th>h2</th><th>h3</th><th>h4</th><th>h5</th><th>Theory (h2/h3/h4/h5)</th></tr></thead>
+<tbody>
+<tr><td>0 sine</td><td>0.000</td><td>0.000</td><td>0.000</td><td>0.000</td><td>0 / 0 / 0 / 0</td></tr>
+<tr><td>1 square</td><td>0.004</td><td>0.334</td><td>0.003</td><td>0.201</td><td>0 / .333 / 0 / .200</td></tr>
+<tr><td>2 triangle</td><td>0.000</td><td>0.111</td><td>0.001</td><td>0.040</td><td>0 / .111 / 0 / .040</td></tr>
+<tr><td>3 sawtooth</td><td>0.501</td><td>0.334</td><td>0.250</td><td>0.200</td><td>.500 / .333 / .250 / .200</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Every one matches theory to within 0.001–0.004. The noise generators, slope
+fitted over log-spaced bins:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Wave</th><th>Measured</th><th>Theory</th></tr></thead>
+<tbody>
+<tr><td>4 white</td><td>+0.05 dB/oct</td><td>0</td></tr>
+<tr><td>5 pink</td><td>−3.04 dB/oct</td><td>−3</td></tr>
+<tr><td>6 brown</td><td>−6.07 dB/oct (60 Hz–3 kHz)</td><td>−6</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Wave 7, the EEG contour, is a non-geometric single-cycle table with no
+closed-form spectrum. Measured h1…h6 = 1.000 / 0.500 / 0.331 / 0.221 / 0.140 /
+0.091 — close to a 1/n series, harmonically rich as intended.</p>
+
+<div class="note">
+  <p><strong>A measurement trap, recorded because it caught us twice.</strong> A
+  naive wideband fit of brown noise over 300&nbsp;Hz–9&nbsp;kHz gives
+  −4.81&nbsp;dB/oct and looks like a defect. It is not — the slope is −6 over
+  60&nbsp;Hz–3&nbsp;kHz and only flattens above ~3&nbsp;kHz, because everything
+  is 24&nbsp;dB down (below) and brown noise's high-frequency content lands a few
+  int16 counts above the LSB, where the flat quantisation floor drags the fitted
+  slope up. Fit a noise slope only where the signal is clear of <em>both</em> the
+  analog and the quantisation floor, and state the band.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="levels">Output levels and headroom</h2>
+
+<p>Device-side int16 peak before output, with <code>audio_max_volume</code> at
+100 (32767 = full scale):</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Wave</th><th>vol 70</th><th>vol 100</th></tr></thead>
+<tbody>
+<tr><td>Sine</td><td>1013 (−30.2 dBFS)</td><td>1448 (−27.1 dBFS)</td></tr>
+<tr><td>White</td><td>506 (−36.2 dBFS)</td><td>723 (−33.1 dBFS)</td></tr>
+<tr><td>Pink</td><td>149 (−46.8 dBFS)</td><td>224 (−43.3 dBFS)</td></tr>
+<tr><td>Brown</td><td>540 (−35.7 dBFS)</td><td>900 (−31.2 dBFS)</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>A sine at maximum on both controls reaches −27&nbsp;dBFS: about 4 of the 16
+bits go unused. The cause is a fixed <strong>1/16 divisor (−24.1&nbsp;dB)</strong>
+applied to every channel unconditionally, whatever the number actually playing —
+a hard overflow guarantee that cannot click. Across the 80 shipped sessions,
+counting the most simultaneously active channels each one reaches:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Simultaneous channels</th><th>Sessions</th><th>Headroom wasted</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>61</td><td>24.1 dB</td></tr>
+<tr><td>2</td><td>14</td><td>18.1 dB</td></tr>
+<tr><td>4</td><td>4</td><td>12.0 dB</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>No shipped session uses more than 4 of the 16 channels</strong>, so the
+divisor is sized for a case that never occurs and every session loses at least
+12&nbsp;dB. The obvious fix — divide by the active count — is
+<strong>deliberately not applied</strong>: it would make every existing session up
+to 24&nbsp;dB louder, and this is a head-worn device driving headphones whose user
+has set their amplifier for today's quiet output. See
+<a href="../sessions/reference.html#mixing">the mixing model</a>.</p>
+
+<!-- ================================================================= -->
+<h2 id="envelopes">Pulse envelopes</h2>
+
+<p>400&nbsp;Hz carrier gated at 8&nbsp;Hz, duty 50, harmonics measured from the
+demodulated carrier amplitude. The "before" column is a real defect that was
+found and fixed:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th><code>env</code></th><th>h2 before</th><th>h2 after</th><th>h3 before</th><th>h3 after</th></tr></thead>
+<tbody>
+<tr><td>0 square</td><td>0.001</td><td>0.000</td><td>0.333</td><td>0.332</td></tr>
+<tr><td><strong>1 sine</strong></td><td><strong>0.251</strong></td><td><strong>0.002</strong></td><td><strong>0.112</strong></td><td><strong>0.001</strong></td></tr>
+<tr><td>2 triangle</td><td>0.001</td><td>0.001</td><td>0.114</td><td>0.110</td></tr>
+<tr><td>3 trapezoid</td><td>0.076</td><td>0.076</td><td>0.321</td><td>0.321</td></tr>
+<tr><td>4 tremolo</td><td>0.000</td><td>0.002</td><td>0.000</td><td>0.001</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The "sine" gate was returning a parabola, whose derivative discontinuity at
+the cycle boundary makes its harmonics fall as 1/n² instead of vanishing. The
+same defect existed on the LED side and the numbers prove it was literally the
+same shape — the LED path measured h2&nbsp;0.286 / h3&nbsp;0.145 before its fix,
+the audio path 0.251 / 0.112.</p>
+
+<p>Why it matters therapeutically rather than cosmetically: an 8&nbsp;Hz alpha
+gate with h2&nbsp;=&nbsp;0.25 is simultaneously driving 16&nbsp;Hz at a quarter of
+the fundamental — beta content inside what the author intended as an alpha
+session.</p>
+
+<p>LED envelopes, optical, 10&nbsp;Hz flicker, after the fix:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th><code>env</code></th><th>h2</th><th>h3</th><th>h4</th></tr></thead>
+<tbody>
+<tr><td>0 square</td><td>0.004</td><td>0.346</td><td>0.003</td></tr>
+<tr><td>1 sine</td><td>0.058</td><td>0.004</td><td>0.010</td></tr>
+<tr><td>2 triangle</td><td>0.061</td><td>0.139</td><td>0.022</td></tr>
+<tr><td>3 trapezoid</td><td>0.081</td><td>0.310</td><td>0.073</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="rates">Gate rate, duty and phase</h2>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Quantity</th><th>Commanded</th><th>Measured</th></tr></thead>
+<tbody>
+<tr><td>Isochronic gate rate</td><td>8.000 Hz</td><td><strong>8.0107 Hz</strong></td></tr>
+<tr><td>Duty</td><td>25 % / 75 %</td><td><strong>25.08 % / 75.03 %</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>phase</code> is a <strong>lead</strong>, not a lag — the firmware adds
+<code>phase × period / 360</code> to elapsed time, so a larger number makes the
+edge arrive <em>earlier</em>. Measured on hardware at 10&nbsp;Hz (100&nbsp;ms
+period), timing the LED-on edges:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th><code>phase</code></th><th>If it were a lag</th><th>Actually measured</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>0 ms</td><td>0.00 ms</td></tr>
+<tr><td>90</td><td>25 ms</td><td><strong>74.76 ms</strong></td></tr>
+<tr><td>180</td><td>50 ms</td><td>49.93 ms</td></tr>
+<tr><td>270</td><td>75 ms</td><td><strong>24.69 ms</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>0 and 180 are symmetric under negation, which is why the convention never
+mattered until someone reached for 90. To delay by N degrees, write
+<code>360 − N</code>.</p>
+
+<!-- ================================================================= -->
+<h2 id="rig">What the rig itself contributes</h2>
+
+<p>A measurement is only as good as its instrument, so the instrument was
+measured too.</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Property</th><th>Figure</th></tr></thead>
+<tbody>
+<tr><td>Sensor signal-to-noise</td>
+    <td>+45.2 dB (ch1) / +41.8 dB (ch2), against the 50 Hz line at
+        −87.6 dBFS measured with the LEDs dark</td></tr>
+<tr><td>Inter-eye offset</td>
+    <td>A constant <strong>0.33 ms</strong>, reproducible across runs — the
+        serial LED update order, not a fault. See
+        <a href="#residual">the residual hypothesis</a>.</td></tr>
+<tr><td>LED-to-audio crosstalk, ground loop</td>
+    <td>+44 dB — a <strong>ground loop</strong> through the shared USB ground,
+        not a device fault</td></tr>
+<tr><td>LED-to-audio crosstalk, isolated</td>
+    <td>+16.9 dB with the device on an isolated USB adapter, i.e. −39.6 dB below
+        the audio carrier. Not worth chasing.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="warn">
+  <p><strong>The input impedance changes the answer.</strong> On a line input
+  (~20&nbsp;kΩ) the cell's series capacitor differentiates (corner ~80&nbsp;Hz):
+  the capture shows edge spikes instead of a brightness envelope and the harmonic
+  ladder flattens to 1 / 0.91 / 0.86 / 0.82 / 0.79. On a high-impedance
+  instrument input the same signal gives 1 / 0.33 / 0.20 / 0.14 / 0.11, matching
+  a 50&nbsp;% square to within 0.01. Amplitude and brightness grading are
+  meaningless on the wrong input.</p>
+  <p>Mains hum is a red herring at 10&nbsp;Hz: the 5th harmonic of a 10&nbsp;Hz
+  flicker lands exactly on 50&nbsp;Hz. Measure the 50&nbsp;Hz line with the LEDs
+  dark before blaming it.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="open">Still open</h2>
+
+<p>What it would take to close the −2.7&nbsp;ms residual honestly:</p>
+
+<div class="spec-table">
+<table>
+<thead><tr><th>Term</th><th>Magnitude</th><th>How to pin it</th></tr></thead>
+<tbody>
+<tr><td>Strip serialisation</td><td>0 … 2.22 ms</td>
+    <td>Replace the flat 2.5 ms with <code>rmt_start + k × 30 µs</code>, taking
+        the sensor's pixel index <em>k</em> as a measurement input. Model change
+        only — no hardware.</td></tr>
+<tr><td>Each sensor's pixel index <em>k</em></td><td>—</td>
+    <td>The rig builder knows it, or light the zones in a known order and read
+        the map off one capture.</td></tr>
+<tr><td>DAC + analog group delay</td><td>unknown, ~0.1–1 ms?</td>
+    <td>Toggle a spare GPIO at the generator block boundary into a free recorder
+        input, so the recorder holds the digital event and the analog audio on
+        <em>one</em> timebase.</td></tr>
+<tr><td>Recorder inter-channel skew</td><td>expected &lt; 10 µs</td>
+    <td>Y-split one signal into an audio input and a light input; one capture.</td></tr>
+<tr><td>Sensor RC rise</td><td>~0.1 ms?</td>
+    <td>Hard-step the LED and measure 10–90 % rise.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The strip term is the only one large enough to explain the residual on its
+own, and the only one fixable without touching the rig.</p>
+
+<h2 id="next">Next</h2>
+
+<p><a href="../hardware/index.html#measuring">Measuring what you built</a> has the
+rig and how to build one. <code>tools/avmeasure/README.md</code> in the repository
+has the analysis harness — the channel map, the sync methods, and which numbers
+survive a dropped buffer.</p>
+
+</main>
+
+</div>
+<script src="../assets/site.js"></script>
+</body>
+</html>

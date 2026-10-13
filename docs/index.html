@@ -178,14 +178,17 @@ A 600000 &gt;114.915  100 60 0  2      0</code></pre>
       <p class="lead">
         Entrainment hardware is an unusually easy place to publish numbers
         nobody checked. These were taken off this firmware on real boards, and
-        each one is reproducible from the reports in the repository.
+        each one is reproducible from the reports in the repository —
+        <a href="hardware/measurements.html">all of them are written up here</a>,
+        including the ones that are still open.
       </p>
 
       <div class="stats">
         <div class="stat">
-          <b>1.30&nbsp;ms</b>
-          <span>residual audio-to-light offset, down from 21.92&nbsp;ms once the
-          DMA lag was accounted for (n&nbsp;=&nbsp;8, sd&nbsp;0.38)</span>
+          <b>&minus;2.7&nbsp;ms</b>
+          <span>audio-to-light offset, now a <em>constant</em> — it used to be a
+          random 0&ndash;23&nbsp;ms that re-rolled every session and jumped again
+          at every rate change</span>
         </div>
         <div class="stat">
           <b>8.0107&nbsp;Hz</b>
