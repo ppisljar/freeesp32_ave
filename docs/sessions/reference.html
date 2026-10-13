@@ -359,11 +359,8 @@ and logs.</p>
 <code>freq ≤ 0</code> or <code>&gt; 22050</code>, amplitude outside 0–1, pan outside ±1) are the
 non-<code>_locked</code> wrappers, and <strong>no session path calls them</strong>: the timeline
 batch executor and <code>/api/patch</code> both hold the mutex and call the <code>_locked</code>
-variants. Those used to bounds-check the <strong>channel index only</strong>, so a
-<code>.ledc</code> typo reached the mixer unfiltered.</p>
-
-<p><code>freq</code> and <code>amplitude</code> are now <strong>clamped</strong> — not rejected — at
-every <code>_locked</code> entry point, including both ends of every ramp. Clamping rather than
+variants, which <strong>clamp</strong> <code>freq</code> and <code>amplitude</code> — rather than
+reject them — at every entry point, including both ends of every ramp. Clamping rather than
 rejecting, because rejecting would silence a channel mid-session over one bad row.</p>
 
 <div class="spec-table">
@@ -371,20 +368,20 @@ rejecting, because rejecting would silence a channel mid-session over one bad ro
   <caption>What out-of-range audio values actually do from a <code>.ledc</code> file.</caption>
   <thead><tr><th>You write</th><th>What happens</th></tr></thead>
   <tbody>
-    <tr><td><code>vol 500</code></td><td><strong>Clamped to <code>vol 100</code></strong> (amplitude 1.0). Previously amplitude 5.0, which <em>worked</em> and was about 14&nbsp;dB louder; the fixed 1/16 divisor means a single centre-panned sine needed roughly <code>vol 2200</code> to clip. The real hazard was <code>vol 10000</code>: amplitude 100, still 6.25× full scale after the divisor, into headphones.</td></tr>
+    <tr><td><code>vol 500</code></td><td><strong>Clamped to <code>vol 100</code></strong> (amplitude 1.0). Worth knowing why the ceiling matters: <code>vol</code> is divided by 100, so an unclamped <code>vol 10000</code> would reach the mixer as amplitude 100 — still 6.25× full scale even after the 1/16 divisor, into headphones.</td></tr>
     <tr><td><code>pan 200</code></td><td><strong>Still unguarded.</strong> The equal-power law runs past 90°, so the <strong>left output inverts polarity</strong> while the right falls back toward 0.707. Keep pan inside ±100.</td></tr>
-    <tr><td><code>freq 30000</code></td><td><strong>Clamped to 22050.</strong> Previously aliased with no warning.</td></tr>
+    <tr><td><code>freq 30000</code></td><td><strong>Clamped to 22050</strong> (Nyquist), so it cannot alias.</td></tr>
     <tr><td><code>freq 0</code>, sine</td><td>Silence — but the channel stays <strong>active</strong>. An audio line never stops a channel; use <code>vol 0</code>. Deliberately <em>not</em> clamped away: <code>freq 0</code> is also how the noise wave types run.</td></tr>
     <tr><td><code>freq 0</code>, square</td><td>A constant +1.0, i.e. a <strong>DC offset</strong> on the output, because the phase never advances.</td></tr>
   </tbody>
 </table>
 </div>
 
-<p>The remaining asymmetry: an out-of-range LED entry is <strong>dropped</strong>, an audio one is
+<p>Note the asymmetry: an out-of-range LED entry is <strong>dropped</strong>, an audio one is
 <strong>clamped</strong>. That is deliberate — a dropped LED row is visible, whereas a dropped audio
 row means silence where the session expects a carrier. The linter models the LED guards
-(<code>LEDC_LED_OUT_OF_RANGE</code>, <code>LEDC_LED_REJECTED</code>); it does not yet flag audio
-values the firmware will clamp, nor <code>pan</code> outside ±100.</p>
+(<code>LEDC_LED_OUT_OF_RANGE</code>, <code>LEDC_LED_REJECTED</code>); it does not flag audio values
+the firmware will clamp, nor <code>pan</code> outside ±100.</p>
 
 <h2 id="env"><code>env</code> — the pulse envelope</h2>
 
@@ -513,11 +510,7 @@ tone) and 0 = no modulation. On <code>env 4</code> it is the classic tremolo ind
   <li><strong><code>depth 0</code> now genuinely means "no modulation".</strong> The generator uses a
   negative "unset" sentinel (<code>iso_depth</code> initialised to <code>-1.0f</code>, tested with
   <code>&gt;= 0.0f</code>), so a written <code>0</code> is honoured and the modulation is removed.
-  <strong>Note:</strong> <code>ledc_format.md</code> v3 still documents the older behaviour here,
-  where <code>depth 0</code> fell back to the hardcoded 10&nbsp;%. The code in
-  <code>audio_generator.c</code> has since been fixed and is the authority; see
-  <a href="../sessions/authoring.html#doc-drift">the doc-drift note</a>. If you want to be
-  certain, write <code>mod 0</code> to remove modulation — that has always been unambiguous.</li>
+  Writing <code>mod 0</code> also removes modulation, and is unambiguous either way.</li>
 </ul>
 
 <h2 id="jitter"><code>jitter</code> — anti-habituation wander</h2>
@@ -546,8 +539,15 @@ because the offset is only ever added to the right carrier. It never touches the
 <code>mod</code> rate — to wander a pulse rate, put a <code class="kbd">~</code> or
 <code class="kbd">^</code> modulation on <code>mod</code> instead.</p>
 
-<p><strong>End a session by writing jitter explicitly back to <code>0</code></strong>, or it leaks
-into whatever runs next: the globals are not reset between sessions.</p>
+<p>Both jitter globals are reset to their defaults at <strong>session start and session
+stop</strong>, along with the rest of the pulse shape
+(<code>env</code>/<code>duty</code>/<code>attack</code>/<code>depth</code>, the flicker carrier) and
+the LED channels' retained <code>freq</code>/<code>duty</code>/<code>bright</code>/RGB. A session
+never inherits shaping from the one before it, so there is no need to write jitter back to
+<code>0</code> at the end of a file.</p>
+
+<p><strong>"Absent = leave unchanged" applies within a session.</strong> The baseline each session
+starts from is always the documented default.</p>
 
 <p>A jittered LED channel is also excluded from the cycle-lattice re-anchor, by design — there is no
 fixed lattice to snap to.</p>

@@ -122,8 +122,9 @@ next.</p>
 </ul>
 
 <p>Whatever the ending, <strong>finish every channel explicitly at zero</strong>. The timeline does
-not tidy up after you, the jitter globals are not reset between sessions, and a ramp with no target
-entry never fires at all.</p>
+not tidy up after you mid-session, and a ramp with no target entry never fires at all. (The jitter
+and pulse-shape globals reset at session start and stop, so those never carry across sessions — but
+an unfinished channel is still an unfinished channel.)</p>
 
 <h2 id="habituation">Anti-habituation</h2>
 
@@ -213,8 +214,7 @@ there.</p>
 
 <p>Sessions destined for <code>sessions/library/</code> must also pass
 <code>node validate_session.mjs library/&lt;file&gt;.ledc</code> with zero errors, and must follow
-<code>sessions/SESSION_DESIGN_GUIDELINES.md</code> — bearing in mind the
-<a href="#doc-drift">drift noted below</a>.</p>
+<code>sessions/SESSION_DESIGN_GUIDELINES.md</code>.</p>
 
 <h2 id="lint">The static linter, finding by finding</h2>
 
@@ -391,10 +391,10 @@ minutes, "light STAYS ON and BRIGHTENS". It does.</p>
 
 <p>The trap is the other direction: <strong>a row of <code>freq 0</code> does not switch a zone
 off.</strong> It leaves the channel active, which keeps the flicker timer alive and pins the ISR tick
-where it already was — so a measurement sync marker that "stops" with <code>freq 0</code> never
-tears the timer down and never resets the tick. <code>bright 0</code> with <code>freq 0</code> is
-dark but still active: acceptable as a final row, since the end-of-timeline handler stops everything
-anyway, but not as a mid-session off switch.</p>
+where it already was — so a measurement sync marker must stop with <code>freq -1</code> to tear the
+timer down and let the tick be re-derived. <code>bright 0</code> with <code>freq 0</code> is dark but
+still active: acceptable as a final row, since the end-of-timeline handler stops everything anyway,
+but not as a mid-session off switch.</p>
 
 <h3>The accidental binaural beat</h3>
 
@@ -447,50 +447,6 @@ negation, which is why nobody has been bitten yet.</p>
 <p><code>.ledc</code> <code>ch</code> is 0-based; <code>/api/state</code> reports audio channels
 1-based, so <code>ch 8</code> reads back there as <code>ch9</code>. Convert once and write it
 down.</p>
-
-<h2 id="doc-drift">Where the docs have drifted from the code</h2>
-
-<p>Three places in the repo's own documents state things the current firmware no longer does. They
-are listed here because a reader who trusts them will author the wrong file.</p>
-
-<div class="spec-table">
-<table>
-  <thead><tr><th>Document</th><th>Says</th><th>The code does</th></tr></thead>
-  <tbody>
-    <tr><td><code>ledc_format.md</code> v3, “depth”</td>
-      <td>“<code>depth 0</code> does NOT currently mean no modulation… fixing this needs a negative
-      unset sentinel in the generator.”</td>
-      <td>That sentinel now exists. <code>iso_depth</code> initialises to <code>-1.0f</code> and the
-      test is <code>&gt;= 0.0f</code>, so a written <code>depth 0</code> is honoured and removes the
-      modulation. The spec's warning is historical.</td></tr>
-    <tr><td><code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §7</td>
-      <td>“LED <code>freq 0</code> = steady-on (no flicker)”, and §11 describes
-      <code>05_focus_smr</code>'s steady lamp built on it.</td>
-      <td><strong>Correct — this is now true.</strong> The parser had been stopping the mask on
-      <code>freq &le; 0</code>, which painted nineteen sessions black; the test is now
-      <code>frequency &lt; 0.0f</code>, so <code>0</code> is a DC channel and only a negative rate
-      stops.</td></tr>
-    <tr><td><code>sessions/SESSION_DESIGN_GUIDELINES.md</code> §3, §7, §8 and many session headers</td>
-      <td>“<code>freq_R</code> is NOT interpolatable”; “<code>env</code>, <code>phase</code>,
-      <code>attack</code> are step-only on-device… don't put <code class="kbd">&gt;</code>/
-      <code class="kbd">*</code>/<code class="kbd">~</code> on them”; “AM depth is hard-fixed at
-      ~0.1”.</td>
-      <td>All three are now out of date. <code>freqR</code> and <code>depth</code> take
-      <code class="kbd">&gt;</code> and <code class="kbd">*</code>; <code>duty</code>,
-      <code>phase</code> and <code>attack</code> are fully compound; <code>depth</code> is a real
-      column. <code>env</code> remains step-only — that part is still true.</td></tr>
-  </tbody>
-</table>
-</div>
-
-<p>And one place the <em>tooling</em> has drifted: the linter still raises
-<code>LEDC_FREQR_PREFIX</code> at error severity for a glyph on <code>freqR</code>, which the device
-now handles correctly. The browser-side parser is also behind the device on both v3 audio changes —
-its <code>freqR</code> is a bare float parse and it has no <code>depth</code> column — so a session
-using either will behave differently in the browser preview than on hardware.</p>
-
-<p>When in doubt, <code>ledc_format.md</code> outranks every other document in the repo, and
-<code>main/config_parser.c</code> outranks <code>ledc_format.md</code>.</p>
 
 <h2 id="checklist">Checklist before you ship</h2>
 

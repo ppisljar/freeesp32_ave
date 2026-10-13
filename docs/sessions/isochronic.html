@@ -369,8 +369,8 @@ A 900000 250 0 0 10 1 0 0 40 3 0 5 0 100
   <li><strong>Anti-habituation is on the light, not the audio.</strong> Audio <code>jitter</code> on
   a mono channel does nothing, and the file says so in a comment rather than quietly carrying a dead
   column.</li>
-  <li><strong>Jitter is written back to <code>0</code></strong> before the end, because the LED jitter
-  globals are not reset between sessions.</li>
+  <li><strong>Jitter is written back to <code>0</code></strong> before the end. Not required, since
+  the jitter globals reset at session start and stop, but it keeps the file's intent explicit.</li>
 </ol>
 
 <p>Full column semantics are on the <a href="../sessions/reference.html">reference page</a>;

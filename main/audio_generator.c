@@ -256,6 +256,47 @@ static inline float beat_jitter_offset(void) {
 }
 
 // A3 setter — amplitude Hz (0 = off) and full-cycle period ms.
+/* ---------------------------------------------------------------------------
+ * audio_generator_reset_session_state — back to BOOT state.
+ *
+ * Called at BOTH session start and session stop (config_parser.c). The pulse
+ * shape and the beat jitter are module-GLOBAL (audio_generator_set_beat_jitter
+ * takes no channel at all), so they outlived the session that set them: a file
+ * writing `jitter 0.6:2000` left the NEXT session's binaural detune wandering
+ * +/-0.6 Hz even with no jitter column anywhere in it. Measured on hardware --
+ * a session with no jitter column showed a 1.169 Hz freq_r spread against the
+ * jittered session's 1.163 Hz. For a device specified at +/-0.01 Hz beat
+ * accuracy that is 60x the tolerance, applied silently.
+ *
+ * "Absent = leave unchanged" still holds WITHIN a session; across one, every
+ * session starts from the documented defaults, with no reboot needed.
+ *
+ * Values are exactly the declaration initialisers, so "reset" means "as if
+ * freshly booted" rather than a second opinion about what the defaults are.
+ */
+void audio_generator_reset_session_state(void)
+{
+    s_iso_env       = ISO_ENV_TREMOLO;
+    s_iso_duty      = 0.5f;
+    s_iso_attack_ms = 3.0f;
+    s_iso_depth     = -1.0f;        /* -1 = UNSET, NOT 0 (see the declaration) */
+
+    s_beat_jitter_hz        = 0.0f;
+    s_beat_jitter_period_ms = 45000.0f;
+
+    /* Per-channel copies too: the sweep/animation paths write these directly,
+     * so clearing only the globals would leave a stale shape on a channel that
+     * the next session restarts without restating env/duty/attack/phase. */
+    for (int ch = 0; ch < NUM_AUDIO_CHANNELS; ch++) {
+        audio_gen_channel_t *c = &audio_channels[ch];
+        c->iso_env              = s_iso_env;
+        c->iso_duty             = s_iso_duty;
+        c->iso_attack_ms        = s_iso_attack_ms;
+        c->iso_depth            = s_iso_depth;
+        c->mod_phase_offset_q32 = 0u;
+    }
+}
+
 void audio_generator_set_beat_jitter(float amp_hz, float period_ms) {
     s_beat_jitter_hz        = (amp_hz < 0.0f) ? 0.0f : amp_hz;
     if (period_ms >= 1000.0f) s_beat_jitter_period_ms = period_ms;

@@ -58,9 +58,10 @@ The frequency-following response can only track a **slow glide**. **[E]**
 - **Hard ceiling:** keep **≤2 Hz/min**; the validator (and reviewers) **WARN above
   ~3 Hz/min**. Even 0.3 Hz can flip the effect (Siever). **[P]**
 
-**Ramping a binaural beat:** `freq_R` is **NOT interpolatable**. Hold `freq_R` FIXED
-and ramp the carrier `freq` so beat = `freq_R − freq` slides smoothly (see §7). For an
-**isochronic** beat slide, ramp the audio `mod` field directly — that one IS interpolatable.
+**Ramping a binaural beat:** two options. Hold `freq_R` FIXED and ramp the carrier `freq`
+so beat = `freq_R − freq` slides smoothly (see §7) — this keeps the perceived pitch moving
+and the beat following. Or ramp `freq_R` itself with `>`/`*`, which slides the beat while
+the left carrier stays put. For an **isochronic** beat slide, ramp the audio `mod` field.
 
 ## 4. Stimulation: drivers & carriers
 
@@ -171,8 +172,9 @@ lives in the firmware engine, not the timeline.)
 | Skip / hold field | `-` sentinel — keep the channel's current value for that field |
 
 **Gotchas (verified against `main/config_parser.c` / `web/src/js/gen/parse.js`):**
-- **`freq_R` is NOT interpolatable** — a `>`/`*` prefix on it is ignored. Hold it fixed,
-  ramp the carrier.
+- **`freq_R` takes `>` and `*`** (evaluated per buffer into `params.frequency_r`).
+  PERIODIC glyphs (`~ ^ / \ _`) on it are not implemented — the parser warns and drops
+  them. Ramping the carrier instead also works and moves the pitch with the beat.
 - **Ramp = animate-on-start:** the `>`/`*` prefix lives on the *earlier* entry; its value
   is the **start**, the target is the next same-channel entry's value, swept over the gap.
   A ramp on the last entry never fires.

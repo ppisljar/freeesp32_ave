@@ -266,9 +266,9 @@ consequences follow, and all three have cost somebody a measurement session:</p>
   put a periodic modulation on <code>mod</code> instead: <code>~5.7:6.3:53000</code>.</li>
 </ul>
 
-<p>A <code>period_ms</code> below 1000 is silently ignored — the previous period stays in force. And
-because the jitter global is not reset between sessions, <strong>write it explicitly back to
-<code>0</code> at the end of your file</strong> or it leaks into whatever plays next.</p>
+<p>A <code>period_ms</code> below 1000 is silently ignored — the previous period stays in force.
+The jitter global is reset at session start and stop, so a session never inherits it from the one
+before; there is no need to write it back to <code>0</code> at the end of your file.</p>
 
 <h3 id="locking">Locking light to the beat</h3>
 

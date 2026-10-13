@@ -586,6 +586,14 @@ esp_err_t config_parser_execute_timeline(config_timeline_t *timeline, bool loop)
 
     ESP_LOGI(TAG, "Executing timeline with %zu entries (loop=%s)", timeline->count, loop ? "yes" : "no");
 
+    // Start from a known state: clear any shaping/jitter left behind by a
+    // previous session (or by the live /api/* controls). See the matching call
+    // in config_parser_stop_timeline for why this is not optional. "Absent =
+    // leave unchanged" still holds WITHIN a session -- this only resets the
+    // baseline each session starts from, which previously needed a reboot.
+    audio_generator_reset_session_state();
+    led_matrix_reset_session_state();
+
     // Lock-free timeline execution
 
     // Make a deep copy of the timeline to avoid use-after-free when stack timeline goes out of scope
@@ -882,6 +890,24 @@ esp_err_t config_parser_stop_timeline(void)
 
     // Cancel any pending timeline events in timing engine
     timing_engine_cancel_events_by_type(TIMING_EVENT_TIMELINE);
+
+    // ---- clear the session-scoped shaping state -----------------------------
+    // The pulse shape (env/duty/attack/depth, flicker carrier) and BOTH jitter
+    // settings are module-GLOBAL -- audio_generator_set_beat_jitter does not
+    // even take a channel -- and the LED channels additionally RETAIN
+    // freq/duty/bright/RGB across a stop so a '-' cell can read them back. None
+    // of it was ever cleared, so it leaked into whatever ran next: a file
+    // writing `jitter 0.6:2000` left the following session's binaural detune
+    // wandering +/-0.6 Hz with no jitter column anywhere in it (measured: a
+    // 1.169 Hz freq_r spread against the jittered session's 1.163 Hz). The
+    // device is specified at +/-0.01 Hz beat accuracy, so that is 60x the
+    // tolerance, applied silently, and it previously took a REBOOT to clear.
+    //
+    // Reset at stop AND at start (see execute_timeline): stop alone is not
+    // enough because a session that simply runs out of entries ends via the
+    // timeline task, not through here.
+    audio_generator_reset_session_state();
+    led_matrix_reset_session_state();
 
     // Note: previously freed persistent_timeline here, but that nulled out
     // source_content + entries so /api/report couldn't show the just-finished

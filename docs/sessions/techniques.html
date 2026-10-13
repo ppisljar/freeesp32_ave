@@ -288,8 +288,9 @@ channel that sets no jitter column still wanders, if some other line turned it
 on. And a <strong>mono channel never wanders at all</strong>, because the offset
 is only ever added to the right carrier — if <code>freqR</code> is 0 there is
 nothing to move.</p>
-<p><strong>End a session by writing jitter explicitly back to 0.</strong> The
-global is not reset between sessions, so it leaks into whatever runs next.</p>
+<p>Jitter is reset to its default at <strong>session start and session stop</strong>, so a session
+never inherits it from the one before. You do not need to write it back to <code>0</code> at the end
+of a file.</p>
 </div>
 
 <p>If you want the <em>isochronic pulse rate</em> to wander, jitter is the wrong

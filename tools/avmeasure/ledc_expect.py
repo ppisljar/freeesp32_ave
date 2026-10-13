@@ -1131,7 +1131,7 @@ class _Simulator:
                                     f"t={last_ms} ms {why}. End the session with "
                                     f"brightness 0 (or freq -1) to make the "
                                     f"intent explicit -- note that freq 0 is a DC "
-                                    f"channel now, not a stop.",
+                                    f"channel, not a stop.",
                             detail="config_parser.c:2164, "
                                    "led_matrix_example.c:712"))
                     # freq/duty/bright/rgb are RETAINED across a stop

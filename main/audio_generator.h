@@ -261,6 +261,15 @@ void audio_generator_set_iso_channel(int channel, int env, float duty_pct,
 void audio_generator_set_beat_jitter(float amp_hz, float period_ms);
 
 /**
+ * @brief Restore all GLOBAL/retained audio shaping state to boot defaults.
+ *
+ * Called at session start AND session stop. The pulse shape and beat jitter are
+ * module-global, so without this they leak into whatever session runs next --
+ * measured as a +/-0.6 Hz detune wander in a session with no jitter column.
+ */
+void audio_generator_reset_session_state(void);
+
+/**
  * @brief Set a channel's isochronic pulse phase offset in degrees (0..359)
  *        (entrainment_firmware_plan complement 4). Per-channel; only relative
  *        phase between channels is meaningful.

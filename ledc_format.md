@@ -499,8 +499,14 @@ channel never wanders at all, because the offset is only ever added to the right
 carrier. It never touches the isochronic `mod` rate — if you want the pulse rate
 to wander, modulate `mod` with `~`/`^` instead.
 
-End a session by writing jitter explicitly back to `0`, or it leaks into whatever
-runs next (the global is not reset between sessions).
+Both jitter globals are reset to their defaults at **session start and session
+stop**, along with the rest of the pulse shape (`env`/`duty`/`attack`/`depth`,
+the flicker carrier) and the LED channels' retained `freq`/`duty`/`bright`/RGB.
+So a session never inherits shaping from the one before it, and you do not need
+to write jitter back to `0` at the end of a file.
+
+"Absent = leave unchanged" applies **within** a session. The baseline each
+session starts from is always the documented default.
 
 A jittered LED channel is also excluded from the cycle-lattice re-anchor, by
 design — there is no fixed lattice to snap to.

@@ -224,6 +224,85 @@ static TaskHandle_t led_flicker_task_handle = NULL;
 // task could read active=true between writes of `led_state` and `active`.
 static portMUX_TYPE s_flicker_mux = portMUX_INITIALIZER_UNLOCKED;
 
+/* ---------------------------------------------------------------------------
+ * led_matrix_reset_session_state — put every LED channel back to BOOT state.
+ *
+ * Called at BOTH session start and session stop (config_parser.c), because the
+ * shaping parameters below are module-GLOBAL or per-channel-RETAINED and so
+ * survived a session: a file that set `jitter 0.6` left the next session's
+ * flicker wandering even though it never wrote a jitter column, and the
+ * retained freq/duty/bright/RGB meant a new session's first `-` cell inherited
+ * the PREVIOUS session's value. Both are silent, and for a device whose spec is
+ * +/-0.01 Hz beat accuracy a leaked wander is 60x the tolerance.
+ *
+ * "Absent = leave unchanged" still holds WITHIN a session. Across one, every
+ * session now starts from the documented defaults without a reboot.
+ *
+ * Stops all flicker FIRST, via led_matrix_stop_flicker_masked(0xFF), for two
+ * reasons: config_parser_stop_timeline does NOT itself touch the LEDs (only the
+ * /api/stop handler does, separately), so clearing `active` here without that
+ * call would leave the strip physically lit at its last colour; and the stop
+ * runs s_maybe_teardown_timer_and_task, which is what re-derives the flicker
+ * ISR tick for the next session instead of leaving it pinned high. That call
+ * takes s_flicker_mux, so it must happen OUTSIDE the critical section below.
+ */
+void led_matrix_reset_session_state(void)
+{
+    /* Clears active/led_state/led_dirty, pushes black to the strip, and tears
+     * down the gptimer once no channel is left (resetting s_flicker_tick_hz).
+     * Safe and cheap when nothing is running. */
+    (void)led_matrix_stop_flicker_masked(0xFF);
+
+    s_flicker_carrier          = LED_CARRIER_SQUARE;
+    s_flicker_attack_ms        = 3u;
+    s_flicker_jitter_millihz   = 0u;
+    s_flicker_jitter_period_us = 45000000u;
+
+    portENTER_CRITICAL(&s_flicker_mux);
+    for (int ch = 0; ch < NUM_LED_CHANNELS; ch++) {
+        led_flicker_state_t *s = &flicker_state[ch];
+
+        s->active              = false;
+        s->frequency_milliHz   = 0;
+        s->duty_cycle          = 50;
+        s->brightness          = 100;
+        s->duty_q8             = 50 * 256;
+        s->brightness_q8       = 100 * 256;
+        s->red                 = 255;
+        s->green               = 255;
+        s->blue                = 255;
+        s->led_state           = false;
+        s->led_dirty           = false;
+        s->cycle_start_time_us = 0;
+        s->latched_on_time_us  = 0;
+        s->output_level        = 0;
+        s->output_level_q8     = 0;
+        s->phase_offset_deg    = 0;
+
+        /* Re-latch the pulse shape from the globals just reset above. The SWEEP
+         * start path never re-latches these (documented gotcha), so a
+         * sweep-started channel could otherwise carry last session's env. */
+        s->carrier_waveform = s_flicker_carrier;
+        s->attack_ms        = (uint16_t)s_flicker_attack_ms;
+        s->jitter_millihz   = s_flicker_jitter_millihz;
+        s->jitter_period_us = s_flicker_jitter_period_us;
+
+        const led_sweep_param_t zsw = { .start_q = 0, .target_q = 0, .curve = 0 };
+        s->sw_freq = zsw; s->sw_duty = zsw; s->sw_brightness = zsw;
+        s->sw_phase = zsw; s->sw_attack = zsw;
+        s->sw_r = zsw; s->sw_g = zsw; s->sw_b = zsw;
+        s->sweep_start_us    = 0;
+        s->sweep_duration_us = 0;
+
+        const led_mod_slot_t zmod = { 0 };
+        s->mod_freq = zmod; s->mod_duty = zmod; s->mod_brightness = zmod;
+        s->mod_r = zmod; s->mod_g = zmod; s->mod_b = zmod;
+        s->mod_phase = zmod; s->mod_attack = zmod;
+    }
+    portEXIT_CRITICAL(&s_flicker_mux);
+}
+
+
 // Forward declaration: defined after led_matrix_init but called from it for
 // pre-warming the timer and flicker task at boot (Layer 5, Step 5.2).
 static esp_err_t s_ensure_timer_and_task(uint32_t min_freq_milliHz);

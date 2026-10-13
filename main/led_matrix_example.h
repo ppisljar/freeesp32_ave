@@ -477,4 +477,13 @@ bool led_matrix_supports_pixel_addressing(void);
 }
 #endif
 
+
+/**
+ * @brief Restore all LED channels and the module-global pulse shape to boot
+ *        defaults. Called at session start AND session stop so a session never
+ *        inherits the previous one's jitter, carrier, attack or retained
+ *        freq/duty/bright/RGB. Does not touch the flicker gptimer.
+ */
+void led_matrix_reset_session_state(void);
+
 #endif // LED_MATRIX_EXAMPLE_H

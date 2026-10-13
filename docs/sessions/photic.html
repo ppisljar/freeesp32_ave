@@ -196,9 +196,6 @@ reason to build a session.</p>
   already was. <code>bright 0</code> with <code>freq 0</code> is dark but still active — fine as a
   session's final row, since the end-of-timeline handler stops everything anyway, but not as a
   mid-session off switch.</p>
-  <p>Earlier firmware (and earlier revisions of this page) treated <code>freq &le; 0</code> as the
-  stop, which painted those nineteen sessions black. That was a defect in the parser, fixed in
-  <code>config_parser.c</code>: the stop test is now <code>frequency &lt; 0.0f</code>.</p>
 </div>
 
 <h3 id="masks">Zone masks</h3>

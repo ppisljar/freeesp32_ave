@@ -615,3 +615,74 @@ The old rule was documented in five places, two of them published:
   passed. LED freq now admits negatives as the off switch and is bounded by the
   firmware's flicker cap (`MAX_LED_FLICKER_HZ = 100`, added to `model.js`),
   not the audio Nyquist.
+
+## 14. Session state leaked into the next session (FIXED, hardware-verified)
+
+Raised by the user reading the spec: *"the documentation says audio jitter is
+global, and that its setting can persist into the next session unless explicitly
+reset?"* It did, and jitter was only part of it.
+
+**What leaked.** `audio_generator_set_beat_jitter` does not take a channel at
+all — `s_beat_jitter_hz` / `s_beat_jitter_period_ms` are file-static. So is the
+whole pulse shape (`s_iso_env`, `s_iso_duty`, `s_iso_attack_ms`, `s_iso_depth`)
+and the LED side's `s_flicker_carrier` / `s_flicker_attack_ms` /
+`s_flicker_jitter_millihz` / `s_flicker_jitter_period_us`. None of it was reset
+at any session boundary — `config_parser_execute_timeline` and
+`config_parser_stop_timeline` both left every one of them alone. Only a reboot
+cleared them. On top of that the LED channels RETAIN `freq`/`duty`/`bright`/RGB
+across a stop (by design, so a `-` cell can read them back), which meant a new
+session's first `-` cell read the *previous* session's values.
+
+**Measured, before the fix.** Two sessions, back to back: session 1 writes
+`jitter 0.6:2000` on a 200|210 binaural pair; session 2 is identical but carries
+NO jitter column anywhere. Sampling `/api/state`'s `freq_r` (which reports the
+live `current_freq_r`, so the wander is directly visible):
+
+| session | `freq_r` spread |
+|---|---|
+| 1 — `jitter 0.6:2000` written | 1.163 Hz |
+| 2 — **no jitter column at all** | **1.169 Hz** |
+
+Session 2 wandered by exactly the ±0.6 Hz session 1 had asked for. Against this
+device's ±0.01 Hz beat-accuracy target that is 60x the tolerance, applied
+silently to a session whose author wrote it as precise.
+
+**The fix.** `audio_generator_reset_session_state()` and
+`led_matrix_reset_session_state()` restore every one of those globals — and the
+per-channel copies the sweep/animation paths write directly — to their
+declaration initialisers. Called from BOTH session start and session stop.
+
+Both are needed: stop alone is not enough, because a session that simply runs out
+of entries ends in the timeline task rather than through
+`config_parser_stop_timeline`.
+
+The LED reset calls `led_matrix_stop_flicker_masked(0xFF)` first, for two reasons
+found while writing it: `config_parser_stop_timeline` does **not** itself touch
+the LEDs (only the `/api/stop` handler does, separately), so clearing `active`
+without that call would have left the strip physically lit at its last colour;
+and that stop runs `s_maybe_teardown_timer_and_task`, which is what re-derives
+the flicker ISR tick for the next session instead of leaving it pinned high.
+
+**Measured, after the fix** (same two sessions, same sampling):
+
+| session | `freq_r` spread |
+|---|---|
+| 1 — `jitter 0.6:2000` written | 1.192 Hz — still works |
+| 2 — no jitter column | **0.000 Hz** — rock-solid 210.00 |
+
+And the LED side, where session L1 sets `bright 80`, pure red and `jitter 2.0`,
+then L2 leaves brightness and RGB as `-` with no jitter column:
+
+| session | state read back |
+|---|---|
+| L1 | `bright 80  rgb(255,0,0)  freq 11.12` (jittering off 10 Hz) |
+| L2 | `bright 100  rgb(255,255,255)  freq 10.0` — defaults, no wander |
+
+Before the fix L2 would have inherited 80/red and the wander.
+
+"Absent = leave unchanged" still holds WITHIN a session; only the baseline each
+session starts from is now fixed, and it no longer takes a reboot.
+
+Docs updated to describe current behaviour. Several pages had told authors to
+write jitter back to `0` at the end of every file as a workaround; that advice is
+gone.
