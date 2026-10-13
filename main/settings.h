@@ -24,11 +24,53 @@ extern "C" {
 
 #define SETTINGS_LED_DIRECT_CHANNELS 8
 
+/* Stimulus-marker sinks (Plan: stimulus_markers_plan.md).
+ *
+ * A LIST, not three fixed outputs: every enabled slot receives every marker, so
+ * two UDP destinations (two recording machines) or two GPIO pins (two
+ * modalities) are both expressible. Fixed-size because device_settings_t is
+ * persisted as one NVS blob. */
+#define SETTINGS_MAX_MARKER_SINKS 4
+
 typedef enum {
     LED_BACKEND_NEOPIXEL = 0,
     LED_BACKEND_DOTSTAR  = 1,
     LED_BACKEND_DIRECT   = 2,
 } led_backend_t;
+
+typedef enum {
+    MARKER_SINK_DISABLED = 0,
+    MARKER_SINK_GPIO     = 1,  /**< TTL pulse on a pin */
+    MARKER_SINK_UDP      = 2,  /**< one JSON datagram per marker */
+    MARKER_SINK_SDJSONL  = 3,  /**< append JSONL to the SD card */
+} marker_sink_type_t;
+
+/** When a GPIO sink fires. */
+typedef enum {
+    /* Scheduled for the PREDICTED physical onset, so the pulse lines up with
+     * photons/sound instead of with the parser. The default, because marking
+     * the dispatch instant is marking the wrong thing for most experiments. */
+    MARKER_GPIO_AT_ONSET    = 0,
+    /* Fires immediately at dispatch. Useful for MEASURING the difference
+     * between the two, which is the only honest way to check the prediction. */
+    MARKER_GPIO_AT_DISPATCH = 1,
+} marker_gpio_timing_t;
+
+/* One sink slot. Flat (not a union) so the NVS blob and the JSON stay trivial;
+ * the unused fields for a given type simply sit at their defaults. */
+typedef struct {
+    marker_sink_type_t type;
+    /* gpio */
+    int  gpio_pin;              /**< -1 = not wired; validated like every other pin */
+    int  gpio_pulse_us;         /**< 100 .. 50000 */
+    int  gpio_active_low;       /**< 0 = pulse HIGH, 1 = pulse LOW */
+    marker_gpio_timing_t gpio_timing;
+    /* udp */
+    char udp_host[64];          /**< dotted quad or hostname */
+    int  udp_port;              /**< 1 .. 65535 */
+    /* sdjsonl */
+    char sd_dir[32];            /**< under the card root; default "logs" */
+} marker_sink_cfg_t;
 
 typedef enum {
     AUDIO_CODEC_NONE           = 0,
@@ -69,6 +111,8 @@ typedef struct {
     // Reports: where the web app persists session reports, in addition to
     // always uploading to the generator when generator_url is set.
     char report_storage[8];             // "none" | "local" | "spiffs"
+    // Stimulus markers: every ENABLED sink receives every marker.
+    marker_sink_cfg_t marker_sinks[SETTINGS_MAX_MARKER_SINKS];
 } device_settings_t;
 
 /** nvs_open; load the blob or seed from CONFIG_* defaults. */

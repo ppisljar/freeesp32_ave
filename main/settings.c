@@ -32,7 +32,7 @@
 
 static const char *TAG = "settings";
 
-#define SETTINGS_VERSION   ((uint16_t)7)   // v7: codec_reset_pin added
+#define SETTINGS_VERSION   ((uint16_t)8)   // v8: marker_sinks[] added
 #define SETTINGS_NS        "devcfg"
 #define SETTINGS_KEY       "blob"
 
@@ -270,6 +270,22 @@ static void settings_seed_defaults(device_settings_t *s)
 
     // ---- Reports: default to browser localStorage (no device flash writes).
     strlcpy(s->report_storage, "local", sizeof(s->report_storage));
+
+    // ---- Stimulus markers: every slot disabled. Markers are an opt-in
+    // research feature and a GPIO sink drives a real pin, so nothing is armed
+    // until the user configures it.
+    for (int i = 0; i < SETTINGS_MAX_MARKER_SINKS; i++) {
+        marker_sink_cfg_t *k = &s->marker_sinks[i];
+        k->type            = MARKER_SINK_DISABLED;
+        k->gpio_pin        = -1;
+        k->gpio_pulse_us   = 5000;      /* 5 ms — comfortably above any EEG
+                                           trigger input's sampling interval */
+        k->gpio_active_low = 0;
+        k->gpio_timing     = MARKER_GPIO_AT_ONSET;
+        k->udp_host[0]     = '\0';
+        k->udp_port        = 0;
+        strlcpy(k->sd_dir, "logs", sizeof(k->sd_dir));
+    }
 }
 
 /* --------------------------------------------------------------- persist ---- */
@@ -444,6 +460,19 @@ static int settings_sanitize_pins(device_settings_t *s)
         s->led_direct_pins[k] = -1;
         fixed++;
     }
+    /* A marker sink drives a pad like anything else. Forcing the pin to -1 is
+     * not enough here: a gpio sink with no pin has nothing to pulse, so the
+     * whole slot is disabled rather than left looking configured. */
+    for (int k = 0; k < SETTINGS_MAX_MARKER_SINKS; k++) {
+        if (s->marker_sinks[k].type != MARKER_SINK_GPIO) continue;
+        const char *why = pin_reject_reason(s->marker_sinks[k].gpio_pin);
+        if (!why) continue;
+        ESP_LOGE(TAG, "stored marker_sinks[%d].gpio_pin = GPIO %d is %s — "
+                 "disabling that sink", k, s->marker_sinks[k].gpio_pin, why);
+        s->marker_sinks[k].gpio_pin = -1;
+        s->marker_sinks[k].type     = MARKER_SINK_DISABLED;
+        fixed++;
+    }
     return fixed;
 }
 
@@ -510,6 +539,33 @@ static void settings_warn_pin_conflicts(void)
                     ESP_LOGE(TAG, "GPIO %d claimed by BOTH 'led_direct[%d]' and "
                              "'%s'", p, k, claims[i].name);
                 }
+            }
+        }
+    }
+
+    /* Marker sinks drive pads too, and this is exactly the failure that cost
+     * two debugging sessions on the S3 board: a pin collision does not fail
+     * loudly, it degrades the OTHER peripheral just enough to look like a
+     * different bug entirely. Check both against the fixed claims and against
+     * each other — two gpio sinks on one pin would interleave their pulses and
+     * silently corrupt the marker train. */
+    for (int k = 0; k < SETTINGS_MAX_MARKER_SINKS; k++) {
+        if (s->marker_sinks[k].type != MARKER_SINK_GPIO) continue;
+        int p = s->marker_sinks[k].gpio_pin;
+        if (p < 0) continue;
+        for (size_t i = 0; i < n; i++) {
+            if (claims[i].active && claims[i].pin == p) {
+                ESP_LOGE(TAG, "GPIO %d claimed by BOTH 'marker_sinks[%d]' and "
+                         "'%s' — marker pulses will interfere with that "
+                         "peripheral; fix one in Settings", p, k, claims[i].name);
+            }
+        }
+        for (int j = k + 1; j < SETTINGS_MAX_MARKER_SINKS; j++) {
+            if (s->marker_sinks[j].type == MARKER_SINK_GPIO &&
+                s->marker_sinks[j].gpio_pin == p) {
+                ESP_LOGE(TAG, "GPIO %d claimed by BOTH 'marker_sinks[%d]' and "
+                         "'marker_sinks[%d]' — their pulses will interleave",
+                         p, k, j);
             }
         }
     }
@@ -816,6 +872,72 @@ esp_err_t settings_apply_json(const char *body, int len)
         }
     }
 
+    /* ---- marker sinks -----------------------------------------------------
+     * An ARRAY, so it replaces wholesale rather than merging: a sink the user
+     * deleted in the UI has to actually disappear, and there is no sane merge
+     * of "slot 2 is now a different type". A missing key leaves the list
+     * untouched; an explicitly empty array clears it. Entries past
+     * SETTINGS_MAX_MARKER_SINKS are dropped with a warning rather than
+     * silently, because a sink that is not there records nothing. */
+    const cJSON *sinks = cJSON_GetObjectItemCaseSensitive(root, "marker_sinks");
+    if (cJSON_IsArray(sinks)) {
+        marker_sink_cfg_t fresh[SETTINGS_MAX_MARKER_SINKS];
+        for (int i = 0; i < SETTINGS_MAX_MARKER_SINKS; i++) {
+            fresh[i] = (marker_sink_cfg_t){
+                .type = MARKER_SINK_DISABLED, .gpio_pin = -1,
+                .gpio_pulse_us = 5000, .gpio_active_low = 0,
+                .gpio_timing = MARKER_GPIO_AT_ONSET, .udp_port = 0,
+            };
+            fresh[i].udp_host[0] = '\0';
+            strlcpy(fresh[i].sd_dir, "logs", sizeof(fresh[i].sd_dir));
+        }
+        int n = 0;
+        const cJSON *it = NULL;
+        cJSON_ArrayForEach(it, sinks) {
+            if (!cJSON_IsObject(it)) continue;
+            if (n >= SETTINGS_MAX_MARKER_SINKS) {
+                ESP_LOGW(TAG, "marker_sinks: more than %d entries; extras ignored",
+                         SETTINGS_MAX_MARKER_SINKS);
+                break;
+            }
+            marker_sink_cfg_t *k = &fresh[n];
+            const cJSON *t = cJSON_GetObjectItemCaseSensitive(it, "type");
+            if (!cJSON_IsString(t) || !t->valuestring) continue;
+            if      (!strcmp(t->valuestring, "gpio"))    k->type = MARKER_SINK_GPIO;
+            else if (!strcmp(t->valuestring, "udp"))     k->type = MARKER_SINK_UDP;
+            else if (!strcmp(t->valuestring, "sdjsonl")) k->type = MARKER_SINK_SDJSONL;
+            else continue;   /* unknown type: drop the slot rather than guess */
+
+            /* apply_pin, NOT apply_int: a marker sink drives a real pad, so
+             * it must go through pin_reject_reason() like every other pin. A
+             * flash/PSRAM pin here would brick the device just as thoroughly
+             * for being a "research feature". */
+            pins_ok &= apply_pin(it, "gpio_pin", &k->gpio_pin);
+            apply_int(it, "gpio_pulse_us", &k->gpio_pulse_us, 100, 50000);
+            apply_int(it, "gpio_active_low", &k->gpio_active_low, 0, 1);
+            int tm = (int)k->gpio_timing;
+            apply_int(it, "gpio_timing", &tm, 0, 1);
+            k->gpio_timing = (marker_gpio_timing_t)tm;
+            apply_str(it, "udp_host", k->udp_host, sizeof(k->udp_host));
+            apply_int(it, "udp_port", &k->udp_port, 0, 65535);
+            apply_str(it, "sd_dir",   k->sd_dir,   sizeof(k->sd_dir));
+
+            /* A sink that cannot work is refused here rather than failing
+             * silently at the first marker. */
+            if (k->type == MARKER_SINK_GPIO && k->gpio_pin < 0) {
+                ESP_LOGW(TAG, "marker_sinks[%d]: gpio sink with no pin; dropped", n);
+                continue;
+            }
+            if (k->type == MARKER_SINK_UDP &&
+                (k->udp_host[0] == '\0' || k->udp_port == 0)) {
+                ESP_LOGW(TAG, "marker_sinks[%d]: udp sink needs host and port; dropped", n);
+                continue;
+            }
+            n++;
+        }
+        memcpy(cur.marker_sinks, fresh, sizeof(fresh));
+    }
+
     cJSON_Delete(root);
 
     /* A refused pin fails the request instead of being quietly dropped: the old
@@ -913,6 +1035,38 @@ int settings_to_json(char *buf, int cap)
     cJSON_AddStringToObject(root, "mdns_hostname", s->mdns_hostname);
 
     cJSON_AddStringToObject(root, "report_storage", s->report_storage);
+
+    /* marker sinks: only the ENABLED slots, so the UI round-trips the list it
+     * sees rather than four mostly-empty rows. */
+    cJSON *msinks = cJSON_AddArrayToObject(root, "marker_sinks");
+    if (msinks) {
+        for (int i = 0; i < SETTINGS_MAX_MARKER_SINKS; i++) {
+            const marker_sink_cfg_t *k = &s->marker_sinks[i];
+            if (k->type == MARKER_SINK_DISABLED) continue;
+            cJSON *o = cJSON_CreateObject();
+            if (!o) break;
+            cJSON_AddStringToObject(o, "type",
+                k->type == MARKER_SINK_GPIO ? "gpio" :
+                k->type == MARKER_SINK_UDP  ? "udp"  : "sdjsonl");
+            switch (k->type) {
+            case MARKER_SINK_GPIO:
+                cJSON_AddNumberToObject(o, "gpio_pin",      k->gpio_pin);
+                cJSON_AddNumberToObject(o, "gpio_pulse_us", k->gpio_pulse_us);
+                cJSON_AddNumberToObject(o, "gpio_active_low", k->gpio_active_low);
+                cJSON_AddNumberToObject(o, "gpio_timing",   (int)k->gpio_timing);
+                break;
+            case MARKER_SINK_UDP:
+                cJSON_AddStringToObject(o, "udp_host", k->udp_host);
+                cJSON_AddNumberToObject(o, "udp_port", k->udp_port);
+                break;
+            case MARKER_SINK_SDJSONL:
+                cJSON_AddStringToObject(o, "sd_dir", k->sd_dir);
+                break;
+            default: break;
+            }
+            cJSON_AddItemToArray(msinks, o);
+        }
+    }
 
     // Capabilities (Phase 3): which backends/codecs are compiled into THIS
     // firmware. The web UI uses these to enable/grey the selector options.
