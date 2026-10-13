@@ -80,6 +80,120 @@ function shapeColor(shape) {
     return PAL.mod; // periodic mods
 }
 
+// ---- Sublane invariants ----------------------------------------------------
+// Every gesture that changes a keyframe's time goes through these, because
+// lanesToDoc reads a sublane's `keys` in ARRAY order and stops at the first key
+// past the row time it is emitting — lane_serialize.js, emitCellAt:
+// `if (keys[i].t <= t) { active = keys[i]; idx = i; } else break;`. An unsorted
+// array therefore makes the projection resolve the wrong keyframe: values land
+// on foreign timestamps and the moved key's '>'/'*' prefix is dropped — while
+// the canvas, which sorts a copy before drawing (drawStrip, below), still shows
+// the right picture and validate() sees a well-formed file. steppedAt, which
+// backs the freqR / wave strips, breaks out of its walk the same way. The ADD
+// path has always re-sorted; a drag that crosses a sibling must too.
+// Exported so the invariant can be unit-tested without a pointer event.
+
+// Move one keyframe in place, then restore ascending-t order. The keyframe
+// OBJECT is kept (the drag holds a reference to it, and the inspector edits it
+// by identity) — only the array order changes.
+export function moveKeyframe(keys, kf, t, v) {
+    kf.t = t;
+    kf.v = v;
+    return sortKeyframes(keys, kf);
+}
+
+// Add a keyframe and keep the order. Same contract as moveKeyframe.
+export function insertKeyframe(keys, kf) {
+    keys.push(kf);
+    return sortKeyframes(keys, kf);
+}
+
+function sortKeyframes(keys, kf) {
+    keys.sort((a, b) => a.t - b.t); // in place: lane.js holds this same array
+    return kf;
+}
+
+// Resolve a timestamp collision, at commit time. One (lane, t) pair is ONE row:
+// lane_serialize.js folds each lane's keyframe times into a Set to get its row
+// times (laneUnionTimes) and emitCellAt yields a single emission per time,
+// so of two keyframes sharing a t the file silently keeps whichever the walk
+// reaches last while the canvas goes on drawing both dots. `keeper` — the
+// keyframe this gesture moved or added, the one the inspector is about to open
+// on — wins; the sibling it landed on goes, so the dots left on screen are
+// exactly the rows in the file. Returns the number dropped.
+//
+// Called on pointerup rather than on every pointermove on purpose: dragging a
+// keyframe ACROSS a sibling must not eat it, only dropping it on top does.
+export function dropCoincidentKeys(keys, keeper) {
+    let dropped = 0;
+    for (let i = keys.length - 1; i >= 0; i--) {
+        if (keys[i] !== keeper && keys[i].t === keeper.t) {
+            keys.splice(i, 1);
+            dropped++;
+        }
+    }
+    return dropped;
+}
+
+// ---- Mid-handle hit targets ------------------------------------------------
+// The shape-cycle handle is painted only where the outgoing segment is wide
+// enough to hold it, so its hit target has to live and die with the painted
+// frame: this cache is reset at the top of every render and refilled by
+// drawMidHandle as it draws. Deliberately NOT stored on the keyframe, for two
+// reasons:
+//   * a handle that stopped being painted — zoomed out, panned away, following
+//     keyframe deleted — must stop being clickable. onPointerDown tests the
+//     mid handle BEFORE keyframeAt and tap-to-add, so one stale coordinate
+//     turns an ordinary click on blank canvas into an invisible curve change
+//     (step -> '>' -> '*') that rewrites the file;
+//   * the lane model is JSON-stringified verbatim into the `# @ave-lane`
+//     metadata comment (lane_serialize.js lanesToDoc, the LANE_META_PREFIX
+//     header row), so anything parked on a keyframe becomes file bytes — the
+//     saved session would otherwise depend on the viewport width and zoom
+//     level at the moment of the save.
+export const MID_HANDLE_MIN_SEG_PX = 30; // narrower segment => no handle drawn
+export const MID_HANDLE_HIT_PX = 10;     // hit radius around the 6px disc
+
+export function createMidHandleCache() {
+    let pts = new Map(); // keyframe object -> { x, y } as last painted
+    return {
+        // A render starts by forgetting the previous frame's targets.
+        reset() { pts = new Map(); },
+        add(kf, x, y) { pts.set(kf, { x, y }); },
+        // The keyframe of `keys` whose painted handle covers (x, y), or null.
+        // Scoped to one sublane's keys so a handle in another strip that
+        // happens to sit at the same pixel cannot answer for it.
+        hit(keys, x, y) {
+            for (const k of (keys || [])) {
+                const p = pts.get(k);
+                if (!p) continue;
+                const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+                if (d <= MID_HANDLE_HIT_PX * MID_HANDLE_HIT_PX) return k;
+            }
+            return null;
+        },
+    };
+}
+
+// Sessions saved by an earlier build carry `_mid` pixel coordinates inside
+// their `# @ave-lane` metadata, from when the handle cache above lived on the
+// keyframe. Drop them on the way through so a reopened session stops
+// re-serializing someone's old viewport; nothing reads them any more. Returns
+// the number removed. One pass over a model the firmware caps at
+// CONFIG_PARSER_MAX_ENTRIES rows (model.js MAX_ENTRIES), so it is cheap enough
+// to run per frame rather than needing an import hook the canvas does not have.
+export function stripTransientKeyState(lanes) {
+    let n = 0;
+    for (const lane of ((lanes && lanes.lanes) || [])) {
+        for (const f in (lane.sub || {})) {
+            for (const k of ((lane.sub[f] && lane.sub[f].keys) || [])) {
+                if (k._mid !== undefined) { delete k._mid; n++; }
+            }
+        }
+    }
+    return n;
+}
+
 export function createLaneCanvas(canvas, cb) {
     const ctx2d = canvas.getContext('2d');
 
@@ -94,6 +208,7 @@ export function createLaneCanvas(canvas, cb) {
 
     let selected = null;   // { laneKey, field, t }
     let rafPending = false;
+    const midHandles = createMidHandleCache(); // this frame's handle hit targets
 
     function model() { return cb.getModel(); }
 
@@ -172,6 +287,10 @@ export function createLaneCanvas(canvas, cb) {
 
     function render() {
         layout();
+        // The handles are hit-testable only where this frame paints them, and
+        // a model that came back from an old file may carry their predecessor.
+        midHandles.reset();
+        stripTransientKeyState(model());
         const cssW = canvas.clientWidth || 600;
         dpr = window.devicePixelRatio || 1;
         canvas.width = Math.round(cssW * dpr);
@@ -320,9 +439,9 @@ export function createLaneCanvas(canvas, cb) {
     }
 
     function drawMidHandle(s, k, x1, x2, y1, y2) {
-        if (x2 - x1 < 30) return;
+        if (x2 - x1 < MID_HANDLE_MIN_SEG_PX) return; // not painted => not clickable
         const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-        k._mid = { x: mx, y: my };
+        midHandles.add(k, mx, my);
         ctx2d.fillStyle = PAL.handleFill;
         ctx2d.strokeStyle = shapeColor(k.shape);
         ctx2d.beginPath(); ctx2d.arc(mx, my, 6, 0, Math.PI * 2); ctx2d.fill(); ctx2d.stroke();
@@ -396,14 +515,7 @@ export function createLaneCanvas(canvas, cb) {
     }
     function midHandleAt(s, x, y) {
         const sub = s.lane.sub[s.field];
-        if (!sub) return null;
-        for (const k of sub.keys) {
-            if (k._mid) {
-                const d = (k._mid.x - x) * (k._mid.x - x) + (k._mid.y - y) * (k._mid.y - y);
-                if (d <= 100) return k;
-            }
-        }
-        return null;
+        return sub ? midHandles.hit(sub.keys, x, y) : null;
     }
     function laneHeaderAt(y) {
         let yy = RULER_H;
@@ -490,7 +602,10 @@ export function createLaneCanvas(canvas, cb) {
         const kf = keyframeAt(s, p.x, p.y);
         if (kf) {
             selected = { laneKey: s.lane.key, field: s.field, t: kf.t };
-            drag = { strip: s, kf, moved: false, startT: kf.t };
+            // `keys` rides along: the move has to re-sort the array the
+            // keyframe lives in, not just the keyframe (see moveKeyframe).
+            drag = { strip: s, kf, keys: s.lane.sub[s.field].keys,
+                     moved: false, startT: kf.t };
             // Long-press -> context menu.
             longTimer = setTimeout(() => {
                 longTimer = null;
@@ -530,8 +645,8 @@ export function createLaneCanvas(canvas, cb) {
                 const movedEnough = Math.hypot(p.x - timeToX(drag.startT), 0) > 3 || true;
                 if (movedEnough) { drag.moved = true; clearLong(); cb.beginEdit(); }
             }
-            drag.kf.t = snapTime(xToTime(p.x));
-            drag.kf.v = snapVal(drag.strip.field, yToVal(drag.strip, p.y));
+            moveKeyframe(drag.keys, drag.kf, snapTime(xToTime(p.x)),
+                         snapVal(drag.strip.field, yToVal(drag.strip, p.y)));
             selected = { laneKey: drag.strip.lane.key, field: drag.strip.field, t: drag.kf.t };
             scheduleRender();
         } else if (drag.addAt) {
@@ -553,8 +668,13 @@ export function createLaneCanvas(canvas, cb) {
         if (d.ruler) return;
 
         if (d.kf) {
-            if (d.moved) cb.commit();
-            else openInspectorFor(d.strip, d.kf, e.clientX, e.clientY); // tap = inspect
+            if (d.moved) {
+                // Dropped on top of a sibling? Only one of them can be a row.
+                if (dropCoincidentKeys(d.keys, d.kf)) scheduleRender();
+                cb.commit();
+            } else {
+                openInspectorFor(d.strip, d.kf, e.clientX, e.clientY); // tap = inspect
+            }
             return;
         }
         if (d.addAt && !d.moved) {
@@ -564,9 +684,11 @@ export function createLaneCanvas(canvas, cb) {
             const v = snapVal(s.field, yToVal(s, p.y));
             cb.beginEdit();
             if (!s.lane.sub[s.field]) s.lane.sub[s.field] = { keys: [] };
-            const kf = keyframe(t, v, 'step');
-            s.lane.sub[s.field].keys.push(kf);
-            s.lane.sub[s.field].keys.sort((a, b) => a.t - b.t);
+            const keys = s.lane.sub[s.field].keys;
+            const kf = insertKeyframe(keys, keyframe(t, v, 'step'));
+            // Tapping onto a timestamp this sublane already uses replaces that
+            // keyframe — the row can only carry the value just tapped in.
+            dropCoincidentKeys(keys, kf);
             cb.commit();
             selected = { laneKey: s.lane.key, field: s.field, t };
             scheduleRender();

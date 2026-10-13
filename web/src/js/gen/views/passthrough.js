@@ -14,11 +14,13 @@
 // Silently, with no warning and no undo beyond the view's own stack. A session
 // carrying narration lost its narration.
 //
-// NOT fixed here: an INLINE comment on an `led`/`audio` row (`0 10 50 ... # why`)
-// is still dropped, because those rows are rebuilt from a model that has no
-// field for it. That is the project's house style for annotation
-// (docs/sessions/authoring.html), so it is a real remaining gap — it is just a
-// different one, needing a slot in the lane/segment model rather than a carry.
+// ALSO fixed here, by a second and deliberately different mechanism: an INLINE
+// comment on an `led`/`audio` row (`0 10 50 ... # why`). Those rows ARE
+// modelled — the view rebuilds them from keyframes/layers — so the whole row
+// cannot ride through; only the NOTE can, to be re-attached to the rebuilt row.
+// See "INLINE NOTES" below. Inline annotation is the project's house style
+// (docs/sessions/authoring.html), so losing it lost most of a session's
+// documentation on the first drag of a point.
 //
 // WHAT THIS DOES
 //
@@ -37,6 +39,8 @@
 //     ("untimed rows join the block that FOLLOWS them", views/table.js).
 //
 // Pure: no DOM. Unit-tested in web/test/view_passthrough.test.js.
+
+import { commentRow } from '../model.js';
 
 // Row kinds a lane/segment model represents itself and will re-emit. Everything
 // else has to be carried.
@@ -169,6 +173,136 @@ export function adoptBg(model, doc) {
     return model;
 }
 
+// ---------------------------------------------------------------------------
+// INLINE NOTES — the trailing `# why` on an `led`/`audio` row.
+// ---------------------------------------------------------------------------
+//
+// Different problem, different mechanism. `led`/`audio` rows are MODELLED, so
+// they must not be carried whole: the view rebuilds them from keyframes/layers
+// and a carried copy would duplicate the row. Only the note travels, and it has
+// to be RE-ATTACHED to whichever rebuilt row is the same row.
+//
+// IDENTITY. "The same row" is keyed on (kind, time, channel|mask) — the three
+// things a rebuild preserves. Everything else about the row is exactly what the
+// view is allowed to change, so keying on a value would drop the note the
+// moment the user dragged the point it annotates.
+//
+//   - `time`   lanesToDoc emits one row per keyframe time (lane_serialize.js:
+//              `emitted.push({ time: t, ... })`), compileSession one per
+//              segment start (wizard_compile.js: `time: slot.time`).
+//   - channel  the audio lane key / the wizard's allocated channel
+//              (`channel: lane.key` / `channel: grp.key`).
+//   - mask     the LED lane key / the layer's region mask
+//              (`mask: lane.key` / `mask: grp.key`).
+//
+// An absent channel token parses to `null` but reconstructs as lane key `0`
+// (reconstructLanes maps null -> 0), so BOTH sides normalize null/undefined to
+// 0 or the note would orphan itself on every such row.
+//
+// COLLISIONS. Two source rows CAN share one identity — same time, same channel
+// is a legal firmware batch where the later row wins. Notes are therefore
+// consumed IN SOURCE ORDER against the rebuilt rows of that identity in EMIT
+// order, one note per row: the nth note on an identity lands on the nth rebuilt
+// row of that identity, and never on a row that already took a note. A note can
+// never land on a row of a different kind, time or channel/mask.
+//
+// ORPHANS. The row a note annotated may simply not exist after the rebuild —
+// the user deleted it in the Text view, or the Wizard's `coalesce()` folded it
+// away as a redundant hold (wizard_compile.js:486 coalesce). Silently dropping the text
+// is the exact bug class this module exists to prevent, so the words are kept
+// as a WHOLE-LINE comment anchored at the note's time instead. It lands above
+// the block it used to annotate (rank 0 in mergePassthrough), so the author
+// sees their sentence next to where it belonged rather than losing it. On the
+// next commit it is an ordinary `comment` row and rides the passthrough path,
+// so it is never re-attached and never duplicated.
+
+// Identity of a modelled row, or null for a row that cannot carry a note.
+function inlineNoteKey(row) {
+    if (!row) return null;
+    const t = Number.isFinite(row.time) ? row.time : 0;
+    if (row.kind === 'audio') {
+        const ch = (row.channel === null || row.channel === undefined) ? 0 : row.channel;
+        return 'a:' + t + ':' + ch;
+    }
+    if (row.kind === 'led') {
+        const mask = (row.mask === null || row.mask === undefined) ? 0 : row.mask;
+        return 'l:' + t + ':' + mask;
+    }
+    return null;
+}
+
+/*
+ * Lift the inline comments off the doc's modelled rows.
+ *
+ * Returns [{ i, key, time, text }] in source order — `i` is the source row
+ * index, shared with collectPassthrough's `i` so orphans and carried rows
+ * tie-break against each other consistently inside one timestamp.
+ *
+ * Marker rows also parse an inlineComment (parse.js:281) but serializeMarker
+ * does not emit one (serialize.js:138), and they ride through whole as
+ * passthrough anyway — so they are not collected here.
+ */
+export function collectInlineNotes(doc) {
+    const rows = (doc && doc.rows) || [];
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (r.kind !== 'led' && r.kind !== 'audio') continue;
+        if (!r.inlineComment) continue;
+        const key = inlineNoteKey(r);
+        if (key === null) continue;
+        out.push({
+            i,
+            key,
+            time: Number.isFinite(r.time) ? r.time : 0,
+            text: String(r.inlineComment),
+        });
+    }
+    return out;
+}
+
+/*
+ * Re-attach carried notes to the rows a view just rebuilt.
+ *
+ * `emitted` is the view's [{ time, order, row }] list, already sorted the way it
+ * will be written. Matching rows are MUTATED (they are freshly built by
+ * ledRow/audioRow on this commit, never shared with the live doc).
+ *
+ * Returns the notes that found no row, in mergePassthrough's entry shape, so
+ * the caller appends them to its passthrough list and the ordinary merge places
+ * them. Returns [] for the overwhelmingly common no-notes case, which keeps a
+ * doc with no inline comments byte-identical to what the views emitted before.
+ */
+export function reattachInlineNotes(emitted, notes) {
+    const orphans = [];
+    if (!notes || !notes.length) return orphans;
+
+    // identity -> the rebuilt rows of that identity, in emit order.
+    const buckets = new Map();
+    for (const e of (emitted || [])) {
+        const key = inlineNoteKey(e && e.row);
+        if (key === null) continue;
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(e.row);
+    }
+
+    // One note per row: a cursor per identity, never rewound.
+    const cursor = new Map();
+    for (const n of notes) {
+        const list = buckets.get(n.key);
+        const at = cursor.get(n.key) || 0;
+        if (list && at < list.length) {
+            list[at].inlineComment = n.text;
+            cursor.set(n.key, at + 1);
+            continue;
+        }
+        // No row left at this identity — keep the words as a whole-line comment
+        // at the time they were written for, rather than deleting them.
+        orphans.push({ i: n.i, anchor: n.time, row: commentRow('# ' + n.text) });
+    }
+    return orphans;
+}
+
 /*
  * The whole "live doc beats the stale snapshot" rule in one call: adopt a BG
  * row the snapshot missed, then recompute the carried set from the doc.
@@ -184,6 +318,14 @@ export function syncPassthrough(model, doc) {
     // Nothing to carry: drop any stale key so a doc without passthrough rows
     // serializes exactly as it did before this mechanism existed.
     else delete model.passthrough;
+    // Same rule, same reason, for the inline notes: recomputed from the live
+    // doc so a note the user edited or deleted in the Text view is not restored
+    // from the snapshot, and the key is absent (not `[]`) when there is nothing
+    // to carry — the model is JSON-stringified verbatim into the file, so an
+    // always-present empty key would change every session file on disk.
+    const notes = collectInlineNotes(doc);
+    if (notes.length) model.inlineNotes = notes;
+    else delete model.inlineNotes;
     return model;
 }
 

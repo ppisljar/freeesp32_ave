@@ -19,8 +19,8 @@
 // 8-field RGB, wave_type + freq_r placeholder, noise, all 7 prefixes).
 
 import {
-    ledRow, audioRow, commentRow, bgRow, bg, speechRow, cell,
-    WAVE_TYPES, NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS,
+    ledRow, audioRow, commentRow, bgRow, bg, speechRow, markerRow, cell,
+    isModInterp, WAVE_TYPES, NUM_AUDIO_CHANNELS, NUM_LED_CHANNELS,
 } from '../model.js';
 import { createCompoundCell, closeOpenPopover, openPopover } from './cell.js';
 import { parsePulseEnv, formatPulseEnv } from '../pulse.js';
@@ -43,6 +43,139 @@ export function maskToChips(mask) {
     const out = [];
     for (let i = 0; i < NUM_LED_CHANNELS; i++) out.push(!!(mask & (1 << i)));
     return out;
+}
+
+// Toggle one channel chip, REFUSING the all-off state.
+//
+// mask 0 means "no channels": the firmware logs "channel_mask=0 — skipping" and
+// drops the entry (config_parser.c:1692-1696), and parse.js rejects it outright,
+// so a committed 0 comes back from the next re-parse as an unparsable `raw` row.
+// Clicking the last lit chip therefore used to delete the row's contents in two
+// steps. Returns the mask unchanged when the toggle would clear the last bit;
+// the caller says so out loud.
+export function toggleMaskBit(mask, bit) {
+    const next = (mask ^ (1 << bit)) & 0xFF;
+    return next === 0 ? mask : next;
+}
+
+// Fields that a LEGACY 5-field LED line cannot carry: serializeLed() emits
+// `time freq duty bright mask` and drops exactly these when `row.legacy5` is
+// set (serialize.js serializeLed).
+const LEGACY5_DROPPED = ['r', 'g', 'b', 'env', 'phase', 'attack', 'jitter'];
+
+// Value-equality for the shapes one row field can hold: a compound cell
+// ({value, interp, modEnd, modPeriodMs}), a jitter object ({amp, period}), an
+// enum/number, null (`-` leave unchanged) or undefined (field absent). null and
+// undefined INSIDE a cell both mean "not carried" (serialize.js cellStr treats
+// them identically), so modEnd: null vs modEnd: undefined is not a change.
+function sameFieldValue(a, b) {
+    if (a === b) return true;
+    if (a === null || a === undefined || b === null || b === undefined) return false;
+    if (typeof a !== 'object' || typeof b !== 'object') return false;
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+        if (a[k] === b[k]) continue;
+        if ((a[k] === null || a[k] === undefined) &&
+            (b[k] === null || b[k] === undefined)) continue;
+        return false;
+    }
+    return true;
+}
+
+// The grid's single write path for a row field. Writes the value, and retires
+// `legacy5` when the write actually CHANGES a field the 5-field form cannot
+// express.
+//
+// model.js:173 describes the flag as "true only if imported as 5-field AND
+// unedited", but nothing enforced the second half. The grid renders the Color
+// swatch and the four pulse columns for a legacy row anyway, so picking red
+// repainted the swatch and serializeLed() then dropped R/G/B: the file kept its
+// old line, and the next visit to the Text view re-parsed that line and erased
+// the edit from the model too. Promoting the row to the canonical 8-field form
+// is behaviour-identical for an untouched colour — a 5-field line sets
+// R=G=B=255 with the present bits explicitly set (config_parser.c:1656-1661),
+// which is exactly what serializeLed() then emits.
+//
+// Only a REAL change retires it. Opening the colour popover, or committing the
+// value that was already there, must leave the shipped library's five-field
+// rows byte-identical to what they were loaded from — there are 2 of them,
+// both in sessions/test/t12_format_edges.ledc:73-74, and promoting those to
+// 8 fields on load would be an edit nobody asked for.
+export function setRowField(row, field, value) {
+    const before = row[field];
+    row[field] = value;
+    if (row.kind === 'led' && row.legacy5 &&
+        LEGACY5_DROPPED.indexOf(field) >= 0 && !sameFieldValue(before, value)) {
+        row.legacy5 = false;
+    }
+    return row;
+}
+
+// The read-only text a marker row shows in the grid: everything the `M` line
+// says after its timestamp. Markers used to fall through to the raw-row branch,
+// which prints `row.text` — a field a marker row does not have, so every marker
+// in docs/sessions/markers.html rendered as the literal string "undefined".
+//
+// `mod=` leads the pairs, matching how the device consumes it (a reserved key,
+// never an ordinary pair — config_parser.c:168-178) and how serialize.js emits it.
+//
+// This shows what the MODEL carries, which is not quite everything the line
+// said: parse.js parseMarker drops bare tokens and the 5th+ kv pair on the way
+// in, so they are gone before the grid is asked to draw them. That loss is a
+// parse.js + serialize.js fix, not one to paper over here — the device warns and
+// ignores the extras (config_parser.c:177-179) rather than rejecting the line,
+// so the file should keep them even though neither the grid nor the device acts
+// on them.
+export function markerSummary(row) {
+    const parts = [row.label || '(no label)'];
+    if (row.modality) parts.push('mod=' + row.modality);
+    for (const p of (row.kv || [])) parts.push(p.k + '=' + p.v);
+    return parts.join(' ');
+}
+
+// The Cell the FreqR control edits. freq_r is a COMPOUND field (format v3): the
+// firmware parses a prefix on it and sweeps the right-ear carrier, which is the
+// direct way to glide a binaural beat (config_parser.c:1819-1831). parse.js
+// keeps the prefixed cell in `freqRCell` and mirrors its start value in the
+// plain `freqR` the wizard and lane editors use.
+//
+// undefined = no right carrier (mono), which the control shows as its greyed
+// default instead of a bare 0.
+export function freqRCellOf(row) {
+    if (row.freqRCell) return row.freqRCell;
+    return (row.freqR > 0) ? cell(row.freqR) : undefined;
+}
+
+// Apply an edited FreqR cell, keeping `freqR` and `freqRCell` consistent.
+// undefined (the control's Clear) means mono.
+//
+// Returns false, changing NOTHING, for a periodic-modulation prefix: the
+// firmware parses one, warns "not implemented yet — holding", and drops the
+// interp (config_parser.c:1835-1840), so the Table refuses to author a glide
+// the device will not run. The caller reports the refusal.
+//
+// Writing only `freqR` — which is all the old number box did — was silently
+// discarded on a ramped row, because serialize.js prefers `freqRCell` whenever
+// it carries a prefix (serialize.js serializeAudio): the box showed `410` for `>410`,
+// and typing 500 over it changed nothing in the file.
+export function applyFreqRCell(row, c) {
+    if (c === null || c === undefined) {
+        row.freqR = 0;
+        row.freqRCell = undefined;
+        return true;
+    }
+    if (isModInterp(c.interp)) return false;
+    const v = Number.isFinite(c.value) ? c.value : 0;
+    row.freqR = v;
+    // Keep the cell only while it carries a prefix, exactly as parse.js:171
+    // does, so an unramped row still serializes byte-identically to before.
+    row.freqRCell = (c.interp && c.interp !== 'none')
+        ? cell(v, c.interp, c.modEnd, c.modPeriodMs) : undefined;
+    // An absent or `-` freq_r token means "leave the right carrier alone"
+    // (parse.js:165, sim/resolve.js:304). Typing a real value is an explicit
+    // statement, so the row stops inheriting — otherwise the preview would keep
+    // showing the inherited carrier while the file said something else.
+    if (v > 0 || row.freqRCell) row.freqRPresent = true;
+    return true;
 }
 
 // Parse a Time field: plain integer ms OR `mm:ss.mmm` (also `m:ss`, `:ss.mmm`).
@@ -185,7 +318,16 @@ export function orderRowsForDisplay(rows, mode) {
 
 // ---- Row helpers -----------------------------------------------------------
 
-function cloneCell(c) { return c ? { ...c } : cell(0); }
+// `-` (null) is NOT a zero: it means "leave this field unchanged", and the
+// firmware keeps the present bit clear so the channel's live value survives
+// (config_parser.c:1595-1601 for freq/duty/bright, :1624-1646 for R/G/B). A
+// copy that collapsed it to 0 forced the field down — black for a colour,
+// silence for a volume — and 48 LED rows plus 116 audio rows in the shipped
+// sessions are written exactly that way (40 of the LED rows are the _SINE/_TRAP
+// variants of 21_gateway_focus12 and 25_gateway_journey, 10 each; the other 8
+// are in test/t12_format_edges.ledc). undefined still defaults to 0, as the
+// model does.
+function cloneCell(c) { return c ? { ...c } : (c === null ? null : cell(0)); }
 
 // Preserve the v2 pulse-field tri-state: undefined (omit) / null (`-` leave
 // unchanged) / value. Only compound cells and the jitter object are deep-copied;
@@ -196,7 +338,9 @@ function cloneOpt(v) {
     return v;
 }
 
-function cloneRow(r) {
+// What Duplicate copies. Pure, and exported so the per-kind field list can be
+// unit-tested: every field this misses is a setting the copy silently loses.
+export function cloneRow(r) {
     switch (r.kind) {
         case 'led': return ledRow({
             time: r.time, freq: cloneCell(r.freq), duty: cloneCell(r.duty),
@@ -211,14 +355,31 @@ function cloneRow(r) {
             time: r.time, freq: cloneCell(r.freq), pan: cloneCell(r.pan),
             vol: cloneCell(r.vol), mod: cloneCell(r.mod), channel: r.channel,
             freqR: r.freqR, waveType: r.waveType,
+            // format v3: the right carrier can be RAMPED, and the ramp lives in
+            // freqRCell (serialize.js prefers it over the plain number), so a
+            // copy without it loses the glide and reverts to a step. freqRPresent
+            // carries "the token was absent" — a copy that drops it reads as an
+            // explicit mono and kills the binaural beat in the preview
+            // (sim/resolve.js:304).
+            freqRCell: cloneOpt(r.freqRCell), freqRPresent: r.freqRPresent,
             // v2 pulse fields — tri-state preserved.
             duty: cloneOpt(r.duty), env: cloneOpt(r.env), phase: cloneOpt(r.phase),
             attack: cloneOpt(r.attack), jitter: cloneOpt(r.jitter),
+            // depth (v3, 14th column): tremolo/isochronic depth %. Dropping it
+            // silently reset the copy to the firmware's per-envelope default.
+            depth: cloneOpt(r.depth),
             inlineComment: r.inlineComment,
         });
         case 'comment': return commentRow(r.text);
         case 'bg': return bgRow(bg(r.bg.url, r.bg.pan, r.bg.loudness));
         case 'speech': return speechRow({ time: r.time, voice: r.voice, volume: r.volume, text: r.text });
+        // A marker used to fall through to `raw` below, which produced a row
+        // with no text at all: Duplicate turned `M 0 BASELINE_START` into a
+        // line reading "undefined". Spread-copied rather than rebuilt field by
+        // field, so anything the marker model gains later (see the dropped bare
+        // tokens and 5th+ kv pairs in parse.js parseMarker) rides along instead
+        // of being quietly lost by the copy.
+        case 'marker': return { ...markerRow(r), ...r, kv: (r.kv || []).map(kv => ({ ...kv })) };
         case 'blank': return { kind: 'blank' };
         default: return { kind: 'raw', text: r.text, error: r.error };
     }
@@ -313,6 +474,22 @@ export function initTableView(ctx) {
         }
         return null;
     }
+    // freqR needs its own scan: it is a plain NUMBER on an ordinary row (the
+    // cell exists only when the token carried a prefix), so the `.value` lookup
+    // above does not apply. The firmware ramps toward the next same-channel
+    // entry that actually SETS freq_r — an absent/`-` token means "leave
+    // unchanged" and is skipped, while an explicit 0 is a real target (mono):
+    // find_next_audio_with(..., AUD_SET_FREQR) at config_parser.c:2938-2956.
+    function freqRRampTarget(idx, channel) {
+        const rows = ctx.getDoc().rows;
+        for (let j = idx + 1; j < rows.length; j++) {
+            const r = rows[j];
+            if (r.kind === 'audio' && r.channel === channel && r.freqRPresent !== false) {
+                return r.freqR || 0;
+            }
+        }
+        return null;
+    }
 
     // ---- Small widget builders -------------------------------------------
     function typeSelect(row, idx) {
@@ -373,8 +550,17 @@ export function initTableView(ctx) {
             c.type = 'button';
             c.className = 'gen-chip';
             c.textContent = String(i + 1);
+            c.title = 'Channel ' + (i + 1) + ' — at least one must stay on';
             c.addEventListener('click', () => {
-                row.mask = (row.mask ^ (1 << i)) & 0xFF;
+                const next = toggleMaskBit(row.mask, i);
+                if (next === row.mask) {
+                    // Only reachable by clearing the last lit chip; mask 0 is a
+                    // line the firmware skips and our parser cannot read back.
+                    showMessage('An LED row needs at least one channel — the device '
+                                + 'skips channel_mask=0. Delete the row instead.', 'error');
+                    return;
+                }
+                row.mask = next;
                 repaint();
                 commitValue();
             });
@@ -433,16 +619,35 @@ export function initTableView(ctx) {
         return sel;
     }
 
-    function freqRInput(row) {
-        const inp = document.createElement('input');
-        inp.type = 'number'; inp.className = 'gen-num';
-        inp.value = String(row.freqR || 0);
-        inp.addEventListener('input', () => {
-            const v = parseFloat(inp.value);
-            row.freqR = Number.isFinite(v) ? v : 0;
-            commitValue();
+    // FreqR gets the same compound widget as Freq/Pan/Vol rather than a bare
+    // number box, because freq_r is a compound field: `>410` glides the right-ear
+    // carrier and is the direct way to glide a binaural beat. The old box
+    // rendered `>410` as the number 410 and wrote back only `row.freqR`, which
+    // serialize.js ignores while `freqRCell` carries a prefix — so the typed
+    // value vanished and the ramp stayed. Empty (Clear) = mono.
+    function freqRInput(row, idx) {
+        const t = createCompoundCell({
+            title: 'FreqR — right-ear carrier (Hz)',
+            optional: true,
+            defaultLabel: 'mono',
+            getCell: () => freqRCellOf(row),
+            onChange: (c) => {
+                if (!applyFreqRCell(row, c)) {
+                    // Visible refusal rather than a silently mangled line: the
+                    // device drops a periodic prefix here and holds the start
+                    // value (config_parser.c:1835-1840).
+                    showMessage('freqR cannot carry a periodic modulation — the device '
+                                + 'holds the start value. Use Linear or Quadratic to glide '
+                                + 'a binaural beat.', 'error');
+                    return;
+                }
+                commitValue();
+            },
+            onClear: () => { applyFreqRCell(row, undefined); commitValue(); },
+            resolveTarget: () => freqRRampTarget(idx, row.channel),
         });
-        return inp;
+        cellTriggers.push(t);
+        return t;
     }
 
     function colorSwatch(row) {
@@ -467,9 +672,12 @@ export function initTableView(ctx) {
             native.value = '#' + hex(row.r.value) + hex(row.g.value) + hex(row.b.value);
             native.addEventListener('input', () => {
                 const v = native.value;
-                row.r.value = parseInt(v.slice(1, 3), 16);
-                row.g.value = parseInt(v.slice(3, 5), 16);
-                row.b.value = parseInt(v.slice(5, 7), 16);
+                // Replaced, not poked in place: setRowField compares before to
+                // after to decide whether a legacy 5-field row has just been
+                // edited into a canonical one that can actually carry a colour.
+                setRowField(row, 'r', { ...row.r, value: parseInt(v.slice(1, 3), 16) });
+                setRowField(row, 'g', { ...row.g, value: parseInt(v.slice(3, 5), 16) });
+                setRowField(row, 'b', { ...row.b, value: parseInt(v.slice(5, 7), 16) });
                 paint();
                 refreshChannelTriggers();
                 commitValue();
@@ -489,7 +697,7 @@ export function initTableView(ctx) {
                 const t = createCompoundCell({
                     title: label + ' channel',
                     getCell: () => row[field],
-                    onChange: (c) => { row[field] = c; paint(); commitValue(); },
+                    onChange: (c) => { setRowField(row, field, c); paint(); commitValue(); },
                     resolveTarget: () => null,
                 });
                 triggers[field] = t;
@@ -528,7 +736,7 @@ export function initTableView(ctx) {
         const t = createCompoundCell({
             title: title,
             getCell: () => row[field],
-            onChange: (c) => { row[field] = c; commitValue(); },
+            onChange: (c) => { setRowField(row, field, c); commitValue(); },
             resolveTarget: resolve,
         });
         cellTriggers.push(t);
@@ -555,7 +763,7 @@ export function initTableView(ctx) {
         names.forEach((n, i) => mk(String(i), i + ' ' + n));
         sel.value = formatPulseEnv(row.env);
         sel.title = 'Pulse envelope — empty omits the field (device default: 0 square)';
-        sel.addEventListener('change', () => { row.env = parsePulseEnv(sel.value); commitValue(); });
+        sel.addEventListener('change', () => { setRowField(row, 'env', parsePulseEnv(sel.value)); commitValue(); });
         return sel;
     }
 
@@ -595,9 +803,9 @@ export function initTableView(ctx) {
             optional: true,
             defaultLabel: def,
             getCell: () => row[fieldName],
-            onChange: (c) => { row[fieldName] = c; commitValue(); },
+            onChange: (c) => { setRowField(row, fieldName, c); commitValue(); },
             resolveTarget: resolve,
-            onClear: () => { row[fieldName] = undefined; commitValue(); },
+            onClear: () => { setRowField(row, fieldName, undefined); commitValue(); },
         });
         cellTriggers.push(t);
         return t;
@@ -620,13 +828,13 @@ export function initTableView(ctx) {
                   ? String(j.period) : '';
         const commit = () => {
             if (amp.value.trim() === '') {
-                row.jitter = undefined;
+                setRowField(row, 'jitter', undefined);
             } else {
                 const a = parseFloat(amp.value);
                 const pv = parseFloat(per.value);
                 // period undefined round-trips as a bare amp, matching serialize.js.
-                row.jitter = { amp: Number.isFinite(a) ? a : 0,
-                               period: per.value.trim() === '' || !Number.isFinite(pv) ? undefined : pv };
+                setRowField(row, 'jitter', { amp: Number.isFinite(a) ? a : 0,
+                               period: per.value.trim() === '' || !Number.isFinite(pv) ? undefined : pv });
             }
             commitValue();
         };
@@ -682,7 +890,10 @@ export function initTableView(ctx) {
             });
             item('Insert after', () => {
                 const cur = d.rows[idx];
-                const t = (cur.kind === 'led' || cur.kind === 'audio') ? cur.time : 0;
+                // Every timed kind, so inserting after a speech cue or a marker
+                // lands in that instant instead of jumping back to t=0.
+                const t = (cur.kind === 'led' || cur.kind === 'audio' ||
+                           cur.kind === 'speech' || cur.kind === 'marker') ? cur.time : 0;
                 const k = (cur.kind === 'led' || cur.kind === 'audio') ? cur.kind : 'led';
                 d.rows.splice(idx + 1, 0, newRowOfKind(k, t));
                 commitStructure();
@@ -997,6 +1208,11 @@ export function initTableView(ctx) {
             const tdType = document.createElement('td');
             if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'speech' || row.kind === 'comment') {
                 tdType.appendChild(typeSelect(row, idx));
+            } else if (row.kind === 'marker') {
+                // No type <select>: there is no newRowOfKind('marker'), so
+                // offering the conversion would silently destroy the marker.
+                tdType.textContent = 'M';
+                tdType.title = 'Stimulus marker — announces an event to an external recorder';
             } else {
                 tdType.textContent = row.kind;
             }
@@ -1026,7 +1242,7 @@ export function initTableView(ctx) {
                 const tdPan = blankCell(); tdPan.appendChild(compound(row, idx, 'pan', 'Pan (-100..100)', () => audioRampTarget(idx, row.channel, 'pan'))); tr.appendChild(tdPan);    // Pan
                 const tdVol = blankCell(); tdVol.appendChild(compound(row, idx, 'vol', 'Volume (%)', () => audioRampTarget(idx, row.channel, 'vol'))); tr.appendChild(tdVol);        // Bright / Vol
                 const tdMod = blankCell(); tdMod.appendChild(compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))); tr.appendChild(tdMod);          // Color / Mod
-                const tdFr = blankCell(); tdFr.appendChild(freqRInput(row)); tr.appendChild(tdFr);
+                const tdFr = blankCell(); tdFr.appendChild(freqRInput(row, idx)); tr.appendChild(tdFr);
                 const tdWave = blankCell(); tdWave.appendChild(waveSelect(row)); tr.appendChild(tdWave);
                 const tdDutyP = blankCell(); tdDutyP.appendChild(pulseCellInput(row, idx, 'duty', 'Duty %', () => audioRampTarget(idx, row.channel, 'duty'))); tr.appendChild(tdDutyP);
                 const tdEnvA = blankCell(); tdEnvA.appendChild(pulseEnvSelect(row, true)); tr.appendChild(tdEnvA);
@@ -1052,6 +1268,21 @@ export function initTableView(ctx) {
                 const td = document.createElement('td');
                 td.colSpan = COLS.length - 3;
                 td.appendChild(speechInputs(row));
+                tr.appendChild(td);
+            } else if (row.kind === 'marker') {
+                // Time is editable — it is the one marker field the grid can
+                // round-trip (serialize.js serializeMarker re-emits it). The
+                // label and the key=value pairs are read-only here: they are
+                // free text with their own grammar (config_parser.c:138-150),
+                // and the Text view is where they are authored.
+                const tdTime = blankCell(); tdTime.appendChild(timeCell(row)); tr.appendChild(tdTime);
+                const td = document.createElement('td');
+                td.colSpan = COLS.length - 3;
+                // The read-only-mono-text style the raw cell already owns; the
+                // row itself carries .gen-grid-marker from the kind class.
+                td.className = 'gen-grid-rawcell';
+                td.textContent = markerSummary(row);
+                td.title = 'Marker label and key=value pairs — edit them in the Text view';
                 tr.appendChild(td);
             } else if (row.kind === 'comment') {
                 const td = document.createElement('td');
@@ -1114,7 +1345,9 @@ export function initTableView(ctx) {
             if (row.kind === 'led' || row.kind === 'audio' || row.kind === 'bg' || row.kind === 'speech' || row.kind === 'comment') {
                 head.appendChild(typeSelect(row, idx));
             } else {
-                const k = document.createElement('span'); k.textContent = row.kind; head.appendChild(k);
+                const k = document.createElement('span');
+                k.textContent = row.kind === 'marker' ? 'M' : row.kind;
+                head.appendChild(k);
             }
             if (row.kind === 'audio') {
                 const ch = document.createElement('span');
@@ -1157,7 +1390,7 @@ export function initTableView(ctx) {
                 sum.textContent = 'more ▾';
                 more.appendChild(sum);
                 more.appendChild(field('Mod', compound(row, idx, 'mod', 'Mod (Hz)', () => audioRampTarget(idx, row.channel, 'mod'))));
-                more.appendChild(field('FreqR', freqRInput(row)));
+                more.appendChild(field('FreqR', freqRInput(row, idx)));
                 more.appendChild(field('Wave', waveSelect(row)));
                 more.appendChild(pulseFields(row, idx));
                 card.appendChild(more);
@@ -1166,6 +1399,13 @@ export function initTableView(ctx) {
             } else if (row.kind === 'speech') {
                 card.appendChild(field('Time', timeCell(row)));
                 card.appendChild(field('Speech', speechInputs(row)));
+            } else if (row.kind === 'marker') {
+                card.appendChild(field('Time', timeCell(row)));
+                const m = document.createElement('div');
+                m.className = 'gen-grid-rawcell';
+                m.textContent = markerSummary(row);
+                m.title = 'Marker label and key=value pairs — edit them in the Text view';
+                card.appendChild(field('Marker', m));
             } else if (row.kind === 'comment') {
                 card.appendChild(field('Comment', commentInput(row)));
             } else {

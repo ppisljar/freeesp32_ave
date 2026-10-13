@@ -17,6 +17,11 @@
 // entry; the ramp runs from the start entry's value toward the NEXT
 // same-channel/field entry's value over the time gap. A keyframe therefore owns
 // its OUTGOING segment shape. LFOs are self-contained `PREFIXstart:end:period`.
+//
+// The `-` sentinel (format v2) is NOT a keyframe — it carries no value at all.
+// Its time rides in the sublane's `hold` list and is projected straight back as
+// `-`; see isHeldAt for why materialising a number there would change what the
+// device does.
 
 import {
     cell, ledRow, audioRow, commentRow, bgRow,
@@ -28,7 +33,12 @@ import { lerp, quad } from '../interp.js';
 // Rows the lane model has no slot for (speech, marker, comments, blanks, raw)
 // ride through the projection in `lanes.passthrough` instead of being deleted.
 // See views/passthrough.js for the ordering contract.
-import { mergePassthrough, syncPassthrough, LANE_META_PREFIX } from './passthrough.js';
+// An inline `# why` on an led/audio row cannot ride through whole (the lane
+// model rebuilds those rows), so the NOTE rides in `lanes.inlineNotes` and is
+// re-attached to the rebuilt row by identity. See views/passthrough.js.
+import {
+    mergePassthrough, syncPassthrough, reattachInlineNotes, LANE_META_PREFIX,
+} from './passthrough.js';
 
 // ---- Metadata marker -------------------------------------------------------
 // Canonical definition lives in passthrough.js, which owns the full set of
@@ -74,6 +84,27 @@ export function keyframe(t, v, shape, lfoEnd, lfoPeriodMs) {
 
 function sortedKeys(keys) {
     return (keys || []).slice().sort((a, b) => a.t - b.t);
+}
+
+// ---- The `-` sentinel ("leave unchanged") ----------------------------------
+// A cell field written as a lone `-` leaves the field's present bit clear
+// (config_parser.c:1598-1600 LED, :1777-1800 audio) and the execute path then
+// substitutes the channel's LIVE value so the write is a no-op (LED:
+// config_parser.c:2994-3014, audio: :2645-2650).
+//
+// That live value is NOT something this editor can compute: it is whatever the
+// device had actually reached — a value mid-sweep, a modulated value, or one
+// written by another entry whose mask/channel overlaps this lane. So a `-` gets
+// no keyframe (there is no value to put in one, and inventing the editor's own
+// guess would silently change what the session does on hardware). The sublane
+// records the TIME in `hold` instead, and lanesToDoc emits `-` back there.
+//
+// A real keyframe at exactly the same time always wins over the hold: dropping
+// a keyframe onto a held row is the user deliberately replacing the `-` with a
+// value, and the edit must survive the next projection.
+function isHeldAt(s, t) {
+    if (!s || !s.hold || s.hold.indexOf(t) < 0) return false;
+    return !(s.keys || []).some(k => k.t === t);
 }
 
 // Resolve the emission for one cell sublane at union time `t`.
@@ -141,6 +172,10 @@ function laneUnionTimes(lane) {
     const sub = lane.sub || {};
     for (const f in sub) {
         for (const k of (sub[f].keys || [])) set.add(k.t);
+        // Hold times are keyframeless but they are still rows: without them a
+        // row whose every cell field is `-` (sessions/test/t12_format_edges.ledc
+        // line 89 sets only jitter) would disappear from the projection.
+        for (const t of (sub[f].hold || [])) set.add(t);
     }
     // Include pulse-sidecar times so a row that carries only pulse fields (its cell
     // keyframes coalesced away as redundant) is still re-emitted with its pulse data.
@@ -188,7 +223,14 @@ export function lanesToDoc(lanes, opts) {
                 for (const f of AUDIO_CELL_FIELDS) {
                     const keys = sub[f] && sub[f].keys;
                     const em = emitCellAt(keys, t);
-                    fields[f] = em ? emissionToCell(em) : cell(0);
+                    // null => the `-` sentinel (see isHeldAt). The conflict test
+                    // below still runs on a held field: the firmware stops EVERY
+                    // modulation on the channel at each entry and restarts only
+                    // the ones that line restates (config_parser.c:2745-2751),
+                    // so an interior row truncates the band whether it restates
+                    // the field or leaves it `-`.
+                    fields[f] = isHeldAt(sub[f], t) ? null
+                        : (em ? emissionToCell(em) : cell(0));
                     if (em && em.lfoInterior) {
                         conflicts.push({ laneKey: lane.key, kind: 'audio', field: f, t });
                     }
@@ -206,7 +248,11 @@ export function lanesToDoc(lanes, opts) {
                 for (const f of LED_CELL_FIELDS) {
                     const keys = sub[f] && sub[f].keys;
                     const em = emitCellAt(keys, t);
-                    fields[f] = em ? emissionToCell(em) : cell(0);
+                    // null => the `-` sentinel (see isHeldAt); same conflict
+                    // rule as the audio branch above, the LED mods being
+                    // stopped per entry at config_parser.c:3099-3105.
+                    fields[f] = isHeldAt(sub[f], t) ? null
+                        : (em ? emissionToCell(em) : cell(0));
                     if (em && em.lfoInterior) {
                         conflicts.push({ laneKey: lane.key, kind: 'led', field: f, t });
                     }
@@ -222,11 +268,18 @@ export function lanesToDoc(lanes, opts) {
 
     // Stable global ordering: by time, then by lane order (same-time = batch).
     emitted.sort((a, b) => (a.time - b.time) || (a.order - b.order));
+    // Put each carried inline note back on its rebuilt row (matched on kind +
+    // time + channel/mask). Done AFTER the sort so notes are consumed in the
+    // same order the rows will be written. A note whose row no longer exists
+    // comes back as a whole-line comment instead of being deleted.
+    const carried = (lanes && lanes.passthrough) || [];
+    const orphanNotes = reattachInlineNotes(emitted, lanes && lanes.inlineNotes);
     // Splice the carried rows back in. They are deliberately NOT counted in the
     // limit warnings below: CONFIG_PARSER_MAX_ENTRIES caps the timeline array
     // the parser grows per accepted entry (config_parser.c:540-542), and a
     // comment / blank / `S` / `M` row never reaches that array.
-    const rows = mergePassthrough(header, emitted, lanes && lanes.passthrough);
+    const rows = mergePassthrough(header, emitted,
+        orphanNotes.length ? carried.concat(orphanNotes) : carried);
 
     // Limit warnings (MAX_ENTRIES / batch size).
     const entryCount = emitted.length;
@@ -269,6 +322,8 @@ export function findLaneMeta(doc) {
     return null;
 }
 
+// Caller's contract: `c` is a real Cell. A null cell is the `-` sentinel and
+// has no value to keyframe — buildCellSublane filters those out first.
 function cellToKeyframe(time, c) {
     const shape = interpToShape(c.interp);
     if (isPeriodicShape(shape)) {
@@ -307,6 +362,26 @@ export function coalesceRampKeys(keys) {
         out.push(b);
     }
     return out;
+}
+
+// Build one cell sublane from the rows of a lane: a keyframe per row that
+// states a value, and a `hold` time per row that wrote `-` (see isHeldAt).
+// `hold` is omitted when empty so a session with no sentinel serializes its
+// `# @ave-lane` snapshot exactly as it did before this mechanism existed.
+function buildCellSublane(grp, field) {
+    const keys = [];
+    const hold = [];
+    for (const r of grp) {
+        const c = r[field];
+        // null = `-`. undefined cannot come out of ledRow/audioRow (they
+        // default a missing core cell to cell(0)), but a row assembled by hand
+        // is held rather than keyframed at a value nobody wrote.
+        if (c === null || c === undefined) hold.push(r.time);
+        else keys.push(cellToKeyframe(r.time, c));
+    }
+    const s = { keys: coalesceRampKeys(keys) };
+    if (hold.length) s.hold = hold;
+    return s;
 }
 
 // Build a stepped sublane (freqR / wave) from per-row values, dropping
@@ -359,10 +434,7 @@ export function reconstructLanes(doc) {
     Array.from(audioGroups.keys()).sort((a, b) => a - b).forEach(ch => {
         const grp = audioGroups.get(ch).slice().sort(sortByTime);
         const sub = {};
-        for (const f of AUDIO_CELL_FIELDS) {
-            const keys = coalesceRampKeys(grp.map(r => cellToKeyframe(r.time, r[f])));
-            sub[f] = { keys };
-        }
+        for (const f of AUDIO_CELL_FIELDS) sub[f] = buildCellSublane(grp, f);
         const freqR = buildSteppedSublane(grp, r => r.freqR || 0);
         if (freqR && freqR.keys.some(k => k.v > 0)) sub.freqR = freqR;
         const wave = buildSteppedSublane(grp,
@@ -378,10 +450,7 @@ export function reconstructLanes(doc) {
     Array.from(ledGroups.keys()).sort((a, b) => a - b).forEach(mask => {
         const grp = ledGroups.get(mask).slice().sort(sortByTime);
         const sub = {};
-        for (const f of LED_CELL_FIELDS) {
-            const keys = coalesceRampKeys(grp.map(r => cellToKeyframe(r.time, r[f])));
-            sub[f] = { keys };
-        }
+        for (const f of LED_CELL_FIELDS) sub[f] = buildCellSublane(grp, f);
         // Color is "split" if any of R/G/B carries an interp; else combined.
         const split = ['r', 'g', 'b'].some(f =>
             sub[f].keys.some(k => k.shape !== 'step'));
@@ -432,43 +501,176 @@ export function docToLanes(doc) {
 
 // ---- Interior-LFO snap (the guided fix offered on conflict) ----------------
 
-// Snap any foreign keyframe that falls strictly inside an LFO band to the
-// nearest band boundary. Returns a new lanes object (does not mutate input).
-export function snapToBandBoundaries(lanes) {
-    const clone = JSON.parse(JSON.stringify(lanes));
-    for (const lane of clone.lanes) {
-        const sub = lane.sub || {};
-        // Collect LFO bands across all cell sublanes of this lane.
-        const bands = [];
-        for (const f in sub) {
-            const keys = sortedKeys(sub[f].keys);
-            for (let i = 0; i < keys.length; i++) {
-                if (isPeriodicShape(keys[i].shape)) {
-                    const start = keys[i].t;
-                    const end = (i + 1 < keys.length) ? keys[i + 1].t : Infinity;
-                    bands.push({ field: f, start, end });
-                }
+// LFO bands of one lane: each periodic keyframe owns the span from itself to
+// the next keyframe of the SAME field (its outgoing segment — see the
+// animate-on-start note at the top). The last one has no later keyframe to end
+// it, so its end is Infinity: an open band with only one real boundary.
+function lfoBands(sub) {
+    const bands = [];
+    for (const f in sub) {
+        const keys = sortedKeys(sub[f].keys);
+        for (let i = 0; i < keys.length; i++) {
+            if (isPeriodicShape(keys[i].shape)) {
+                bands.push({
+                    field: f,
+                    start: keys[i].t,
+                    end: (i + 1 < keys.length) ? keys[i + 1].t : Infinity,
+                });
             }
         }
+    }
+    return bands;
+}
+
+// The boundary of `band` nearer to time `t`. An open band (end == Infinity) has
+// only its start: there is no later keyframe whose time would be the real end
+// of the oscillation.
+//
+// Only the NEARER boundary is ever a destination. Snapping is defined as the
+// minimal correction that lifts a keyframe out of the band's interior; pushing
+// it to the FAR end instead carries the author's event across every remaining
+// cycle of the oscillation, which is a different session rather than a fix. A
+// band running 0..600000 ms would otherwise relocate a keyframe the author put
+// at 1500 ms to t=600000 the moment t=0 turned out to be occupied — a ten
+// minute jump from one click. When the nearer boundary is blocked the move is
+// reported instead (see snapToBandBoundaries).
+function nearerBoundary(band, t) {
+    if (!Number.isFinite(band.end)) return band.start;
+    // Ties (t exactly mid-band) resolve to the start, so the choice is
+    // deterministic and independent of sublane iteration order.
+    return (band.end - t < t - band.start) ? band.end : band.start;
+}
+
+/*
+ * Snap foreign keyframes that fall strictly inside an LFO band onto a band
+ * boundary — the one-click fix offered next to the interior-LFO warning.
+ *
+ * It REFUSES to move a keyframe whose destination is not free, because the
+ * projection cannot represent two keyframes of one sublane at one timestamp:
+ * lanesToDoc emits a single row per (lane, time) and emitCellAt takes the LAST
+ * keyframe at that time, so the other one would just vanish from the file. Two
+ * cases bit us:
+ *   (a) two keyframes inside one band both pick the same boundary and collapse
+ *       onto each other;
+ *   (b) a band that starts at 0 and spans most of the session has t=0 as the
+ *       nearest boundary for nearly every interior point, so "nearest" drags
+ *       keyframes onto the session's opening row and overwrites what it set.
+ * Both silently destroyed an entry the author wrote. Now the move is skipped
+ * and reported instead, and a conflict left standing is still visible in the
+ * warning strip (lanesToDoc recomputes it on the next commit).
+ *
+ * The same band length that caused (b) also bounds how far a keyframe may
+ * travel: only a band's nearer boundary is a destination (see nearerBoundary),
+ * so a blocked boundary means "report", never "fling it to the other end".
+ *
+ * Returns { lanes, snapped, skipped, warnings }:
+ *   lanes     the new lanes object (the input is never mutated)
+ *   snapped   [{ laneKey, field, from, to }] — moves actually applied
+ *   skipped   [{ laneKey, field, t, reason }] — conflicts deliberately left
+ *   warnings  ready-to-display lines describing what could not be snapped
+ */
+export function snapToBandBoundaries(lanes) {
+    const clone = JSON.parse(JSON.stringify(lanes));
+    const snapped = [];
+    const skipped = [];
+    for (const lane of (clone.lanes || [])) {
+        const sub = lane.sub || {};
+        let bands = lfoBands(sub);
         if (!bands.length) continue;
         for (const f in sub) {
             const keys = sub[f].keys || [];
-            for (const k of keys) {
-                for (const band of bands) {
-                    if (band.field === f) continue; // own band boundary is fine
-                    if (k.t > band.start && k.t < band.end) {
-                        // Snap to whichever boundary is closer.
-                        const toStart = k.t - band.start;
-                        const toEnd = band.end - k.t;
-                        k.t = (toEnd < toStart && Number.isFinite(band.end))
-                            ? band.end : band.start;
-                    }
+            // Snapshot the keyframe objects first: a keyframe must be
+            // considered exactly once even as earlier moves re-order the lane.
+            for (const k of keys.slice()) {
+                // Bands of this field cannot contain another of its own
+                // keyframes (a band ends AT the next one), so only foreign
+                // bands can trap k.
+                const inside = bands.filter(b => b.field !== f &&
+                                                 k.t > b.start && k.t < b.end);
+                if (!inside.length) continue;
+                // One candidate destination per trapping band: that band's
+                // nearer boundary (see nearerBoundary). Several bands can trap
+                // the same keyframe, and the nearer boundary of one may sit
+                // inside another, so collect them all and try them nearest
+                // first — snapObstacle rejects the ones that only move the
+                // conflict somewhere else.
+                const cands = inside.map(b => nearerBoundary(b, k.t));
+                const uniq = Array.from(new Set(cands));
+                uniq.sort((a, b) => Math.abs(a - k.t) - Math.abs(b - k.t) || a - b);
+                let reason = null, to = null;
+                for (const cand of uniq) {
+                    reason = snapObstacle(sub[f], bands, f, k, cand);
+                    if (!reason) { to = cand; break; }
                 }
+                if (to === null) {
+                    skipped.push({ laneKey: lane.key, field: f, t: k.t, reason });
+                    continue;
+                }
+                snapped.push({ laneKey: lane.key, field: f, from: k.t, to });
+                k.t = to;
+                // A periodic keyframe that just moved redefines its own band,
+                // so the remaining decisions are made against the new geometry.
+                bands = lfoBands(sub);
             }
             sub[f].keys = sortedKeys(keys);
         }
     }
-    return clone;
+    return { lanes: clone, snapped, skipped, warnings: snapWarnings(snapped, skipped) };
+}
+
+// Why keyframe `k` of sublane `s` may not move to time `cand`, or null when the
+// move is safe. Every answer here is a case where snapping would lose or
+// silently rewrite something the author wrote.
+function snapObstacle(s, bands, field, k, cand) {
+    const keys = s.keys || [];
+    for (const o of keys) {
+        // Another keyframe already holds that timestamp: one of the two would
+        // be dropped by the projection (lanesToDoc emits one row per time).
+        if (o !== k && o.t === cand) return 'occupied';
+    }
+    // Reordering is the same loss one step removed: moving k past a neighbour
+    // changes which keyframe owns which outgoing segment.
+    for (const o of keys) {
+        if (o === k) continue;
+        if (o.t < k.t && cand < o.t) return 'reorder';
+        if (o.t > k.t && cand > o.t) return 'reorder';
+    }
+    // A `-` at the destination is an explicit "leave unchanged" (see isHeldAt).
+    // Landing a keyframe there would replace it with a number — exactly the
+    // materialisation the sentinel exists to prevent.
+    if ((s.hold || []).indexOf(cand) >= 0) return 'held';
+    // Finally, the destination must not be interior to another band, or we
+    // would merely move the conflict instead of resolving it.
+    for (const b of bands) {
+        if (b.field === field) continue;
+        if (cand > b.start && cand < b.end) return 'nested';
+    }
+    return null;
+}
+
+// At most a few lines: the warning strip is one row of text, not a log.
+const SNAP_WARN_MAX = 3;
+function snapWarnings(snapped, skipped) {
+    const warnings = [];
+    if (!skipped.length) return warnings;
+    const why = {
+        occupied: 'another keyframe already sits on the boundary',
+        reorder: 'it would have to jump over a neighbouring keyframe',
+        held: 'the boundary row leaves that field unchanged (`-`)',
+        nested: 'both boundaries fall inside another LFO band',
+    };
+    warnings.push(skipped.length + ' conflicting keyframe(s) left alone: ' +
+        'snapping them would have overwritten another entry. ' +
+        (snapped.length ? snapped.length + ' other(s) were snapped. ' : '') +
+        'Move them by hand, or widen the LFO band.');
+    for (const s of skipped.slice(0, SNAP_WARN_MAX)) {
+        warnings.push('• ' + s.field + ' at t=' + s.t + ' ms on lane ' + s.laneKey +
+            ': ' + (why[s.reason] || s.reason) + '.');
+    }
+    if (skipped.length > SNAP_WARN_MAX) {
+        warnings.push('• …and ' + (skipped.length - SNAP_WARN_MAX) + ' more.');
+    }
+    return warnings;
 }
 
 // Re-export glyph helpers so the canvas can render prefixes without importing

@@ -200,13 +200,51 @@ function loadSelected() {
         .catch(err => showMessage('Load failed: ' + err, 'error'));
 }
 
+// Human labels for the save destinations. Same strings as configstore's
+// SRC_LABEL (configstore.js:22-26, not exported): the overwrite prompt names
+// the destination it is about to clobber, and the two Save As dialogs must not
+// word the same question two different ways.
+const DEST_LABEL = { spiffs: 'Device (SPIFFS)', local: 'Browser (local)' };
+
 // Destinations Save As may offer: every configured source minus the read-only
 // ones. The GitHub library lists and loads but cannot be written to.
 function writableDestinations() {
-    const LABEL = { spiffs: 'Device (SPIFFS)', local: 'Browser (local)' };
     return configSources()
         .filter(src => !isReadOnlySource(src))
-        .map(src => ({ src, label: LABEL[src] || src }));
+        .map(src => ({ src, label: DEST_LABEL[src] || src }));
+}
+
+/*
+ * What Save As should do with a (filename, destination) pair.
+ *
+ * Pure and exported so the decision is testable without the modal
+ * (web/test/save_as.test.js); the caller does the prompting and the writing.
+ *
+ * Mirrors the Home page's Save As, which has always asked before clobbering
+ * (configstore.js:183-185, commitSaveAs). Both stores overwrite in place with
+ * no undo — spiffs via PUT /api/configs/<name> (store_put opens the path with
+ * fopen(path, "w"), which truncates whatever was there,
+ * main/web_server.c:1049) and local via a plain localStorage.setItem — so an
+ * existing name needs an explicit yes. The one exception, also configstore's:
+ * re-saving over the file you currently have loaded is what Save As is for,
+ * not a surprise.
+ *
+ * `names` is the destination's current listing. Unknown (a source that would
+ * not list, e.g. the device is unreachable) means "cannot tell", and we save
+ * rather than nag — same as configstore, whose lastLists[src] is [] then.
+ */
+export function planSaveAs({ name, dest, names, loadedSrc, loadedName }) {
+    if (!isValidConfigName(name)) {
+        return { action: 'reject', message: 'Invalid filename — must end in .ledc' };
+    }
+    const isLoadedFile = dest === loadedSrc && name === loadedName;
+    if (!isLoadedFile && (names || []).indexOf(name) >= 0) {
+        return {
+            action: 'confirm',
+            message: '"' + name + '" already exists in ' + (DEST_LABEL[dest] || dest) + '. Overwrite?',
+        };
+    }
+    return { action: 'save' };
 }
 
 function saveCurrent() {
@@ -222,6 +260,12 @@ function saveCurrent() {
 function saveAs() {
     if (!doc.rows.length) { showMessage('Nothing to save', 'error'); return; }
     const body = serialize(doc);
+    // List the destinations as the dialog OPENS, not when Save is pressed: the
+    // overwrite check needs to know what is already there, and the device
+    // round-trip overlaps with the user typing instead of stalling the button.
+    // fetchConfigGroups resolves even when a source fails to list (it marks the
+    // group error:true with names:[]); the .catch is belt and braces.
+    const listing = fetchConfigGroups().catch(() => []);
     const back = document.createElement('div');
     back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000;';
     const box = document.createElement('div');
@@ -239,10 +283,16 @@ function saveAs() {
     const close = () => document.body.removeChild(back);
     box.querySelector('#genSaveCancel').addEventListener('click', close);
     back.addEventListener('click', e => { if (e.target === back) close(); });
-    box.querySelector('#genSaveOk').addEventListener('click', () => {
+    box.querySelector('#genSaveOk').addEventListener('click', async () => {
         const name = box.querySelector('#genSaveName').value.trim();
         const dest = box.querySelector('#genSaveDest').value;
-        if (!isValidConfigName(name)) { showMessage('Invalid filename — must end in .ledc', 'error'); return; }
+        const group = (await listing).find(g => g.src === dest);
+        const plan = planSaveAs({
+            name, dest, names: group && group.names,
+            loadedSrc: currentSrc, loadedName: currentName,
+        });
+        if (plan.action === 'reject') { showMessage(plan.message, 'error'); return; }
+        if (plan.action === 'confirm' && !confirm(plan.message)) return;
         saveConfigText(dest, name, body)
             .then(() => {
                 currentSrc = dest; currentName = name;

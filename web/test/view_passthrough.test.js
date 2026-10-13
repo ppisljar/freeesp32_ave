@@ -331,3 +331,276 @@ test('passthrough: a BG row added after the snapshot is not deleted', () => {
         assert.match(commit(withBg), /^BG /m, 'BG row survives the next commit');
     }
 });
+
+// ---------------------------------------------------------------------------
+// INLINE NOTES — the trailing `# why` on an `led`/`audio` row.
+//
+// The last silent-data-loss path in the generator, and a DIFFERENT problem from
+// everything above. `led`/`audio` rows are modelled: the views rebuild them from
+// keyframes/layers, so the row cannot ride through whole the way an `S` row can
+// — only the note can, and it then has to be re-attached to the rebuilt row.
+// Before views/passthrough.js grew `collectInlineNotes`/`reattachInlineNotes`,
+// every note on every row was deleted by the first Lanes or Wizard commit:
+// measured on the fixture below, 6 of 6 notes gone, no warning.
+//
+// That is worse than it sounds, because inline annotation is this project's
+// documented house style — docs/sessions/authoring.html asks every row of a
+// good session to carry one — so a single dragged point erased essentially all
+// of a session's documentation while leaving the timeline intact and plausible.
+// ---------------------------------------------------------------------------
+
+// Four DISTINCT identities at t=0 and two more at t=5000. The t=0 cluster is
+// the point: a note is keyed on (kind, time, channel|mask), and four rows that
+// share a timestamp are exactly where a too-loose key would smear notes across
+// rows. Each note names the row it belongs to so a mis-attachment is legible in
+// the assertion failure rather than being a silent off-by-one.
+const ANNOTATED = [
+    '0 10 50 80 255 0 0 1     # led mask 1 at t=0',
+    '0 8 50 60 0 0 255 2      # led mask 2 at t=0',
+    'A 0 200 0 80 0 1         # audio ch 1 at t=0',
+    'A 0 210 0 80 0 2         # audio ch 2 at t=0',
+    '5000 12 50 80 0 255 0 1  # led mask 1 at t=5000',
+    'A 5000 205 0 80 0 1      # audio ch 1 at t=5000',
+].join('\n') + '\n';
+
+// identity -> note, for every modelled row that carries one. Mirrors the key
+// the implementation uses (null channel/mask normalized to 0) so the test
+// checks ATTACHMENT, not just survival of the text somewhere in the file.
+function notesByIdentity(doc) {
+    const out = {};
+    for (const r of doc.rows) {
+        if (r.kind !== 'led' && r.kind !== 'audio') continue;
+        if (!r.inlineComment) continue;
+        const key = r.kind === 'audio'
+            ? 'a:' + r.time + ':' + (r.channel === null || r.channel === undefined ? 0 : r.channel)
+            : 'l:' + r.time + ':' + (r.mask === null || r.mask === undefined ? 0 : r.mask);
+        // A second note on one identity would be a mis-attachment, so record it
+        // rather than overwriting silently.
+        out[key] = (out[key] === undefined) ? r.inlineComment : out[key] + ' |AND| ' + r.inlineComment;
+    }
+    return out;
+}
+
+const EXPECTED_NOTES = {
+    'l:0:1': 'led mask 1 at t=0',
+    'l:0:2': 'led mask 2 at t=0',
+    'a:0:1': 'audio ch 1 at t=0',
+    'a:0:2': 'audio ch 2 at t=0',
+    'l:5000:1': 'led mask 1 at t=5000',
+    'a:5000:1': 'audio ch 1 at t=5000',
+};
+
+// ---- (g) the round-trip each view used to destroy ---------------------------
+
+test('(g) an inline note survives a view round-trip on the row it annotates', () => {
+    const orig = parse(ANNOTATED).doc;
+    // Guard the fixture: if parse.js stops filling inlineComment, every
+    // assertion below would pass vacuously on an empty-vs-empty comparison.
+    assert.deepEqual(notesByIdentity(orig), EXPECTED_NOTES, 'fixture parses six notes');
+
+    for (const [label, trip] of [['lane', laneTrip], ['wizard', wizardTrip]]) {
+        assert.deepEqual(notesByIdentity(trip(orig, false)), EXPECTED_NOTES,
+            label + ': every note back on its own row');
+    }
+});
+
+test('(g) inline notes survive the text file, not just the in-memory doc', () => {
+    // The real failure path is commit -> serialize -> flash/reload -> parse ->
+    // commit again, because the model is rebuilt from the FILE on reopen. A fix
+    // that only held the note in memory would still lose it on the next reload.
+    const orig = parse(ANNOTATED).doc;
+    for (const [label, trip] of [['lane', laneTrip], ['wizard', wizardTrip]]) {
+        const reloaded = parse(serialize(trip(orig, true))).doc;
+        assert.deepEqual(notesByIdentity(reloaded), EXPECTED_NOTES,
+            label + ': notes are in the written file');
+        assert.deepEqual(notesByIdentity(trip(reloaded, true)), EXPECTED_NOTES,
+            label + ': and survive the commit after the reload');
+    }
+});
+
+test('(g) a note edited in the Text view wins over the metadata snapshot', () => {
+    // Same "live doc beats the snapshot" rule the carried rows obey. The note
+    // is also inside the `# @ave-*` JSON from the previous commit; trusting
+    // that copy would silently revert the author's rewording.
+    const committed = serialize(laneTrip(parse(ANNOTATED).doc, true));
+    assert.ok(committed.indexOf('audio ch 1 at t=0') >= 0, 'snapshot holds the old text');
+
+    const edited = parse(committed.replace('# audio ch 1 at t=0', '# EDITED IN TEXT VIEW')).doc;
+    const out = serialize(laneTrip(edited, true));
+    const body = out.split('\n').filter(l => l.indexOf('# @ave') !== 0).join('\n');
+    assert.ok(body.indexOf('# EDITED IN TEXT VIEW') >= 0, 'the new wording is written');
+    assert.equal(body.indexOf('# audio ch 1 at t=0'), -1, 'the old wording is gone');
+});
+
+// ---- (h) the case that bites: the annotated row no longer exists ------------
+
+// A redundant hold: identical values restated on the same channel, MID-session.
+// Both views fold it away on purpose — the lane view's coalesceRampKeys drops a
+// repeated step keyframe, the wizard's coalesce() drops a row that re-holds the
+// previous row's exact values. So the note's row genuinely does not exist
+// afterwards.
+//
+// The hold must not be the LAST row. A trailing hold sets the session's end
+// time, so the wizard deliberately re-admits it (wizard_compile.js) and the
+// note then stays attached — correct behaviour, but it stops exercising the
+// orphan path. That is not hypothetical: this fixture originally ended on the
+// hold, and the assertion below caught it the moment coalesce() was fixed.
+// TRAILING_HOLD_AUDIO pins that behaviour separately.
+const FOLDED_LED = [
+    '0 10 50 80 255 0 0 1',
+    '5000 10 50 80 255 0 0 1  # why we hold here',
+    '9000 14 50 80 255 0 0 1',
+].join('\n') + '\n';
+const FOLDED_AUDIO = [
+    'A 0 200 0 80 0 1',
+    'A 5000 200 0 80 0 1      # why we hold here',
+    'A 9000 300 0 80 0 1',
+].join('\n') + '\n';
+
+// The same hold, but terminal — the shape the wizard must KEEP.
+const TRAILING_HOLD_AUDIO = [
+    'A 0 200 0 80 0 1',
+    'A 5000 200 0 80 0 1      # why we hold here',
+].join('\n') + '\n';
+
+test('(h) a note whose row the rebuild folds away survives as a whole-line comment', () => {
+    // The contract documented in views/passthrough.js: we may lose the note's
+    // ATTACHMENT when the row goes, but never the author's words. Dropping the
+    // text here would be the same silent deletion this whole module exists to
+    // prevent, just one level down.
+    for (const src of [FOLDED_LED, FOLDED_AUDIO]) {
+        const orig = parse(src).doc;
+        for (const [label, trip] of [['lane', laneTrip], ['wizard', wizardTrip]]) {
+            const out = trip(orig, false);
+
+            // The row really is gone — otherwise this test is not exercising
+            // the orphan path at all and would pass for the wrong reason.
+            assert.equal(out.rows.filter(r => r.time === 5000 &&
+                (r.kind === 'led' || r.kind === 'audio')).length, 0,
+                label + ': the rebuild folded the annotated row away');
+
+            const kept = out.rows.filter(r => r.kind === 'comment' &&
+                String(r.text).indexOf('why we hold here') >= 0);
+            assert.equal(kept.length, 1, label + ': the words survive, exactly once');
+            assert.equal(kept[0].text, '# why we hold here',
+                label + ': kept as a plain whole-line comment');
+            // And it survives the file, not just the doc.
+            assert.match(serialize(out), /^# why we hold here$/m, label + ': written out');
+        }
+    }
+});
+
+test('(h) a trailing hold keeps its note inline — the wizard must not fold it', () => {
+    // The flip side of the fold, and the reason the FOLDED_* fixtures grew a
+    // third row. A terminal hold is load-bearing: it sets the session's end
+    // time. The wizard's coalesce() used to drop it (and used to drop any row
+    // whose only change was a format-v2 pulse field, which was a silent
+    // data-loss bug in its own right). Now it keeps it, so the note stays
+    // ATTACHED rather than degrading to a comment — strictly better, and worth
+    // pinning so a future coalesce change cannot quietly undo it.
+    const out = wizardTrip(parse(TRAILING_HOLD_AUDIO).doc, false);
+    const row = out.rows.find(r => r.kind === 'audio' && r.time === 5000);
+    assert.ok(row, 'the trailing hold survives: it carries the session end time');
+    assert.equal(row.inlineComment, 'why we hold here', 'and keeps its note inline');
+    assert.equal(out.rows.filter(r => r.kind === 'comment' &&
+        String(r.text).indexOf('why we hold here') >= 0).length, 0,
+        'so there is no orphan comment for it');
+});
+
+test('(h) two notes on one identity: the second orphans rather than mis-attaching', () => {
+    // Two rows CAN share (kind, time, channel) — a legal firmware batch where
+    // the later row wins. Both views collapse them into one row, so there is
+    // only one row for two notes. The first note takes it (source order); the
+    // second must NOT be stacked onto the same row (which would read as a note
+    // about the wrong thing) and must not be dropped either.
+    const src = 'A 0 200 0 80 0 1 # first note\nA 0 200 0 80 0 1 # second note\n';
+    for (const [label, trip] of [['lane', laneTrip], ['wizard', wizardTrip]]) {
+        const out = trip(parse(src).doc, false);
+        const audio = out.rows.filter(r => r.kind === 'audio');
+        assert.equal(audio.length, 1, label + ': the duplicate row was collapsed');
+        assert.equal(audio[0].inlineComment, 'first note', label + ': first note attached once');
+        assert.equal(out.rows.filter(r => r.kind === 'comment' &&
+            String(r.text).indexOf('second note') >= 0).length, 1,
+            label + ': second note kept as a comment, not dropped or doubled');
+    }
+});
+
+// ---- (i) notes must not breed -----------------------------------------------
+
+test('(i) consecutive commits do not duplicate a note', () => {
+    // The mirror of "(b) the view metadata comment is not duplicated". The note
+    // is in THREE places after a commit — on the row, inside the `# @ave-*`
+    // JSON, and (for an orphan) as a comment row — so the ways to double it are
+    // many: re-attach to the row AND emit a comment, or carry the orphan comment
+    // as passthrough AND re-orphan the note that produced it.
+    const occurrences = (text, needle) => (text.split(needle).length - 1);
+
+    for (const [label, commit] of [['lane', laneCommit], ['wizard', wizCommit]]) {
+        // Attached note: present once on the row + once in the metadata JSON.
+        let text = commit(ANNOTATED);
+        const first = occurrences(text, 'audio ch 1 at t=0');
+        // Guard: a count that starts at zero would make every "still N" check
+        // below pass trivially on code that simply deletes the note.
+        assert.ok(first > 0, label + ': the note is in the first commit at all');
+        for (let k = 0; k < 3; k++) {
+            text = commit(text);
+            assert.equal(occurrences(text, 'audio ch 1 at t=0'), first,
+                label + ': attached note count stable across commit ' + (k + 2));
+        }
+        assert.deepEqual(notesByIdentity(parse(text).doc), EXPECTED_NOTES,
+            label + ': and still attached to the right rows');
+
+        // Orphaned note: the risky one. After commit 1 it is a comment row, so
+        // commit 2 must treat it as passthrough and not also re-derive it.
+        let ot = commit(FOLDED_AUDIO);
+        const ofirst = occurrences(ot, 'why we hold here');
+        assert.ok(ofirst > 0, label + ': the orphaned note is in the first commit at all');
+        for (let k = 0; k < 3; k++) {
+            ot = commit(ot);
+            assert.equal(occurrences(ot, 'why we hold here'), ofirst,
+                label + ': orphan note count stable across commit ' + (k + 2));
+        }
+        const bodyLines = ot.split('\n').filter(l => l.indexOf('# @ave') !== 0);
+        assert.equal(bodyLines.filter(l => l === '# why we hold here').length, 1,
+            label + ': exactly one orphan comment line in the body');
+    }
+});
+
+// ---- (j) the no-notes path is byte-for-byte unchanged ----------------------
+
+test('(j) a doc with no inline notes serializes exactly as before', () => {
+    // The view model is JSON.stringify'd verbatim into the `# @ave-*` comment,
+    // so an always-present `inlineNotes: []` would change EVERY session file on
+    // disk and break the byte-perfect-reopen contract
+    // (test/lane_serialize.test.js "(d) # @ave-lane metadata gives a
+    // byte-perfect reopen" deep-compares the restored model). The key must be
+    // absent, not empty.
+    const plain = parse(PLAIN).doc;
+
+    const lanes = docToLanes(plain);
+    assert.equal(Object.prototype.hasOwnProperty.call(lanes, 'inlineNotes'), false,
+        'lanes carries no inlineNotes key');
+    const { session } = sessionFromDoc(plain);
+    assert.equal(Object.prototype.hasOwnProperty.call(session, 'inlineNotes'), false,
+        'session carries no inlineNotes key');
+
+    // Same expected bytes as test (e) above — the rows and their order are
+    // untouched by the note mechanism when there are no notes.
+    assert.equal(serialize(laneTrip(plain, false)),
+        'A 0 200 0 80 0 1\n0 10 50 80 255 0 0 1\n' +
+        'A 5000 210 0 80 0 1\n5000 12 50 80 0 255 0 1\n',
+        'lane output unchanged');
+    assert.equal(serialize(wizardTrip(plain, false)),
+        '0 10 50 80 255 0 0 1\nA 0 200 0 80 0 1\n' +
+        '5000 12 50 80 0 255 0 1\nA 5000 210 0 80 0 1\n',
+        'wizard output unchanged');
+
+    // And a doc that HAS notes must drop the key again once they are removed,
+    // the same way `passthrough` does — otherwise a stale snapshot note comes
+    // back after the user deletes every comment in the Text view.
+    const stripped = parse(ANNOTATED.replace(/\s*#.*$/gm, '')).doc;
+    assert.equal(Object.prototype.hasOwnProperty.call(docToLanes(stripped), 'inlineNotes'), false,
+        'deleting every note drops the lanes key');
+    assert.equal(Object.prototype.hasOwnProperty.call(sessionFromDoc(stripped).session, 'inlineNotes'),
+        false, 'deleting every note drops the session key');
+});

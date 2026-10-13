@@ -75,7 +75,7 @@ export function initLaneView(ctx) {
     }
 
     // Re-project lanes -> doc and commit (without rebuilding our own canvas).
-    function commitFromLanes() {
+    function commitFromLanes(extraWarnings) {
         // Re-sync the carried rows from the live doc on EVERY commit, not just
         // at import. The undo stack snapshots the whole lane model including
         // `passthrough`, so an undo would otherwise restore a stale carried set
@@ -84,7 +84,10 @@ export function initLaneView(ctx) {
         syncPassthrough(lanes, ctx.getDoc());
         const { doc, warnings, conflicts } = lanesToDoc(lanes, { withMeta: true });
         lastConflicts = conflicts;
-        renderWarnings(warnings, conflicts);
+        // `extraWarnings` carries a caller's own report (the snap button's
+        // refusals) through this call, which would otherwise wipe the strip and
+        // repaint it from `warnings` alone.
+        renderWarnings((extraWarnings || []).concat(warnings), conflicts);
         applyingEdit = true;
         try {
             const d = ctx.getDoc();
@@ -331,9 +334,24 @@ export function initLaneView(ctx) {
             fix.className = 'gen-lane-snap';
             fix.textContent = 'Snap conflicting points to band boundaries';
             fix.addEventListener('click', () => {
+                // snapToBandBoundaries returns a REPORT, not a model:
+                // { lanes, snapped, skipped, warnings }. It refuses a move whose
+                // destination is occupied, because the projection emits one row
+                // per (lane, time) and the loser would vanish from the file --
+                // so a refusal has to be shown, not swallowed.
+                const res = snapToBandBoundaries(lanes);
+                if (!res.snapped.length) {
+                    // Nothing moved safely. Don't push an undo entry or rewrite
+                    // the doc for a no-op; just say why, so the click is not
+                    // silently ignored.
+                    renderWarnings(res.warnings.length ? res.warnings
+                        : ['No interior-LFO point can be snapped without'
+                           + ' overwriting another keyframe.'], lastConflicts);
+                    return;
+                }
                 undo.push();
-                lanes = snapToBandBoundaries(lanes);
-                commitFromLanes();
+                lanes = res.lanes;
+                commitFromLanes(res.warnings);
                 rerender();
             });
             warnStrip.appendChild(fix);
