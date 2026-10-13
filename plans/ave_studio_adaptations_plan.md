@@ -324,11 +324,12 @@ All three are pinned by tests that were confirmed to fail on the pre-fix code.
 
 ### Still not fixed
 
-- **An inline comment on an `led`/`audio` row is still dropped** (`0 10 50 ...
-  # why`). Those rows are rebuilt from a model with no field for it, so the fix
-  is a slot in the lane/segment model, not a carry. This is the project's house
-  style for annotation (`docs/sessions/authoring.html`), so it remains a real
-  gap — just a different one.
+- ~~An inline comment on an `led`/`audio` row is dropped~~ — **FIXED.** Those
+  rows are rebuilt from a model, so the note is re-attached by identity
+  (`kind`, `time`, `channel`/`mask`) rather than carried whole; a note whose row
+  does not survive degrades to a whole-line comment at its own time. Measured
+  across 107 real session files (2153 of 2840 modelled rows carry a note): zero
+  note texts lost.
 - **Carried-row position is anchored, not byte-exact.** A row returns at its
   anchor time; within one timestamp untimed rows sort above timed above emitted.
   An untimed row between two rows at the *same* timestamp cannot be
@@ -343,3 +344,46 @@ All three are pinned by tests that were confirmed to fail on the pre-fix code.
   its in-memory copy of a line it then discards as a comment, and the device
   serves session files back byte-for-byte rather than re-serializing them. It
   would only bite if the device ever rewrote a session file.
+
+### Residuals after the third pass — verified, deliberately not fixed
+
+Recorded so they are not rediscovered. Every blast radius here is measured.
+
+- **The Wizard rebases a session whose first entry is after t=0.** A session
+  opening at 20 s compiles back starting at 0, taking the whole timeline with
+  it, so a deliberate lead-in silently vanishes. **0 of 99 shipped sessions are
+  affected** — every one already starts at t=0 — and the wizard's segment model
+  has no slot for "the session starts at X". The honest fix is a leading rest
+  segment, which is a model change.
+- **A `BG` line's inline comment is discarded entirely.** `parse.js` takes only
+  `{ fields }` on the BG branch and neither `bg()` nor `serializeBg` has a field
+  for it. No shipped session uses a commented BG line.
+- **An `S` line the device REJECTS is repaired leniently rather than held raw** —
+  an unquoted payload (`config_parser.c:1744`) or an unterminated quote
+  (`:1749`). Nothing is lost (both serialize back quoted, i.e. device-legal), so
+  tightening them would be a behaviour change for no gain.
+- **An unrecognised marker `mod=` value is not DISPLAYED** in the Table's grid
+  summary, though it now persists correctly. Display only.
+- **The Wizard still folds a byte-identical consecutive duplicate** where Lanes
+  keeps both rows. That is `coalesce` doing its legitimate job and it
+  materialises no sentinel; the note orphans to a comment, so no text is lost.
+  The two views reach the same guarantee by different routes.
+- **A tap on a dot's exact x column replaces it** however far off in value. A
+  real limit, not a bug: one (lane, t) is one row, and the alternatives are to
+  invent a 1 ms offset or ignore the tap. The 2D refusal covers the case that
+  matters — the grid MOVING a tap onto a timestamp the user missed on screen.
+- **`lane.js`'s duplicate-keyframe path does `keyframe(kf.t + 1000, ...)` then
+  push + sort with no collision check**, so duplicating onto an occupied
+  timestamp can still lose one. Reachable only from that one menu action.
+- **Coverage lost, not behaviour:** a canvas test was relaxed from an exact
+  `deepEqual` to point checks, so the `waveType` a row before the first wave key
+  carries is no longer pinned anywhere.
+- **`web/src/js/gen/sim/demos.js` is gitignored but imported by
+  `generator.js`**, so a pristine `git archive HEAD` tree cannot import
+  `generator.js` until a build has run. Worth knowing before reconstructing HEAD
+  to verify anything.
+- **Firmware, needs the device:** LED duty and brightness take a bare
+  `(uint8_t)` cast with no clamp (`config_parser.c:1605`, `:1615`) while R/G/B
+  go through `clamp_u8_field` (`:1628`, `:1637`). An out-of-range value in those
+  two columns is a float→uint8_t conversion rather than a clamp. Pre-existing
+  and untouched by any of this work.
