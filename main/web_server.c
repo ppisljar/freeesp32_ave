@@ -1088,18 +1088,94 @@ static esp_err_t reports_get_handler(httpd_req_t *req)    { return store_get(req
 static esp_err_t reports_put_handler(httpd_req_t *req)    { return store_put(req, "/api/reports/"); }
 static esp_err_t reports_delete_handler(httpd_req_t *req) { return store_delete(req, "/api/reports/"); }
 
+/* Response scratch in PSRAM, NOT internal DRAM.
+ *
+ * sdkconfig sets CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384, so a plain
+ * malloc() under 16 KB is forced into internal DRAM — and this build runs with
+ * ~13 KB free there and a ~7.7 KB largest contiguous block. A plain
+ * malloc(8192) for the /api/state body therefore cannot reliably succeed, which
+ * is exactly how that endpoint failed: HTTP 200 with an EMPTY BODY, sometimes,
+ * depending on fragmentation.
+ *
+ * Safe for a response buffer because httpd memcpy's it into lwip pbufs rather
+ * than DMA-ing from it. */
+static void *resp_buf_alloc(size_t n)
+{
+    void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(n);   /* boards without PSRAM keep the old behaviour */
+}
+
+/* Send a body that lives in PSRAM.
+ *
+ * httpd_resp_send() straight from a PSRAM buffer does NOT work here: the bytes
+ * arrive, but the response is never terminated. curl reports size_download=0,
+ * writes the full body to its output file anyway, and then sits until it times
+ * out — i.e. every endpoint looked "empty" while actually delivering its
+ * content and leaking an open connection.
+ *
+ * So stage it: the JSON is BUILT in PSRAM (which is the point — a 4-8 KB
+ * internal allocation cannot reliably succeed against this build's ~7.7 KB
+ * largest free block), then copied out in small internal-DRAM chunks that lwip
+ * is happy to send. 512 bytes of stack, and HTTP response speed is not
+ * critical here. */
+static esp_err_t send_body_psram(httpd_req_t *req, const char *body, size_t len)
+{
+    char chunk[512];
+    size_t off = 0;
+    while (off < len) {
+        size_t take = len - off;
+        if (take > sizeof(chunk)) take = sizeof(chunk);
+        memcpy(chunk, body + off, take);
+        esp_err_t e = httpd_resp_send_chunk(req, chunk, take);
+        if (e != ESP_OK) return e;
+        off += take;
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);   /* terminate */
+}
+
+/* Send the settings JSON.
+ *
+ * HEAP, not a 1024-byte stack array, which is what the three call sites used to
+ * do. Two reasons it changed: the payload outgrew 1024 the moment marker_sinks
+ * was added (every response became "settings serialize failed", which is how
+ * the Settings page breaks — the GET fails and the form has nothing to load),
+ * and the obvious fix of growing the array puts it on the HTTPD TASK STACK, in
+ * a build with ~13 KB of free internal DRAM. 4 KB covers the full pin map, the
+ * capability lists and four configured sinks with room to spare.
+ *
+ * @param on_fail_ok  POST handlers answer {"ok":true} when serialisation fails,
+ *                    because the settings WERE applied; the GET must 500,
+ *                    because a caller that gets no body has nothing. */
+static esp_err_t send_settings_json(httpd_req_t *req, bool on_fail_ok)
+{
+    char *buf = resp_buf_alloc(4096);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
+    int n = settings_to_json(buf, 4096);
+    esp_err_t r;
+    if (n < 0) {
+        if (on_fail_ok) {
+            httpd_resp_set_type(req, "application/json");
+            r = httpd_resp_sendstr(req, "{\"ok\":true}");
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                "settings serialize failed");
+            r = ESP_FAIL;
+        }
+    } else {
+        httpd_resp_set_type(req, "application/json");
+        r = send_body_psram(req, buf, (size_t)n);
+    }
+    free(buf);
+    return r;
+}
+
 // GET /api/settings — serialize the runtime device settings as JSON.
 static esp_err_t settings_get_handler(httpd_req_t *req)
 {
-    char buf[1024];
-    int n = settings_to_json(buf, sizeof(buf));
-    if (n < 0) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "settings serialize failed");
-        return ESP_FAIL;
-    }
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, buf, n);
-    return ESP_OK;
+    return send_settings_json(req, false);
 }
 
 // POST /api/settings — apply a (possibly partial) JSON settings update and
@@ -1150,15 +1226,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * open socket/file must actually be released. */
     marker_reconfigure();
 
-    char buf[1024];
-    int n = settings_to_json(buf, sizeof(buf));
-    httpd_resp_set_type(req, "application/json");
-    if (n < 0) {
-        httpd_resp_sendstr(req, "{\"ok\":true}");
-    } else {
-        httpd_resp_send(req, buf, n);
-    }
-    return ESP_OK;
+    return send_settings_json(req, true);
 }
 
 // GET /api/markers — the recent marker tail, for the UI.
@@ -1176,7 +1244,7 @@ static esp_err_t markers_handler(httpd_req_t *req)
     marker_stats_t st;
     marker_get_stats(&st);
 
-    char *buf = malloc(4096);
+    char *buf = resp_buf_alloc(4096);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
@@ -1214,7 +1282,7 @@ static esp_err_t markers_handler(httpd_req_t *req)
     o += snprintf(buf + o, 4096 - o, "]}");
 
     httpd_resp_set_type(req, "application/json");
-    esp_err_t r = httpd_resp_send(req, buf, o);
+    esp_err_t r = send_body_psram(req, buf, (size_t)o);
     free(buf);
     return r;
 }
@@ -1235,15 +1303,7 @@ static esp_err_t settings_reset_handler(httpd_req_t *req)
      * open socket/file must actually be released. */
     marker_reconfigure();
 
-    char buf[1024];
-    int n = settings_to_json(buf, sizeof(buf));
-    httpd_resp_set_type(req, "application/json");
-    if (n < 0) {
-        httpd_resp_sendstr(req, "{\"ok\":true}");
-    } else {
-        httpd_resp_send(req, buf, n);
-    }
-    return ESP_OK;
+    return send_settings_json(req, true);
 }
 
 // GET /api/loglevels — list the logical log categories, each with its current
@@ -2545,7 +2605,7 @@ static esp_err_t tts_work(httpd_req_t *req)
     free(qs);
 
     // ----- Build the Google Translate TTS URL ------------------------------
-    char *url = malloc(4096);
+    char *url = resp_buf_alloc(4096);   /* PSRAM — see resp_buf_alloc */
     if (!url) { free(text);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "tts: OOM"); return ESP_FAIL; }
     int n = snprintf(url, 4096,
@@ -2653,7 +2713,7 @@ static esp_err_t state_handler(httpd_req_t *req)
      * headroom rather than to the current fit. If channel counts grow much
      * larger, switch to a streaming write via httpd_resp_send_chunk. */
     #define STATE_BUF_SZ 8192
-    char *buf = (char *)malloc(STATE_BUF_SZ);
+    char *buf = (char *)resp_buf_alloc(STATE_BUF_SZ);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
@@ -2756,9 +2816,9 @@ static esp_err_t state_handler(httpd_req_t *req)
     #undef APPEND
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, buf, p - buf);
+    esp_err_t sr = send_body_psram(req, buf, (size_t)(p - buf));
     free(buf);
-    return ESP_OK;
+    return sr;
 
 truncated:
     ESP_LOGW(TAG, "state_handler: JSON buffer truncated");

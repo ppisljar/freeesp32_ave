@@ -27,6 +27,7 @@
 #include "sdcard.h"
 #endif
 
+#include "esp_netif.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 
@@ -370,6 +371,22 @@ static void sink_arm(int slot, sink_state_t *s)
     }
     case MARKER_SINK_UDP: {
         if (s->cfg.udp_host[0] == '\0' || s->cfg.udp_port == 0) return;
+        /* Refuse to touch lwip before it exists. socket() without a tcpip task
+         * does not fail, it ASSERTS:
+         *   assert failed: tcpip_send_msg_wait_sem ... (Invalid mbox)
+         * and since arming happens during init, the reboot re-arms and asserts
+         * again — a boot loop, which is the one failure that also blocks OTA
+         * recovery. marker_init() is called after the network stack for exactly
+         * this reason; this guard means a future reordering degrades to "sink
+         * not armed" instead of bricking the device until someone finds a
+         * cable. The STA netif exists from wifi_manager_init() onward,
+         * regardless of whether it ever gets an IP. */
+        if (!esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") &&
+            !esp_netif_get_handle_from_ifkey("WIFI_AP_DEF")) {
+            ESP_LOGW(TAG, "sink %d: UDP not armed — network stack is not up yet",
+                     slot);
+            return;
+        }
         s->sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (s->sock < 0) {
             ESP_LOGE(TAG, "sink %d: socket() failed", slot);
